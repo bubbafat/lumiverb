@@ -272,7 +272,7 @@ def _ingest(client, headers, library_id: str, rel_path: str):
     return client.post(
         "/v1/ingest",
         headers=headers,
-        files={"proxy": ("p.jpg", io.BytesIO(_image()), "image/jpeg")},
+        files={"lumiverb.preview": ("p.jpg", io.BytesIO(_image()), "image/jpeg")},
         data={"library_id": library_id, "rel_path": rel_path, "file_size": "5000",
               "media_type": "image", "lineage": ingest_made()},
     )

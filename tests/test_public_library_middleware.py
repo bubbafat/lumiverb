@@ -305,7 +305,7 @@ def _ingest(client, api_key, library_id, rel_path, media_type="video") -> str:
         data={"library_id": library_id, "rel_path": rel_path, "file_size": "10", "media_type": media_type,
               "width": "32", "height": "18", "exif": _json.dumps({"content_hash": "sha256:" + os.urandom(32).hex()}),
               "lineage": ingest_made()},
-        files={"proxy": ("p.jpg", buf, "image/jpeg")},
+        files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert r.status_code == 200, r.text
@@ -396,7 +396,7 @@ def test_a_trashed_clips_artifacts_arent_public(public_lib_client):
     client, api_key, library_id, _ = public_lib_client
     auth = {"Authorization": f"Bearer {api_key}"}
     asset_id = _ingest(client, api_key, library_id, "trash/gone.jpg", media_type="image")
-    url = f"/v1/assets/{asset_id}/artifacts/proxy"
+    url = f"/v1/assets/{asset_id}/artifacts/lumiverb.preview"
     assert client.get(url, params={"public_library_id": library_id}).status_code == 200
     assert client.delete(f"/v1/assets/{asset_id}", headers=auth).status_code == 204
     assert client.get(url, params={"public_library_id": library_id}).status_code == 404
@@ -405,7 +405,7 @@ def test_a_trashed_clips_artifacts_arent_public(public_lib_client):
 @pytest.mark.slow
 def test_scene_frames_past_the_public_cap_arent_public(public_lib_client, spoken):
     client, _, library_id, _ = public_lib_client
-    r = client.get(f"/v1/assets/{spoken}/artifacts/scene_rep",
+    r = client.get(f"/v1/assets/{spoken}/artifacts/lumiverb.video.scenes.picture",
                    params={"public_library_id": library_id, "rep_frame_ms": 60_000})
     assert r.status_code == 403
 
@@ -432,7 +432,7 @@ def shared_clip(public_lib_client):
     r = client.post("/v1/ingest", data={"library_id": private_library_id, "rel_path": "Clients/ACME/interview_jane.mov",
                                         "file_size": "10", "media_type": "video", "width": "32", "height": "18",
                                         "exif": _json.dumps(exif), "lineage": ingest_made()},
-                    files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=auth)
+                    files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, headers=auth)
     assert r.status_code == 200, r.text
     asset_id = r.json()["asset_id"]
     assert client.put(f"/v1/assets/{asset_id}/note", json={"text": "internal: reshoot"}, headers=auth).status_code == 200

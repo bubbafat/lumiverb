@@ -52,7 +52,7 @@ def _ingest(client, auth, library_id: str, rel_path: str, media_type: str) -> st
     r = client.post("/v1/ingest", data={"library_id": library_id, "rel_path": rel_path, "file_size": "10",
                                         "media_type": media_type, "width": "32", "height": "18",
                                         "exif": json.dumps(exif), "lineage": ingest_made()},
-                    files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=auth)
+                    files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, headers=auth)
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]
 
@@ -99,7 +99,7 @@ def seeded(public_lib_client):
 
 def _urls(path: str, s: dict, asset_id: str) -> list[str]:
     url = (path.replace("{library_id}", s["library_id"]).replace("{asset_id}", asset_id)
-           .replace("{project_id}", s["project_id"]).replace("{artifact_type}", "proxy"))
+           .replace("{project_id}", s["project_id"]).replace("{artifact_type}", "lumiverb.preview"))
     return [re.sub(r"\{[^}]+\}", "x", url)]
 
 

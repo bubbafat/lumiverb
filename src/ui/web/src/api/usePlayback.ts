@@ -2,8 +2,9 @@ import { useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getPlayback } from "./client";
 import { useAuthenticatedImage } from "./useAuthenticatedImage";
+import { ANALYSIS_PROXY, VIDEO_PREVIEW } from "../lib/names";
 
-type Source = "analysis_proxy" | "preview";
+type Source = typeof ANALYSIS_PROXY | typeof VIDEO_PREVIEW;
 
 /**
  * What a video's player streams: the signed playback link (full length,
@@ -62,11 +63,11 @@ export function usePlayback(
         ? false
         : query.state.data && !query.state.data.ready
         ? preparingMs
-        : query.state.data?.source === "preview" && !query.state.data.whole
+        : query.state.data?.source === VIDEO_PREVIEW && !query.state.data.whole
           ? pollMs
           : false,
   });
-  const fallback = useAuthenticatedImage(assetId, "video-preview", {
+  const fallback = useAuthenticatedImage(assetId, VIDEO_PREVIEW, {
     enabled: enabled && playback.isError,
     isPublic,
     publicLibraryId,
@@ -84,14 +85,14 @@ export function usePlayback(
   if (playback.data && !playback.data.ready && !playback.isError) {
     // A link already playing keeps playing until the new one is ready.
     if (kept.current?.assetId === assetId) {
-      return { src: kept.current.url, source: kept.current.source, whole: kept.current.source === "analysis_proxy",
+      return { src: kept.current.url, source: kept.current.source, whole: kept.current.source === ANALYSIS_PROXY,
                maxSeconds: null, isLoading: false, renew, failed };
     }
     return { src: null, source: null, whole: false, maxSeconds: null, isLoading: true, renew, failed: false };
   }
   if (playback.data && playback.data.ready) {
     const { source, url, max_seconds } = playback.data;
-    const whole = playback.data.whole ?? source === "analysis_proxy";
+    const whole = playback.data.whole ?? source === ANALYSIS_PROXY;
     const stale = !kept.current || kept.current.assetId !== assetId || kept.current.source !== source;
     if (stale || (renewing.current && kept.current?.url !== url)) {
       kept.current = { assetId, source, url };
@@ -102,7 +103,7 @@ export function usePlayback(
   if (playback.isError) {
     return {
       src: fallback.url,
-      source: fallback.url ? "preview" : null,
+      source: fallback.url ? VIDEO_PREVIEW : null,
       whole: false,
       maxSeconds: null,
       isLoading: fallback.isLoading,

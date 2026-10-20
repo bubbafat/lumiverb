@@ -150,7 +150,7 @@ def test_upload_proxy_returns_key_and_sha256(artifact_env) -> None:
     content = _make_jpeg()
 
     r = auth.post(
-        f"/v1/assets/{asset_id}/artifacts/proxy",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
         data={"width": "2048", "height": "1365", "lineage": made_json("lumiverb.preview")},
     )
@@ -167,7 +167,7 @@ def test_upload_proxy_writes_file_to_storage(artifact_env) -> None:
     content = _make_jpeg(512)
 
     r = auth.post(
-        f"/v1/assets/{asset_id}/artifacts/proxy",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
@@ -184,7 +184,7 @@ def test_upload_proxy_persists_sha256_in_db(artifact_env) -> None:
     content = _make_jpeg()
 
     r = auth.post(
-        f"/v1/assets/{asset_id}/artifacts/proxy",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
@@ -210,7 +210,7 @@ def test_upload_proxy_does_not_advance_status(artifact_env) -> None:
     content = _make_jpeg()
 
     auth.post(
-        f"/v1/assets/{asset_id}/artifacts/proxy",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
@@ -233,7 +233,7 @@ def test_upload_thumbnail_returns_key_and_sha256(artifact_env) -> None:
     content = _make_jpeg(64)
 
     r = auth.post(
-        f"/v1/assets/{asset_id}/artifacts/thumbnail",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview.thumbnail",
         files={"file": ("thumb.jpg", content, "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},  # the proxy producer makes thumbnails
     )
@@ -257,7 +257,7 @@ def test_upload_thumbnail_does_not_overwrite_proxy_key(artifact_env) -> None:
     engine.dispose()
 
     auth.post(
-        f"/v1/assets/{asset_id}/artifacts/thumbnail",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview.thumbnail",
         files={"file": ("thumb.jpg", _make_jpeg(64), "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
@@ -280,7 +280,7 @@ def test_upload_thumbnail_persists_sha256_in_db(artifact_env) -> None:
     content = _make_jpeg(64)
 
     r = auth.post(
-        f"/v1/assets/{asset_id}/artifacts/thumbnail",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview.thumbnail",
         files={"file": ("thumb.jpg", content, "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},  # the proxy producer makes thumbnails
     )
@@ -306,7 +306,7 @@ def test_upload_video_preview_writes_file_no_sha256_col(artifact_env) -> None:
 
     mp4_content = playable()
     r = auth.post(
-        f"/v1/assets/{video_asset_id}/artifacts/video_preview",
+        f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.preview",
         files={"file": ("preview.mp4", mp4_content, "video/mp4")},
         data={"lineage": made_json("lumiverb.video.preview")},
     )
@@ -337,7 +337,7 @@ def test_upload_scene_rep_writes_file_to_scenes_path(artifact_env) -> None:
 
     content = _make_jpeg(96)
     r = auth.post(
-        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.scenes.picture",
         files={"file": ("scene.jpg", content, "image/jpeg")},
         data={"rep_frame_ms": "12345"},
     )
@@ -373,7 +373,7 @@ def test_upload_scene_rep_does_not_overwrite_video_preview_key(artifact_env) -> 
     # Step 1: upload an MP4 video preview, capturing the resulting key.
     mp4_content = playable()
     r_prev = auth.post(
-        f"/v1/assets/{video_asset_id}/artifacts/video_preview",
+        f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.preview",
         files={"file": ("preview.mp4", mp4_content, "video/mp4")},
         data={"lineage": made_json("lumiverb.video.preview")},
     )
@@ -384,7 +384,7 @@ def test_upload_scene_rep_does_not_overwrite_video_preview_key(artifact_env) -> 
 
     # Step 2: upload a scene_rep JPG to the same asset.
     r_scene = auth.post(
-        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.scenes.picture",
         files={"file": ("scene.jpg", _make_jpeg(96), "image/jpeg")},
         data={"rep_frame_ms": "12345"},
     )
@@ -414,7 +414,7 @@ def test_upload_scene_rep_requires_rep_frame_ms(artifact_env) -> None:
     video_asset_id = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=5000)
 
     r = auth.post(
-        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.scenes.picture",
         files={"file": ("scene.jpg", _make_jpeg(64), "image/jpeg")},
     )
     assert r.status_code == 400
@@ -430,12 +430,12 @@ def test_reupload_proxy_overwrites_sha256(artifact_env) -> None:
     content_v2 = _make_jpeg(200)  # different bytes → different hash
 
     r1 = auth.post(
-        f"/v1/assets/{asset_id}/artifacts/proxy",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview",
         files={"file": ("proxy.jpg", content_v1, "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
     r2 = auth.post(
-        f"/v1/assets/{asset_id}/artifacts/proxy",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview",
         files={"file": ("proxy.jpg", content_v2, "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
@@ -469,7 +469,7 @@ def test_upload_unknown_asset_returns_404(artifact_env) -> None:
     auth, _, _, _, _, _, _ = artifact_env
 
     r = auth.post(
-        "/v1/assets/ast_nonexistent_000000000000/artifacts/proxy",
+        "/v1/assets/ast_nonexistent_000000000000/artifacts/lumiverb.preview",
         files={"file": ("proxy.jpg", b"data", "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
@@ -481,7 +481,7 @@ def test_upload_missing_auth_returns_401(artifact_env) -> None:
     _, raw_client, _, asset_id, _, _, _ = artifact_env
 
     r = raw_client.post(
-        f"/v1/assets/{asset_id}/artifacts/proxy",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview",
         files={"file": ("proxy.jpg", b"data", "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
@@ -508,7 +508,7 @@ def test_upload_soft_deleted_asset_returns_404(artifact_env) -> None:
     engine.dispose()
 
     r = auth.post(
-        f"/v1/assets/{trash_id}/artifacts/proxy",
+        f"/v1/assets/{trash_id}/artifacts/lumiverb.preview",
         files={"file": ("proxy.jpg", _make_jpeg(), "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
@@ -527,12 +527,12 @@ def test_download_proxy_returns_bytes(artifact_env) -> None:
     content = _make_jpeg(300)
 
     up = auth.post(
-        f"/v1/assets/{asset_id}/artifacts/proxy",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
 
-    r = auth.get(f"/v1/assets/{asset_id}/artifacts/proxy")
+    r = auth.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/webp"
     assert _sha256(r.content) == up.json()["sha256"], "what was stored"
@@ -544,19 +544,19 @@ def test_download_thumbnail_returns_bytes(artifact_env) -> None:
     content = _make_jpeg(64)
 
     up = auth.post(
-        f"/v1/assets/{asset_id}/artifacts/thumbnail",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview.thumbnail",
         files={"file": ("thumb.jpg", content, "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},  # the proxy producer makes thumbnails
     )
 
-    r = auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail")
+    r = auth.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview.thumbnail")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/webp"
     assert _sha256(r.content) == up.json()["sha256"], "what was stored"
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("size", ["proxy", "thumbnail"])
+@pytest.mark.parametrize("size", ["preview", "preview.thumbnail"])  # as a person types them: the names, lumiverb. left off
 def test_lumiverb_download_saves_the_stored_file(artifact_env, tmp_path, size) -> None:
     """The CLI's `download --size`, against the API: what it stored, byte for byte."""
     from typer.testing import CliRunner
@@ -565,7 +565,7 @@ def test_lumiverb_download_saves_the_stored_file(artifact_env, tmp_path, size) -
     from src.client.cli.main import app as cli
 
     auth, raw_client, library_id, asset_id, _, _, api_key = artifact_env
-    up = auth.post(f"/v1/assets/{asset_id}/artifacts/{size}", files={"file": ("p.jpg", _make_jpeg(80), "image/jpeg")},
+    up = auth.post(f"/v1/assets/{asset_id}/artifacts/lumiverb.{size}", files={"file": ("p.jpg", _make_jpeg(80), "image/jpeg")},
                    data={"lineage": made_json("lumiverb.preview")})
     assert up.status_code == 200, up.text
     library = auth.get("/v1/libraries").json()
@@ -589,13 +589,13 @@ def test_download_video_preview_returns_bytes(artifact_env) -> None:
     video_asset_id = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=5000)
 
     up = auth.post(
-        f"/v1/assets/{video_asset_id}/artifacts/video_preview",
+        f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.preview",
         files={"file": ("preview.mp4", playable(), "video/mp4")},
         data={"lineage": made_json("lumiverb.video.preview")},
     )
     assert up.status_code == 200, up.text
 
-    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
+    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.preview")
     assert r.status_code == 200
     assert r.headers["content-type"] == "video/mp4"
     assert _sha256(r.content) == up.json()["sha256"]  # what was kept
@@ -611,14 +611,14 @@ def test_download_scene_rep_returns_bytes(artifact_env) -> None:
     content = _make_jpeg(128)
     rep_frame_ms = 7777
     r_up = auth.post(
-        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.scenes.picture",
         files={"file": ("scene.jpg", content, "image/jpeg")},
         data={"rep_frame_ms": str(rep_frame_ms)},
     )
     assert r_up.status_code == 200, r_up.text
 
     r = auth.get(
-        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.scenes.picture",
         params={"rep_frame_ms": rep_frame_ms},
     )
     assert r.status_code == 200
@@ -634,7 +634,7 @@ def test_download_proxy_not_ready_returns_404(artifact_env) -> None:
     rel_path = f"fresh_{secrets.token_hex(4)}.jpg"
     fresh_id = make_clip(tenant_url, library_id, rel_path, file_size=100)
 
-    r = auth.get(f"/v1/assets/{fresh_id}/artifacts/proxy")
+    r = auth.get(f"/v1/assets/{fresh_id}/artifacts/lumiverb.preview")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "artifact_not_ready"
 
@@ -649,14 +649,14 @@ def test_download_proxy_file_missing_returns_404(artifact_env) -> None:
     isolated_id = make_clip(tenant_url, library_id, rel_path, file_size=100)
 
     r_up = auth.post(
-        f"/v1/assets/{isolated_id}/artifacts/proxy",
+        f"/v1/assets/{isolated_id}/artifacts/lumiverb.preview",
         files={"file": ("proxy.jpg", _make_jpeg(), "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
     key = r_up.json()["key"]
     storage.abs_path(key).unlink()  # remove file, leave key in DB
 
-    r = auth.get(f"/v1/assets/{isolated_id}/artifacts/proxy")
+    r = auth.get(f"/v1/assets/{isolated_id}/artifacts/lumiverb.preview")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "artifact_missing"
 
@@ -668,13 +668,13 @@ def test_a_missing_file_is_reported_and_upkeep_repairs_it(artifact_env) -> None:
     auth, _, library_id, _, storage, tenant_url, _ = artifact_env
     rel_path = f"repair_{secrets.token_hex(4)}.jpg"
     asset_id = make_clip(tenant_url, library_id, rel_path, file_size=100)
-    key = auth.post(f"/v1/assets/{asset_id}/artifacts/proxy",
+    key = auth.post(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview",
                     files={"file": ("proxy.jpg", _make_jpeg(), "image/jpeg")},
                     data={"lineage": made_json("lumiverb.preview")}).json()["key"]
     storage.abs_path(key).unlink()
 
     for _ in range(2):  # reported once, however often it's asked for
-        assert auth.get(f"/v1/assets/{asset_id}/artifacts/proxy").status_code == 404
+        assert auth.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview").status_code == 404
     assert auth.get(f"/v1/assets/{asset_id}").json()["proxy_key"] == key  # the GET wrote nothing to the clip
     engine = create_engine(tenant_url)
     try:
@@ -683,7 +683,7 @@ def test_a_missing_file_is_reported_and_upkeep_repairs_it(artifact_env) -> None:
                 "SELECT value FROM system_metadata WHERE key = 'artifacts.missing'")).scalar())
     finally:
         engine.dispose()
-    assert reported.count(f"{asset_id}:proxy") == 1
+    assert reported.count(f"{asset_id}:lumiverb.preview") == 1
 
     r = auth.post("/v1/upkeep")
     assert r.status_code == 200, r.text
@@ -695,9 +695,9 @@ def _clip_with_preview_and_thumbnail(auth, tenant_url: str, library_id: str) -> 
     """A photo with its preview (1024 px) and its thumbnail: its id and their keys."""
     rel_path = f"thumb_{secrets.token_hex(4)}.jpg"
     asset_id = make_clip(tenant_url, library_id, rel_path, file_size=100)
-    proxy = auth.post(f"/v1/assets/{asset_id}/artifacts/proxy", files={"file": ("p.jpg", _make_jpeg(1024), "image/jpeg")},
+    proxy = auth.post(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview", files={"file": ("p.jpg", _make_jpeg(1024), "image/jpeg")},
                       data={"lineage": made_json("lumiverb.preview")}).json()["key"]
-    thumb = auth.post(f"/v1/assets/{asset_id}/artifacts/thumbnail",
+    thumb = auth.post(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview.thumbnail",
                       files={"file": ("t.jpg", _make_jpeg(512), "image/jpeg")},
                       data={"lineage": made_json("lumiverb.preview")}).json()["key"]  # the proxy producer makes thumbnails
     return asset_id, proxy, thumb
@@ -717,13 +717,13 @@ def test_a_missing_thumbnail_is_made_again_from_the_preview_which_stays(artifact
     asset_id, proxy, thumb = _clip_with_preview_and_thumbnail(auth, tenant_url, library_id)
     preview = storage.abs_path(proxy).read_bytes()
     storage.abs_path(thumb).unlink()
-    assert auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail").status_code == 404  # reported
+    assert auth.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview.thumbnail").status_code == 404  # reported
 
     assert _upkeep(auth, storage)["remade"] >= 1
     clip = auth.get(f"/v1/assets/{asset_id}").json()
     assert (clip["proxy_key"], clip["thumbnail_key"]) == (proxy, thumb)
     assert storage.abs_path(proxy).read_bytes() == preview
-    r = auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail")
+    r = auth.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview.thumbnail")
     assert r.status_code == 200, r.text
     made = Image.open(io.BytesIO(r.content))
     assert made.format == "WEBP" and max(made.size) == 512
@@ -743,7 +743,7 @@ def test_a_missing_thumbnail_without_its_preview_leaves_both_for_a_scan(artifact
     asset_id, proxy, thumb = _clip_with_preview_and_thumbnail(auth, tenant_url, library_id)
     storage.abs_path(proxy).unlink()
     storage.abs_path(thumb).unlink()
-    assert auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail").status_code == 404
+    assert auth.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview.thumbnail").status_code == 404
     assert _upkeep(auth, storage)["cleared"] >= 1
     clip = auth.get(f"/v1/assets/{asset_id}").json()
     assert (clip["proxy_key"], clip["thumbnail_key"]) == (None, None)
@@ -786,19 +786,19 @@ def test_download_invalid_type_returns_400(artifact_env) -> None:
 @pytest.mark.slow
 def test_download_unknown_asset_returns_404(artifact_env) -> None:
     auth, _, _, _, _, _, _ = artifact_env
-    r = auth.get("/v1/assets/ast_nonexistent_000000000000/artifacts/proxy")
+    r = auth.get("/v1/assets/ast_nonexistent_000000000000/artifacts/lumiverb.preview")
     assert r.status_code == 404
 
 
 @pytest.mark.slow
 def test_download_missing_auth_returns_401(artifact_env) -> None:
     _, raw_client, _, asset_id, _, _, _ = artifact_env
-    r = raw_client.get(f"/v1/assets/{asset_id}/artifacts/proxy")
+    r = raw_client.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview")
     assert r.status_code == 401
 
 
 # ---------------------------------------------------------------------------
-# /v1/assets/{asset_id}/artifacts/video_preview — what the web UI fetches for
+# /v1/assets/{asset_id}/artifacts/lumiverb.video.preview — what the web UI fetches for
 # the hover preview, and the Mac and iPhone lightbox. It is the only preview
 # route: /proxy, /thumbnail and /preview are gone.
 # ---------------------------------------------------------------------------
@@ -817,20 +817,20 @@ def test_preview_endpoint_streams_uploaded_mp4(artifact_env) -> None:
     video_asset_id = _create_video_asset(tenant_url, library_id, prefix="preview_stream")
 
     r_up = auth.post(
-        f"/v1/assets/{video_asset_id}/artifacts/video_preview",
+        f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.preview",
         files={"file": ("preview.mp4", playable(), "video/mp4")},
         data={"lineage": made_json("lumiverb.video.preview")},
     )
     assert r_up.status_code == 200, r_up.text
 
-    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
+    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.preview")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "video/mp4"
     assert _sha256(r.content) == r_up.json()["sha256"]  # what was kept
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("artifact_type", ["video_preview", "analysis_proxy"])
+@pytest.mark.parametrize("artifact_type", ["lumiverb.video.preview", "lumiverb.video.analysis_proxy"])
 def test_a_video_no_browser_plays_is_refused_and_nothing_kept(artifact_env, artifact_type) -> None:
     # ADR-018 decisions 10 and 11: the server takes only what every browser plays (src/server/uploaded_video.py).
     from tests.videos import made_with
@@ -865,7 +865,7 @@ def test_a_video_kept_says_nothing_of_where_it_was_taken(artifact_env, tmp_path)
                     "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=25:duration=1",
                     "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
                     "-metadata", "location=+40.6892-074.0445/", str(tagged)], check=True)
-    r = auth.post(f"/v1/assets/{video_asset_id}/artifacts/video_preview",
+    r = auth.post(f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.preview",
                   files={"file": ("v.mp4", tagged.read_bytes(), "video/mp4")},
                   data={"lineage": made_json("lumiverb.video.preview")})
     assert r.status_code == 200, r.text
@@ -886,7 +886,7 @@ def test_preview_endpoint_serves_mp4_after_scene_rep_upload(artifact_env) -> Non
     video_asset_id = _create_video_asset(tenant_url, library_id, prefix="preview_after_scene")
 
     r_up = auth.post(
-        f"/v1/assets/{video_asset_id}/artifacts/video_preview",
+        f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.preview",
         files={"file": ("preview.mp4", playable(), "video/mp4")},
         data={"lineage": made_json("lumiverb.video.preview")},
     )
@@ -895,13 +895,13 @@ def test_preview_endpoint_serves_mp4_after_scene_rep_upload(artifact_env) -> Non
     # Interleave a scene_rep upload — the bug clobbered video_preview_key here.
     jpeg_content = _make_jpeg(256)
     r_scene = auth.post(
-        f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
+        f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.scenes.picture",
         files={"file": ("scene.jpg", jpeg_content, "image/jpeg")},
         data={"rep_frame_ms": "5000"},
     )
     assert r_scene.status_code == 200, r_scene.text
 
-    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
+    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.preview")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "video/mp4"
     assert _sha256(r.content) == r_up.json()["sha256"], (
@@ -919,7 +919,7 @@ def test_preview_endpoint_returns_404_when_no_preview(artifact_env) -> None:
     auth, _, library_id, _, _, tenant_url, _ = artifact_env
     video_asset_id = _create_video_asset(tenant_url, library_id, prefix="preview_missing")
 
-    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
+    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/lumiverb.video.preview")
     assert r.status_code == 404
 
 
@@ -927,13 +927,13 @@ def test_preview_endpoint_returns_404_when_no_preview(artifact_env) -> None:
 def test_preview_endpoint_rejects_image_assets(artifact_env) -> None:
     """An image has no video preview."""
     auth, _, _, image_asset_id, _, _, _ = artifact_env
-    r = auth.get(f"/v1/assets/{image_asset_id}/artifacts/video_preview")
+    r = auth.get(f"/v1/assets/{image_asset_id}/artifacts/lumiverb.video.preview")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "artifact_not_ready"
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("route", ["proxy", "thumbnail", "preview"])
+@pytest.mark.parametrize("route", ["proxy", "thumbnail", "preview"])  # the retired routes' own words
 def test_the_duplicate_picture_routes_are_gone(artifact_env, route) -> None:
     """One route per artifact: /artifacts/{type}."""
     auth, _, _, asset_id, _, _, _ = artifact_env
@@ -941,7 +941,7 @@ def test_the_duplicate_picture_routes_are_gone(artifact_env, route) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("artifact_type", ["proxy", "thumbnail"])
+@pytest.mark.parametrize("artifact_type", ["lumiverb.preview", "lumiverb.preview.thumbnail"])
 def test_an_uploaded_image_is_stored_without_the_originals_metadata(artifact_env, artifact_type) -> None:
     from tests.test_preview_metadata import METADATA, photo, upright_with_profile
 
@@ -965,7 +965,7 @@ def test_an_uploaded_scene_frame_is_stored_without_the_originals_metadata(artifa
     rel_path = f"frame_check_{secrets.token_hex(4)}.mp4"
     video_id = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=2048)
     r = auth.post(
-        f"/v1/assets/{video_id}/artifacts/scene_rep",
+        f"/v1/assets/{video_id}/artifacts/lumiverb.video.scenes.picture",
         files={"file": ("frame.jpg", photo("JPEG"), "image/jpeg")},
         data={"rep_frame_ms": "1000"},
     )
@@ -977,7 +977,7 @@ def test_an_uploaded_scene_frame_is_stored_without_the_originals_metadata(artifa
 def test_an_upload_that_isnt_a_jpeg_png_or_webp_is_refused(artifact_env) -> None:
     auth, _, _, asset_id, _, _, _ = artifact_env
     r = auth.post(
-        f"/v1/assets/{asset_id}/artifacts/proxy",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.preview",
         files={"file": ("p.jpg", b"\xff\xd8\xff" + secrets.token_bytes(64), "image/jpeg")},
         data={"lineage": made_json("lumiverb.preview")},
     )
@@ -985,7 +985,7 @@ def test_an_upload_that_isnt_a_jpeg_png_or_webp_is_refused(artifact_env) -> None
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("artifact_type", ["proxy", "thumbnail"])
+@pytest.mark.parametrize("artifact_type", ["lumiverb.preview", "lumiverb.preview.thumbnail"])
 def test_the_batch_upload_stores_an_image_as_the_single_upload_does(artifact_env, artifact_type) -> None:
     # One way an image is kept (_save_upload): re-encoded, nothing of the original's metadata.
     from tests.test_preview_metadata import METADATA, photo, upright_with_profile
@@ -1020,7 +1020,7 @@ def test_an_upload_while_the_previews_cant_be_reached_is_503_and_keeps_nothing(a
             raise Unavailable("/Volumes/Clips: its drive isn't plugged in")
 
     monkeypatch.setattr(artifacts, "get_store", lambda: Unplugged())
-    r = auth.post(f"/v1/assets/{asset_id}/artifacts/proxy", files={"file": ("p.jpg", _make_jpeg(), "image/jpeg")},
+    r = auth.post(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview", files={"file": ("p.jpg", _make_jpeg(), "image/jpeg")},
                   data={"lineage": made_json("lumiverb.preview")})
     assert r.status_code == 503 and r.headers["retry-after"] == "30"
     error = r.json()["error"]
@@ -1039,11 +1039,11 @@ def test_a_download_while_the_previews_cant_be_reached_is_503_never_missing(arti
     from src.server.storage.store import Unavailable
 
     auth, _, library_id, asset_id, _, tenant_url, _ = artifact_env
-    r = auth.post(f"/v1/assets/{asset_id}/artifacts/proxy", files={"file": ("p.jpg", _make_jpeg(), "image/jpeg")},
+    r = auth.post(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview", files={"file": ("p.jpg", _make_jpeg(), "image/jpeg")},
                   data={"lineage": made_json("lumiverb.preview")})
     assert r.status_code == 200, r.text
     video_id = make_clip(tenant_url, library_id, f"away_{secrets.token_hex(4)}.mov", media_type="video")
-    r = auth.post(f"/v1/assets/{video_id}/artifacts/video_preview",
+    r = auth.post(f"/v1/assets/{video_id}/artifacts/lumiverb.video.preview",
                   files={"file": ("p.mp4", playable(), "video/mp4")},
                   data={"lineage": made_json("lumiverb.video.preview")})
     assert r.status_code == 200, r.text
@@ -1058,7 +1058,7 @@ def test_a_download_while_the_previews_cant_be_reached_is_503_never_missing(arti
     monkeypatch.setattr(artifacts, "get_store", lambda: Unplugged())
     monkeypatch.setattr(playback, "get_store", lambda: Unplugged())
     monkeypatch.setattr("src.server.missing_artifacts.report", lambda *a: reported.append(a))
-    for path in (f"/v1/assets/{asset_id}/artifacts/proxy", f"/v1/assets/{video_id}/artifacts/video_preview",
+    for path in (f"/v1/assets/{asset_id}/artifacts/lumiverb.preview", f"/v1/assets/{video_id}/artifacts/lumiverb.video.preview",
                  f"/v1/assets/{video_id}/playback"):
         r = auth.get(path)
         assert r.status_code == 503 and r.json()["error"]["code"] == "storage_unavailable", (path, r.text)

@@ -28,6 +28,7 @@ import time
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.producers.names import ANALYSIS_PROXY, PREVIEW, THUMBNAIL, VIDEO_PREVIEW, file_in
 from src.server.storage.store import NotFound, Store, Unavailable, get_store
 
 logger = logging.getLogger(__name__)
@@ -38,10 +39,10 @@ REPORT_EVERY_SEC = 600.0
 
 # The asset columns each reportable kind's file is named by; the first is the key.
 COLUMNS: dict[str, tuple[str, ...]] = {
-    "proxy": ("proxy_key",),
-    "thumbnail": ("thumbnail_key", "proxy_key"),
-    "video_preview": ("video_preview_key",),
-    "analysis_proxy": ("analysis_proxy_key", "analysis_proxy_sha256"),
+    PREVIEW: ("proxy_key",),
+    THUMBNAIL: ("thumbnail_key", "proxy_key"),
+    VIDEO_PREVIEW: ("video_preview_key",),
+    ANALYSIS_PROXY: ("analysis_proxy_key", "analysis_proxy_sha256"),
 }
 
 _reported: dict[tuple[str, str, str], float] = {}
@@ -78,7 +79,7 @@ def report(session: Session, asset_id: str, kind: str) -> None:
 
 
 def reported(session: Session) -> list[str]:
-    """The reports waiting for upkeep, as "asset_id:kind"."""
+    """The reports waiting for upkeep, as "asset_id:file" (the file by its name)."""
     raw = session.execute(text("SELECT value FROM system_metadata WHERE key = :k"), {"k": KEY}).scalar()
     try:
         return [e for e in json.loads(raw) if isinstance(e, str)] if raw else []
@@ -100,6 +101,7 @@ def repair(session: Session) -> dict[str, int]:
     checked = cleared = remade = 0
     for entry in entries:
         asset_id, _, kind = entry.rpartition(":")
+        kind = file_in(kind)  # by its name, or the kind a report had before ADR-024's part 4 (until part 5)
         columns = COLUMNS.get(kind)
         if not asset_id or columns is None:
             continue
@@ -120,7 +122,7 @@ def repair(session: Session) -> dict[str, int]:
             return nothing
         except ValueError:  # a key the store refuses is as good as gone
             gone = True
-        if gone and kind == "thumbnail" and _thumbnail_again(session, store, asset_id, key):
+        if gone and kind == THUMBNAIL and _thumbnail_again(session, store, asset_id, key):
             remade += 1
             logger.info("Made the missing thumbnail of %s again from its preview", asset_id)
         elif gone:

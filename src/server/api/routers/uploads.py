@@ -21,7 +21,7 @@ from pydantic import BaseModel, BeforeValidator, Field
 from sqlmodel import Session
 from starlette.concurrency import run_in_threadpool
 
-from src.producers.names import file_in, made_by_file
+from src.producers.names import ANALYSIS_PROXY, VIDEO_PREVIEW, file_in, made_by_file
 from src.server import uploaded_video, uploads
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.devices import may_call
@@ -38,7 +38,7 @@ def _file(value: Any) -> Any:
 
 class StartUpload(BaseModel):
     # By today's kind or the file's name (lumiverb.video.preview, lumiverb.video.analysis_proxy: ADR-024).
-    artifact: Annotated[Literal["video_preview", "analysis_proxy"], BeforeValidator(_file)]
+    artifact: Annotated[Literal[VIDEO_PREVIEW, ANALYSIS_PROXY], BeforeValidator(_file)]
     size: int = Field(gt=0, le=64 * 1024**3)
     # The whole file's SHA-256, 64 lowercase hex digits: checked at the finish.
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

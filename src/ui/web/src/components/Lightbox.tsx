@@ -17,6 +17,7 @@ import { FaceCropImage } from "./FaceCropImage";
 import { momentLabel, moments } from "../lib/faceMoments";
 import { HeartButton, StarPicker, ColorPicker } from "./RatingControls";
 import { basename, formatFileSize, formatDate, formatExposure } from "../lib/format";
+import { PREVIEW, THUMBNAIL } from "../lib/names";
 
 interface LightboxProps {
   asset: AssetPageItem;
@@ -59,7 +60,7 @@ function SimilarThumbnail({
   isPublic?: boolean;
   publicLibraryId?: string;
 }) {
-  const { url, isLoading } = useAuthenticatedImage(hit.asset_id, "thumbnail", {
+  const { url, isLoading } = useAuthenticatedImage(hit.asset_id, THUMBNAIL, {
     isPublic,
     publicLibraryId,
   });
@@ -357,7 +358,7 @@ export function Lightbox({
     asset.media_type === "video" || asset.media_type.startsWith("video/");
 
   // A video's proxy is its still: the player's poster.
-  const image = useAuthenticatedImage(asset.asset_id, "proxy", {
+  const image = useAuthenticatedImage(asset.asset_id, PREVIEW, {
     isPublic,
     publicLibraryId,
     publicProjectId,

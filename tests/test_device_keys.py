@@ -155,12 +155,12 @@ def test_a_device_scans_the_library_it_reads(env):
     assert _ok(env.client.post(f"{upload['chunk_url']}/finish", headers=device))["duration_sec"] > 1.5
 
     # What it doesn't make, it doesn't send.
-    r = env.client.post(f"/v1/assets/{clip}/artifacts/scene_rep", headers=device,
+    r = env.client.post(f"/v1/assets/{clip}/artifacts/lumiverb.video.scenes.picture", headers=device,
                         files={"file": ("f.jpg", b"jpeg", "image/jpeg")})
     _not_for_devices(r)
     # Its own clips are a scan's to send, not its to see.
     _not_for_devices(env.client.get(f"/v1/assets/{clip}", headers=device))
-    _not_for_devices(env.client.get(f"/v1/assets/{clip}/artifacts/proxy", headers=device))
+    _not_for_devices(env.client.get(f"/v1/assets/{clip}/artifacts/lumiverb.preview", headers=device))
     _not_for_devices(env.client.get("/v1/query", params={"f": f"library:{library_id}"}, headers=device))
     _not_for_devices(env.client.post(f"/v1/libraries/{library_id}/scan-now", headers=device))
 
@@ -186,12 +186,12 @@ def test_a_device_gets_nothing_of_a_library_it_doesnt_read(env):
     assert env.client.delete(f"/v1/scans/{scan_id}", headers=device).status_code == 404
     assert env.client.put(f"/v1/assets/{clip}/capture", json={"lineage": made("lumiverb.capture_time")},
                           headers=device).status_code == 404
-    assert env.client.post(f"/v1/assets/{clip}/artifacts/video_preview", headers=device,
+    assert env.client.post(f"/v1/assets/{clip}/artifacts/lumiverb.video.preview", headers=device,
                            files={"file": ("p.mp4", data, "video/mp4")},
                            data={"lineage": "{}"}).status_code == 404
     assert env.client.get(upload["chunk_url"], headers=device).status_code == 404
     assert env.client.delete(upload["chunk_url"], headers=device).status_code == 404
-    r = env.client.post("/v1/ingest", headers=device, files={"proxy": ("p.jpg", b"jpeg", "image/jpeg")},
+    r = env.client.post("/v1/ingest", headers=device, files={"lumiverb.preview": ("p.jpg", b"jpeg", "image/jpeg")},
                         data={"library_id": theirs, "rel_path": "new.jpg"})
     assert r.status_code == 404, r.text
     assert env.client.get(upload["chunk_url"], headers=env.editor).status_code == 200, "untouched"
@@ -212,7 +212,7 @@ def test_every_other_route_turns_a_device_away(env):
         if not isinstance(context.original_route, APIRoute):
             continue
         for method in sorted(set(context.methods or ()) - {"HEAD", "OPTIONS"}):
-            path = re.sub(r"\{(\w+)(:\w+)?\}", lambda m: "proxy" if m.group(1) == "artifact_type" else "nope",
+            path = re.sub(r"\{(\w+)(:\w+)?\}", lambda m: "lumiverb.preview" if m.group(1) == "artifact_type" else "nope",
                           context.path)
             if devices.marked(context.original_route.endpoint) is not None:
                 marked.add((method, context.path))

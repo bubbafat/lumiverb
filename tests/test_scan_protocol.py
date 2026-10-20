@@ -154,7 +154,7 @@ def test_a_gone_clip_whose_content_isnt_known_is_no_moves_source(env, api, lib):
     buf = io.BytesIO()
     Image.new("RGB", (16, 16), (1, 2, 3)).save(buf, format="JPEG")
     buf.seek(0)
-    r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data={
+    r = client.post("/v1/ingest", headers=headers, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, data={
         "library_id": lib.id, "rel_path": "inbox/a.png", "file_size": str(path.stat().st_size),
         "file_mtime": datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).isoformat(), "media_type": "image",
         "width": "16", "height": "16", "exif": json.dumps({}), "lineage": ingest_made()})

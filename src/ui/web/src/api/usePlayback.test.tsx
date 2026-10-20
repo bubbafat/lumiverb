@@ -26,7 +26,7 @@ describe("usePlayback", () => {
   it("plays nothing while the capped copy is made, then its link", async () => {
     let n = 0;
     fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ url: `/v1/stream/c${++n}`, expires_at: "x", source: "analysis_proxy",
+      new Response(JSON.stringify({ url: `/v1/stream/c${++n}`, expires_at: "x", source: "lumiverb.video.analysis_proxy",
                                     max_seconds: 10, ready: n > 1 }), { status: 200 }),
     );
     const seen: (string | null)[] = [];
@@ -48,7 +48,7 @@ describe("usePlayback", () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (!url.includes("/playback")) return new Response(new Blob(["mp4"]), { status: 200 });
       return ++n === 1
-        ? new Response(JSON.stringify({ url: "/v1/stream/x", expires_at: "x", source: "analysis_proxy",
+        ? new Response(JSON.stringify({ url: "/v1/stream/x", expires_at: "x", source: "lumiverb.video.analysis_proxy",
                                         max_seconds: 10, ready: false }), { status: 200 })
         : new Response(JSON.stringify({ error: { code: "playback_cut_failed", message: "no", details: {} } }),
                        { status: 503 });
@@ -63,12 +63,12 @@ describe("usePlayback", () => {
   it("plays the signed full-length link", async () => {
     fetchMock.mockImplementation(async (url: string) =>
       url.includes("/playback")
-        ? new Response(JSON.stringify({ url: "/v1/stream/abc.def", expires_at: "x", source: "analysis_proxy", max_seconds: null, ready: true }), { status: 200 })
+        ? new Response(JSON.stringify({ url: "/v1/stream/abc.def", expires_at: "x", source: "lumiverb.video.analysis_proxy", max_seconds: null, ready: true }), { status: 200 })
         : new Response("{}", { status: 404 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true }), { wrapper });
     await waitFor(() => expect(result.current.src).toBe("/v1/stream/abc.def"));
-    expect(result.current.source).toBe("analysis_proxy");
+    expect(result.current.source).toBe("lumiverb.video.analysis_proxy");
     expect(result.current.whole).toBe(true);  // an older server leaves it out: the proxy is whole
     expect(result.current.maxSeconds).toBeNull();
     // The 10-second preview isn't downloaded as well.
@@ -77,7 +77,7 @@ describe("usePlayback", () => {
 
   it("a short clip's preview is the whole clip: said so, and not asked again for the full video", async () => {
     fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ url: "/v1/stream/s", expires_at: "x", source: "preview", max_seconds: null,
+      new Response(JSON.stringify({ url: "/v1/stream/s", expires_at: "x", source: "lumiverb.video.preview", max_seconds: null,
                                     ready: true, whole: true }), { status: 200 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true, pollMs: 20 }), { wrapper });
@@ -90,7 +90,7 @@ describe("usePlayback", () => {
 
   it("a longer clip's preview isn't the whole clip, and it asks again for the full video", async () => {
     fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ url: "/v1/stream/l", expires_at: "x", source: "preview", max_seconds: null,
+      new Response(JSON.stringify({ url: "/v1/stream/l", expires_at: "x", source: "lumiverb.video.preview", max_seconds: null,
                                     ready: true, whole: false }), { status: 200 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true, pollMs: 20 }), { wrapper });
@@ -101,7 +101,7 @@ describe("usePlayback", () => {
 
   it("passes the public library along", async () => {
     fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ url: "/v1/stream/p.q", expires_at: "x", source: "preview", max_seconds: 30, ready: true }), { status: 200 }),
+      new Response(JSON.stringify({ url: "/v1/stream/p.q", expires_at: "x", source: "lumiverb.video.preview", max_seconds: 30, ready: true }), { status: 200 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true, isPublic: true, publicLibraryId: "lib_9" }), { wrapper });
     await waitFor(() => expect(result.current.src).toBe("/v1/stream/p.q"));
@@ -117,15 +117,15 @@ describe("usePlayback", () => {
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true }), { wrapper });
     await waitFor(() => expect(result.current.src).toBe("blob:preview"));
-    expect(result.current.source).toBe("preview");
+    expect(result.current.source).toBe("lumiverb.video.preview");
   });
 
   it("keeps its link while the preview plays, and switches when the whole video is ready", async () => {
     const answers = [
-      { url: "/v1/stream/short1", source: "preview" },
-      { url: "/v1/stream/short2", source: "preview" },
-      { url: "/v1/stream/short3", source: "preview" },
-      { url: "/v1/stream/full", source: "analysis_proxy" },
+      { url: "/v1/stream/short1", source: "lumiverb.video.preview" },
+      { url: "/v1/stream/short2", source: "lumiverb.video.preview" },
+      { url: "/v1/stream/short3", source: "lumiverb.video.preview" },
+      { url: "/v1/stream/full", source: "lumiverb.video.analysis_proxy" },
     ];
     let n = 0;
     fetchMock.mockImplementation(async () => {
@@ -155,7 +155,7 @@ describe("usePlayback", () => {
   it("renews: a new link for the same video replaces a failed one", async () => {
     let n = 0;
     fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ url: `/v1/stream/link${++n}`, expires_at: "x", source: "analysis_proxy", max_seconds: null, ready: true }), { status: 200 }),
+      new Response(JSON.stringify({ url: `/v1/stream/link${++n}`, expires_at: "x", source: "lumiverb.video.analysis_proxy", max_seconds: null, ready: true }), { status: 200 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true }), { wrapper });
     await waitFor(() => expect(result.current.src).toBe("/v1/stream/link1"));
@@ -167,7 +167,7 @@ describe("usePlayback", () => {
     let n = 0;
     fetchMock.mockImplementation(async () =>
       ++n === 1
-        ? new Response(JSON.stringify({ url: "/v1/stream/one", expires_at: "x", source: "analysis_proxy", max_seconds: null, ready: true }), { status: 200 })
+        ? new Response(JSON.stringify({ url: "/v1/stream/one", expires_at: "x", source: "lumiverb.video.analysis_proxy", max_seconds: null, ready: true }), { status: 200 })
         : new Response(JSON.stringify({ error: { code: "x", message: "gone" } }), { status: 404 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true }), { wrapper });
@@ -179,7 +179,7 @@ describe("usePlayback", () => {
 
   it("asks for a public project's clip by project", async () => {
     fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ url: "/v1/stream/p", expires_at: "x", source: "preview", max_seconds: 10, ready: true }), { status: 200 }),
+      new Response(JSON.stringify({ url: "/v1/stream/p", expires_at: "x", source: "lumiverb.video.preview", max_seconds: 10, ready: true }), { status: 200 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true, isPublic: true, publicProjectId: "prj_7" }), { wrapper });
     await waitFor(() => expect(result.current.src).toBe("/v1/stream/p"));

@@ -239,7 +239,7 @@ def test_the_server_keeps_previews_and_thumbnails_at_the_accounts_notch(env):
     def ingest(name: str) -> str:
         sha = _sha()
         want = _proxies_of(lib, sha)
-        r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(photo), "image/jpeg")},
+        r = client.post("/v1/ingest", headers=headers, files={"lumiverb.preview": ("p.jpg", io.BytesIO(photo), "image/jpeg")},
                         data={"library_id": library_id, "rel_path": name, "file_size": "1000", "media_type": "image",
                               "width": "640", "height": "480", "exif": json.dumps({"content_hash": sha}),
                               "lineage": json.dumps({"lumiverb.preview": want})})
@@ -252,22 +252,22 @@ def test_the_server_keeps_previews_and_thumbnails_at_the_accounts_notch(env):
         return r.content
 
     better = ingest("better.jpg")
-    assert kept(better, "proxy") == reencoded(photo, fmt="WEBP", quality=80, max_long_edge=2048)[0]
+    assert kept(better, "lumiverb.preview") == reencoded(photo, fmt="WEBP", quality=80, max_long_edge=2048)[0]
     try:
         r = client.put("/v1/producers/lumiverb.preview/settings", json={"settings": {"quality": "best"}, "redo": False},
                        headers=headers)
         assert r.status_code == 200, r.text  # new files only: the one made stays as it is
         best = ingest("best.jpg")
-        stored = kept(best, "proxy")
+        stored = kept(best, "lumiverb.preview")
         assert stored == reencoded(photo, fmt="WEBP", quality=90, max_long_edge=2048)[0]
-        assert kept(best, "thumbnail") == thumbnail(stored, 90)
-        assert len(stored) > len(kept(better, "proxy"))
+        assert kept(best, "lumiverb.preview.thumbnail") == thumbnail(stored, 90)
+        assert len(stored) > len(kept(better, "lumiverb.preview"))
         # One a client sends as an artifact is kept so too.
-        r = client.post(f"/v1/assets/{better}/artifacts/proxy", headers=headers,
+        r = client.post(f"/v1/assets/{better}/artifacts/lumiverb.preview", headers=headers,
                         files={"file": ("p.jpg", io.BytesIO(photo), "image/jpeg")},
                         data={"lineage": json.dumps(_proxies_of(lib, None))})
         assert r.status_code == 200, r.text
-        assert kept(better, "proxy") == reencoded(photo, fmt="WEBP", quality=90)[0]
+        assert kept(better, "lumiverb.preview") == reencoded(photo, fmt="WEBP", quality=90)[0]
     finally:
         client.put("/v1/producers/lumiverb.preview/settings", json={"settings": {"quality": None}, "redo": True}, headers=headers)
         client.post("/v1/producers/lumiverb.preview/resume", json={"scope": "redo"}, headers=headers)

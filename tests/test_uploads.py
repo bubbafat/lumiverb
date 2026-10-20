@@ -42,7 +42,7 @@ def data_dir(tmp_path, monkeypatch) -> Path:
     get_settings.cache_clear()
 
 
-def _start(env, asset_id: str, data: bytes, artifact: str = "analysis_proxy", **body) -> dict:
+def _start(env, asset_id: str, data: bytes, artifact: str = "lumiverb.video.analysis_proxy", **body) -> dict:
     client, headers, *_ = env
     r = client.post(f"/v1/assets/{asset_id}/uploads", headers=headers, json={
         "artifact": artifact, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
@@ -89,7 +89,7 @@ def test_a_file_in_chunks_is_kept_as_one_upload_would_keep_it(env, data_dir):
     assert hashlib.sha256(storage.abs_path(kept["key"]).read_bytes()).hexdigest() == kept["sha256"]
     with _db(env) as s:  # how it was made, as the start said: sent by its name, kept as today's id until part 3
         assert s.execute(text("SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = 'lumiverb.video.analysis_proxy'"),
-                         {"a": asset_id}).scalar() == producer_in("analysis_proxy", made("lumiverb.video.analysis_proxy")["producer"])
+                         {"a": asset_id}).scalar() == producer_in("lumiverb.video.analysis_proxy", made("lumiverb.video.analysis_proxy")["producer"])
     assert not any(data_dir.rglob("*.part")), "its bytes go once it's kept"
     assert _finish(env, upload).json() == kept  # sent again: the answer the first got
     status = client.get(upload["chunk_url"], headers=headers).json()
@@ -227,8 +227,8 @@ def test_the_client_sends_a_render_in_chunks_as_the_scheduler_does(env, tmp_path
     render.write_bytes(playable(2.0))
     api = ApiClient("http://testserver", "unused")
     api._client = TestClient(app, headers=headers)
-    kept = send(api, asset_id, "analysis_proxy", render, made("lumiverb.video.analysis_proxy"), chunk_size=10_000)
+    kept = send(api, asset_id, "lumiverb.video.analysis_proxy", render, made("lumiverb.video.analysis_proxy"), chunk_size=10_000)
     assert _analysis_proxy_key(env, asset_id) == kept["key"]
     assert kept["duration_sec"] == pytest.approx(2.0, abs=0.1)
-    again = send(api, asset_id, "analysis_proxy", render, made("lumiverb.video.analysis_proxy"))  # the same render sent again
+    again = send(api, asset_id, "lumiverb.video.analysis_proxy", render, made("lumiverb.video.analysis_proxy"))  # the same render sent again
     assert again == kept  # a new upload of it, kept the same

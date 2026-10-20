@@ -107,7 +107,7 @@ def _ingest(client, headers, library_id, rel_path, media_type, facet=None, exif=
         data["exif"] = json.dumps(exif)
     r = client.post(
         "/v1/ingest", headers=headers,
-        files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")}, data=data,
+        files={"lumiverb.preview": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")}, data=data,
     )
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]

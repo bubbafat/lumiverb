@@ -219,7 +219,7 @@ def test_a_trashed_file_back_at_its_path_stays_in_the_trash(env):
     buf = io.BytesIO()
     Image.new("RGB", (64, 36)).save(buf, format="JPEG")
     buf.seek(0)
-    r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")},
+    r = client.post("/v1/ingest", headers=headers, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")},
                     data={"library_id": library_id, "rel_path": path, "file_size": "1000", "media_type": "image",
                           "exif": json.dumps({"content_hash": trashed_sha}), "lineage": ingest_made(trashed_sha)})
     assert r.status_code == 409  # a person's trash stands
@@ -279,7 +279,7 @@ def test_the_other_ingest_refuses_a_different_file(env):
     Image.new("RGB", (64, 36)).save(buf, format="JPEG")
     buf.seek(0)
     other = _sha()
-    r = client.post(f"/v1/assets/{clip}/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")},
+    r = client.post(f"/v1/assets/{clip}/ingest", headers=headers, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")},
                     data={"exif": json.dumps({"content_hash": other}), "lineage": ingest_made(other)})
     assert r.status_code == 409 and r.json()["error"]["code"] == "different_file", r.text
 
@@ -326,7 +326,7 @@ def _post(client, env, rel_path: str, sha: str):
     buf = io.BytesIO()
     Image.new("RGB", (64, 36)).save(buf, format="JPEG")
     buf.seek(0)
-    return client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")},
+    return client.post("/v1/ingest", headers=headers, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")},
                        data={"library_id": library_id, "rel_path": rel_path, "file_size": "1000",
                              "media_type": "video" if rel_path.endswith(".mp4") else "image",
                              "exif": json.dumps({"content_hash": sha}), "lineage": ingest_made(sha)})
@@ -554,7 +554,7 @@ def test_a_video_copy_handed_over_to_before_its_facet_is_stored_is_not_a_500(env
             "exif": json.dumps({"content_hash": sha}), "lineage": ingest_made(sha), "video_facet": json.dumps(facet)}
     with patch.object(AssetRepository, "upsert_video_facet", upsert_video_facet):
         r = TestClient(app, raise_server_exceptions=False).post(
-            "/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data=data)
+            "/v1/ingest", headers=headers, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, data=data)
     assert r.status_code == 200, r.text
     assert r.json()["asset_id"] == original and _row(env, original)[2] == "ncr3-fac/copy.mp4"
 

@@ -2,9 +2,9 @@
 """The server stores and sends the names (ADR-024 phase 1 part 3), and still
 takes an older client's words until part 5 (src/producers/names.py RENAMED):
 every route sent an artifact or a lineage's producer by its old id gives the
-same answer as by its name, and keeps and answers the name. Files keep their
-kinds until part 4, taken by their names too. What's never renamed (AI jobs,
-model ids, protocol 1's inputs) isn't taken by a name.
+same answer as by its name, and keeps and answers the name; from part 4 a
+file too, by its old kind or its name. What's never renamed (AI jobs, model
+ids, protocol 1's inputs) isn't taken by a name.
 
 Against the real API and database (tests/test_analysis_proxy_api.py's
 account). A device's gate takes them too: tests/test_device_keys.py.
@@ -157,14 +157,18 @@ def test_a_file_by_its_name_is_the_file_by_its_kind(env):
         assert by_name.content == by_kind.content and by_name.headers["content-type"] == by_kind.headers["content-type"]
     assert _row(lib, photo, "lumiverb.preview").producer == "lumiverb.preview"
 
-    # The batch upload's fields by their names, its lineage by an old word.
+    # The batch upload's fields by their names, its lineage by an old word; its items say the names.
     r = client.post(f"/v1/assets/{photo}/artifacts", headers=headers,
                     files={"lumiverb.preview": _jpeg(), "lumiverb.preview.thumbnail": _jpeg()},
                     data={"lineage": json.dumps({"proxy": _old(lib, "lumiverb.preview", sha)})})
     assert r.status_code == 200, r.text
-    assert sorted(i["artifact_type"] for i in r.json()["items"]) == ["proxy", "thumbnail"], r.json()
+    assert sorted(i["artifact_type"] for i in r.json()["items"]) == ["lumiverb.preview", "lumiverb.preview.thumbnail"]
+    # And by their old kinds (until part 5), answered by name.
+    r = client.post(f"/v1/assets/{photo}/artifacts", headers=headers, files={"proxy": _jpeg()},
+                    data={"lineage": json.dumps({"lumiverb.preview": _want(lib, "lumiverb.preview", sha)})})
+    assert r.status_code == 200 and [i["artifact_type"] for i in r.json()["items"]] == ["lumiverb.preview"], r.text
 
-    # A video's analysis proxy: whole, and in chunks; files are kinds until part 4.
+    # A video's analysis proxy: whole, and in chunks, by its name or its old kind; answered by name.
     video = _ingest_with(lib, "v.mov", _sha(), media_type="video")
     vsha = _row(lib, video, "lumiverb.preview").source_hash
     r = client.post(f"/v1/assets/{video}/artifacts/lumiverb.video.analysis_proxy", headers=headers,
@@ -179,7 +183,12 @@ def test_a_file_by_its_name_is_the_file_by_its_kind(env):
     r = client.post(f"/v1/assets/{video}/uploads", headers=headers, json={
         "artifact": "lumiverb.video.analysis_proxy", "size": len(body), "sha256": hashlib.sha256(body).hexdigest(),
         "lineage": _want(lib, "lumiverb.video.analysis_proxy", vsha)})
-    assert r.status_code == 200 and r.json()["artifact"] == "analysis_proxy", r.text
+    assert r.status_code == 200 and r.json()["artifact"] == "lumiverb.video.analysis_proxy", r.text
+    assert client.delete(f"/v1/uploads/{r.json()['upload_id']}", headers=headers).status_code == 204
+    r = client.post(f"/v1/assets/{video}/uploads", headers=headers, json={
+        "artifact": "analysis_proxy", "size": len(body), "sha256": hashlib.sha256(body).hexdigest(),
+        "lineage": _want(lib, "lumiverb.video.analysis_proxy", vsha)})
+    assert r.status_code == 200 and r.json()["artifact"] == "lumiverb.video.analysis_proxy", r.text
     assert client.delete(f"/v1/uploads/{r.json()['upload_id']}", headers=headers).status_code == 204
     r = client.post(f"/v1/assets/{video}/uploads", headers=headers, json={
         "artifact": "lumiverb.video.scenes.picture", "size": 1, "sha256": "0" * 64, "lineage": {}})

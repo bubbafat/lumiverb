@@ -131,7 +131,7 @@ def test_ingest_proxy_only(ingest_env) -> None:
     r = client.post(
         f"/v1/assets/{asset_id}/ingest",
         headers=auth,
-        files={"proxy": ("proxy.jpg", io.BytesIO(proxy_bytes), "image/jpeg")},
+        files={"lumiverb.preview": ("proxy.jpg", io.BytesIO(proxy_bytes), "image/jpeg")},
         data={"lineage": ingest_made()},
     )
     assert r.status_code == 200, r.text
@@ -166,7 +166,7 @@ def test_ingest_large_proxy_is_resized(ingest_env) -> None:
     r = client.post(
         f"/v1/assets/{asset_id}/ingest",
         headers=auth,
-        files={"proxy": ("big.jpg", io.BytesIO(proxy_bytes), "image/jpeg")},
+        files={"lumiverb.preview": ("big.jpg", io.BytesIO(proxy_bytes), "image/jpeg")},
         data={"lineage": ingest_made()},
     )
     assert r.status_code == 200
@@ -187,7 +187,7 @@ def test_ingest_small_proxy_not_upscaled(ingest_env) -> None:
     r = client.post(
         f"/v1/assets/{asset_id}/ingest",
         headers=auth,
-        files={"proxy": ("small.jpg", io.BytesIO(proxy_bytes), "image/jpeg")},
+        files={"lumiverb.preview": ("small.jpg", io.BytesIO(proxy_bytes), "image/jpeg")},
         data={"lineage": ingest_made()},
     )
     assert r.status_code == 200
@@ -217,7 +217,7 @@ def test_ingest_with_exif(ingest_env) -> None:
     r = client.post(
         f"/v1/assets/{asset_id}/ingest",
         headers=auth,
-        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        files={"lumiverb.preview": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
         data={"exif": json.dumps(exif_data), "lineage": ingest_made()},
     )
     assert r.status_code == 200
@@ -247,7 +247,7 @@ def test_ingest_with_vision(ingest_env) -> None:
     r = client.post(
         f"/v1/assets/{asset_id}/ingest",
         headers=auth,
-        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        files={"lumiverb.preview": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
         data={"vision": json.dumps(vision_data), "lineage": ingest_made()},
     )
     assert r.status_code == 200
@@ -274,7 +274,7 @@ def test_ingest_with_all_fields(ingest_env) -> None:
     r = client.post(
         f"/v1/assets/{asset_id}/ingest",
         headers=auth,
-        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        files={"lumiverb.preview": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
         data={
             "lineage": ingest_made(),
             "width": "4000",
@@ -299,7 +299,7 @@ def test_ingest_missing_asset_returns_404(ingest_env) -> None:
     r = client.post(
         "/v1/assets/ast_nonexistent/ingest",
         headers=auth,
-        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        files={"lumiverb.preview": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
         data={"lineage": ingest_made()},
     )
     assert r.status_code == 404
@@ -313,7 +313,7 @@ def test_ingest_empty_proxy_returns_400(ingest_env) -> None:
     r = client.post(
         f"/v1/assets/{asset_id}/ingest",
         headers=auth,
-        files={"proxy": ("empty.jpg", io.BytesIO(b""), "image/jpeg")},
+        files={"lumiverb.preview": ("empty.jpg", io.BytesIO(b""), "image/jpeg")},
         data={"lineage": ingest_made()},
     )
     assert r.status_code == 400
@@ -327,7 +327,7 @@ def test_ingest_invalid_exif_json_returns_400(ingest_env) -> None:
     r = client.post(
         f"/v1/assets/{asset_id}/ingest",
         headers=auth,
-        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        files={"lumiverb.preview": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
         data={"exif": "not valid json{{{", "lineage": ingest_made()},
     )
     assert r.status_code == 400
@@ -343,7 +343,7 @@ def test_ingest_is_idempotent(ingest_env) -> None:
     r1 = client.post(
         f"/v1/assets/{asset_id}/ingest",
         headers=auth,
-        files={"proxy": ("v1.jpg", io.BytesIO(proxy1), "image/jpeg")},
+        files={"lumiverb.preview": ("v1.jpg", io.BytesIO(proxy1), "image/jpeg")},
         data={"lineage": ingest_made()},
     )
     assert r1.status_code == 200
@@ -352,7 +352,7 @@ def test_ingest_is_idempotent(ingest_env) -> None:
     r2 = client.post(
         f"/v1/assets/{asset_id}/ingest",
         headers=auth,
-        files={"proxy": ("v2.jpg", io.BytesIO(proxy2), "image/jpeg")},
+        files={"lumiverb.preview": ("v2.jpg", io.BytesIO(proxy2), "image/jpeg")},
         data={"lineage": ingest_made()},
     )
     assert r2.status_code == 200
@@ -374,7 +374,7 @@ def test_create_on_ingest_creates_asset(ingest_env) -> None:
     r = client.post(
         "/v1/ingest",
         headers=auth,
-        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        files={"lumiverb.preview": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
         data={
             "lineage": ingest_made(),
             "library_id": library_id,
@@ -410,7 +410,7 @@ def test_create_on_ingest_with_vision(ingest_env) -> None:
     r = client.post(
         "/v1/ingest",
         headers=auth,
-        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        files={"lumiverb.preview": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
         data={
             "lineage": ingest_made(),
             "library_id": library_id,
@@ -434,7 +434,7 @@ def test_create_on_ingest_idempotent(ingest_env) -> None:
     r1 = client.post(
         "/v1/ingest",
         headers=auth,
-        files={"proxy": ("v1.jpg", io.BytesIO(_make_test_image(400, 300)), "image/jpeg")},
+        files={"lumiverb.preview": ("v1.jpg", io.BytesIO(_make_test_image(400, 300)), "image/jpeg")},
         data={
             "lineage": ingest_made(),
             "library_id": library_id,
@@ -448,7 +448,7 @@ def test_create_on_ingest_idempotent(ingest_env) -> None:
     r2 = client.post(
         "/v1/ingest",
         headers=auth,
-        files={"proxy": ("v2.jpg", io.BytesIO(_make_test_image(500, 400)), "image/jpeg")},
+        files={"lumiverb.preview": ("v2.jpg", io.BytesIO(_make_test_image(500, 400)), "image/jpeg")},
         data={
             "lineage": ingest_made(),
             "library_id": library_id,
@@ -469,7 +469,7 @@ def test_create_on_ingest_invalid_library(ingest_env) -> None:
     r = client.post(
         "/v1/ingest",
         headers=auth,
-        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        files={"lumiverb.preview": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
         data={
             "lineage": ingest_made(),
             "library_id": "lib_nonexistent",
@@ -498,7 +498,7 @@ def test_create_on_ingest_blocked_by_library_exclude_filter(ingest_env) -> None:
     r = client.post(
         "/v1/ingest",
         headers=auth,
-        files={"proxy": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
+        files={"lumiverb.preview": ("photo.jpg", io.BytesIO(_make_test_image()), "image/jpeg")},
         data={
             "lineage": ingest_made(),
             "library_id": library_id,

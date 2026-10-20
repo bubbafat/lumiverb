@@ -357,13 +357,13 @@ final class AuthManagerTests: XCTestCase {
             let authHeader = request.value(forHTTPHeaderField: "Authorization")
             recorder.record(path: path, auth: authHeader)
 
-            if path.hasSuffix("/proxy") && authHeader == "Bearer expired_jwt" {
+            if path.hasSuffix("/lumiverb.preview") && authHeader == "Bearer expired_jwt" {
                 return jsonResponse(401, json: "Unauthorized", for: request)
             } else if path == "/v1/auth/refresh" {
                 return jsonResponse(200, json: """
                 {"access_token": "fresh_jwt", "token_type": "bearer", "expires_in": 3600}
                 """, for: request)
-            } else if path.hasSuffix("/proxy") && authHeader == "Bearer fresh_jwt" {
+            } else if path.hasSuffix("/lumiverb.preview") && authHeader == "Bearer fresh_jwt" {
                 let response = HTTPURLResponse(
                     url: request.url!, statusCode: 200,
                     httpVersion: nil, headerFields: ["Content-Type": "image/jpeg"]
@@ -375,7 +375,7 @@ final class AuthManagerTests: XCTestCase {
             }
         }
 
-        let data = try await client.getData("/v1/assets/ast_1/artifacts/proxy")
+        let data = try await client.getData("/v1/assets/ast_1/artifacts/lumiverb.preview")
         XCTAssertEqual(data, imageData)
 
         let requests = recorder.requests

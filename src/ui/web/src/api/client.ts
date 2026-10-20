@@ -557,6 +557,7 @@ export async function listLibraryHealth(): Promise<LibraryHealthItem[]> {
 // ---------- Unified Query (filter algebra) ----------
 
 import type { LeafFilter } from "../lib/queryFilter";
+import { ANALYSIS_PROXY, VIDEO_PREVIEW } from "../lib/names";
 
 /** Response from GET /v1/query. */
 export interface QueryItem {
@@ -876,7 +877,7 @@ export interface Playback {
   url: string;
   expires_at: string;
   /** The full-length analysis proxy, or the 10-second preview until it exists. */
-  source: "analysis_proxy" | "preview";
+  source: typeof ANALYSIS_PROXY | typeof VIDEO_PREVIEW; // what plays, by its name (ADR-024)
   /** Seconds the link plays; null means the whole video. */
   max_seconds: number | null;
   /** False while the capped copy is made: ask again shortly (the link answers 503 until then). */

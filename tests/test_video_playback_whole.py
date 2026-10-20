@@ -14,13 +14,13 @@ pytestmark = pytest.mark.fast
 
 
 @pytest.mark.parametrize("source,duration,whole", [
-    ("analysis_proxy", 3600.0, True),
-    ("analysis_proxy", None, True),
-    ("preview", 1.0, True),  # Robert's 1-second clip
-    ("preview", 8.0, True),
-    ("preview", 10.05, True),  # a frame or two over: rounding
-    ("preview", 10.5, False),
-    ("preview", None, False),  # not probed yet: can't say
+    ("lumiverb.video.analysis_proxy", 3600.0, True),
+    ("lumiverb.video.analysis_proxy", None, True),
+    ("lumiverb.video.preview", 1.0, True),  # Robert's 1-second clip
+    ("lumiverb.video.preview", 8.0, True),
+    ("lumiverb.video.preview", 10.05, True),  # a frame or two over: rounding
+    ("lumiverb.video.preview", 10.5, False),
+    ("lumiverb.video.preview", None, False),  # not probed yet: can't say
 ])
 def test_whole_clip(source, duration, whole):
     assert whole_clip(source, duration) is whole

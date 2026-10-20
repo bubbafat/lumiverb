@@ -116,7 +116,7 @@ def _ingest(client, headers, library_id: str, rel_path: str, media_type: str, **
     r = client.post(
         "/v1/ingest",
         headers=headers,
-        files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
+        files={"lumiverb.preview": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
         data=data,
     )
     assert r.status_code == 200, r.text
@@ -234,7 +234,7 @@ def test_ingest_keeps_the_video_when_its_facet_is_invalid(env) -> None:
     client, headers, library_id, _ = env
     r = client.post(
         "/v1/ingest", headers=headers,
-        files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
+        files={"lumiverb.preview": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
         data={"library_id": library_id, "rel_path": "v/odd-probe.mov", "file_size": "5000",
               "media_type": "video", "video_facet": json.dumps(dict(FACET, width=0)), "lineage": ingest_made()},
     )

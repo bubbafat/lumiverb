@@ -82,7 +82,7 @@ describe("useAuthenticatedImage", () => {
     const calls = stubServer([401, 200]);
     const { result } = renderHook(() => useAuthenticatedImage("ast_1"));
     await waitFor(() => expect(result.current.url).toBe("blob:crop"));
-    expect(calls[2].url).toBe("/v1/assets/ast_1/artifacts/thumbnail");
+    expect(calls[2].url).toBe("/v1/assets/ast_1/artifacts/lumiverb.preview.thumbnail");
     expect(getApiKey()).toBe("new-token");
   });
 
@@ -99,10 +99,10 @@ describe("useAuthenticatedImage", () => {
           : new Response(new Blob(["mp4"]), { status: 200 });
       }),
     );
-    const { result } = renderHook(() => useAuthenticatedImage("ast_1", "video-preview"));
+    const { result } = renderHook(() => useAuthenticatedImage("ast_1", "lumiverb.video.preview"));
     await waitFor(() => expect(result.current.generating).toBe(true));
     await waitFor(() => expect(result.current.url).toBe("blob:crop"), { timeout: 3000 });
     expect(result.current.generating).toBe(false);
-    expect(calls).toEqual(["/v1/assets/ast_1/artifacts/video_preview", "/v1/assets/ast_1/artifacts/video_preview"]);
+    expect(calls).toEqual(["/v1/assets/ast_1/artifacts/lumiverb.video.preview", "/v1/assets/ast_1/artifacts/lumiverb.video.preview"]);
   });
 });

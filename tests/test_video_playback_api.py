@@ -141,7 +141,7 @@ def _ingest(env, rel_path: str, media_type: str = "video", duration: float | Non
             "width": "64", "height": "36",
             "exif": json.dumps({"content_hash": "sha256:" + os.urandom(32).hex(), **({"duration_sec": duration} if duration else {})}),
             "lineage": ingest_made()}
-    r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
+    r = client.post("/v1/ingest", data=data, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]
 
@@ -158,9 +158,9 @@ def _video(env, media, name: str, *, proxy: bool = True, preview: bool = True, l
            duration: float | None = None) -> str:
     asset_id = _ingest(env, f"{name}.mov", duration=duration)
     if preview:
-        _upload(env, asset_id, "video_preview", media["preview"])
+        _upload(env, asset_id, "lumiverb.video.preview", media["preview"])
     if proxy:
-        _upload(env, asset_id, "analysis_proxy", media["long" if long else "proxy"])
+        _upload(env, asset_id, "lumiverb.video.analysis_proxy", media["long" if long else "proxy"])
     return asset_id
 
 
@@ -280,7 +280,7 @@ def test_full_length_proxy_streams_with_every_audio_track(env, media, tmp_path):
     r = _playback(env, asset_id)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["source"] == "analysis_proxy"
+    assert body["source"] == "lumiverb.video.analysis_proxy"
     assert body["max_seconds"] is None
     assert body["expires_at"]
     # No Authorization header: the signature is the credential.
@@ -306,7 +306,7 @@ def test_before_the_proxy_exists_the_preview_plays(env, media):
     client, *_ = env
     asset_id = _video(env, media, "early", proxy=False, duration=14.0)
     body = _playback(env, asset_id).json()
-    assert body["source"] == "preview" and body["whole"] is False
+    assert body["source"] == "lumiverb.video.preview" and body["whole"] is False
     assert _fetch(client, _path(body["url"])).content == media["preview"]
 
 
@@ -315,11 +315,11 @@ def test_a_short_clips_preview_is_the_whole_clip(env, media):
     # A preview is a clip's first 10 seconds: a 3-second clip's is all of it,
     # so players say "Full video", not "a short preview" (Robert: a 1-second clip).
     short = _playback(env, _video(env, media, "short", proxy=False, duration=3.0)).json()
-    assert (short["source"], short["whole"]) == ("preview", True)
+    assert (short["source"], short["whole"]) == ("lumiverb.video.preview", True)
     unknown = _playback(env, _video(env, media, "unprobed", proxy=False)).json()
-    assert (unknown["source"], unknown["whole"]) == ("preview", False)
+    assert (unknown["source"], unknown["whole"]) == ("lumiverb.video.preview", False)
     full = _playback(env, _video(env, media, "processed", duration=6.0)).json()
-    assert (full["source"], full["whole"]) == ("analysis_proxy", True)
+    assert (full["source"], full["whole"]) == ("lumiverb.video.analysis_proxy", True)
 
 
 @pytest.mark.slow
@@ -472,7 +472,7 @@ def test_the_cap_applies_to_the_preview_too(env, media, tmp_path):
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 1}, headers=admin)
     got = _fetch(client, _path(_playback(env, asset_id).json()["url"]))
     assert _duration(got.content, tmp_path) == pytest.approx(1.0, abs=0.6)
-    hover = _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", headers=admin)
+    hover = _fetch(client, f"/v1/assets/{asset_id}/artifacts/lumiverb.video.preview", headers=admin)
     assert _duration(hover.content, tmp_path) == pytest.approx(1.0, abs=0.6)
 
 
@@ -492,7 +492,7 @@ def test_public_library_playback_and_its_end(env, media):
         url = _path(r.json()["url"])
         assert _fetch(client, url).status_code == 200
         # The full analysis proxy isn't downloadable from a public page.
-        r = client.get(f"/v1/assets/{asset_id}/artifacts/analysis_proxy", params={"public_library_id": library_id})
+        r = client.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.video.analysis_proxy", params={"public_library_id": library_id})
         assert r.status_code == 403
     finally:
         client.patch(f"/v1/libraries/{library_id}", json={"is_public": False}, headers=admin)
@@ -504,7 +504,7 @@ def test_public_library_playback_and_its_end(env, media):
 def test_signed_in_users_still_download_the_proxy(env, media):
     client, admin, *_ = env
     asset_id = _video(env, media, "download")
-    r = client.get(f"/v1/assets/{asset_id}/artifacts/analysis_proxy", headers=admin)
+    r = client.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.video.analysis_proxy", headers=admin)
     assert r.status_code == 200 and r.content == media["proxy"]
 
 
@@ -566,12 +566,12 @@ def test_public_hover_and_preview_artifact_follow_the_public_cap(env, media, tmp
     asset_id = _video(env, media, "pub_hover", proxy=False)
     params = _public(env)
     client.patch("/v1/tenant/settings", json={"public_video_preview_max_seconds": 1}, headers=admin)
-    hover = _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", params=params)
+    hover = _fetch(client, f"/v1/assets/{asset_id}/artifacts/lumiverb.video.preview", params=params)
     assert _duration(hover.content, tmp_path) == pytest.approx(1, abs=0.6)
-    art = _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", params=params)
+    art = _fetch(client, f"/v1/assets/{asset_id}/artifacts/lumiverb.video.preview", params=params)
     assert _duration(art.content, tmp_path) == pytest.approx(1, abs=0.6)
     # Signed in, the preview is whole.
-    assert _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", headers=admin).content == media["preview"]
+    assert _fetch(client, f"/v1/assets/{asset_id}/artifacts/lumiverb.video.preview", headers=admin).content == media["preview"]
 
 
 @pytest.mark.slow
@@ -656,7 +656,7 @@ def test_viewers_cant_download_the_whole_proxy_while_capped(env, media):
     client, _admin, _lib, _storage, keys = env
     asset_id = _video(env, media, "bypass")
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 2}, headers=keys["admin"])
-    url = f"/v1/assets/{asset_id}/artifacts/analysis_proxy"
+    url = f"/v1/assets/{asset_id}/artifacts/lumiverb.video.analysis_proxy"
     assert _fetch(client, url, headers=keys["viewer"]).status_code == 403
     assert _fetch(client, url, headers=keys["editor"]).status_code == 200  # the server's tools need it
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": None}, headers=keys["admin"])
@@ -668,7 +668,7 @@ def test_a_signed_in_preview_artifact_follows_the_account_cap(env, media, tmp_pa
     client, admin, *_ = env
     asset_id = _video(env, media, "art_cap", proxy=False)
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 1}, headers=admin)
-    art = _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", headers=admin)
+    art = _fetch(client, f"/v1/assets/{asset_id}/artifacts/lumiverb.video.preview", headers=admin)
     assert _duration(art.content, tmp_path) == pytest.approx(1, abs=0.6)
 
 
@@ -773,11 +773,11 @@ def test_public_project_pages_play_hover_and_show_details(env, media, tmp_path):
     assert body.status_code == 200, body.text
     assert body.json()["max_seconds"] == 10
     assert _duration(_fetch(client, _path(body.json()["url"])).content, tmp_path) == pytest.approx(10, abs=0.6)
-    assert _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", params=params).status_code == 200
+    assert _fetch(client, f"/v1/assets/{asset_id}/artifacts/lumiverb.video.preview", params=params).status_code == 200
     assert client.get(f"/v1/assets/{asset_id}", params=params).status_code == 200
     # Only the project's own clips.
     assert client.get(f"/v1/assets/{outsider}/playback", params=params).status_code == 403
-    assert client.get(f"/v1/assets/{outsider}/artifacts/video_preview", params=params).status_code == 403
+    assert client.get(f"/v1/assets/{outsider}/artifacts/lumiverb.video.preview", params=params).status_code == 403
     assert client.get(f"/v1/assets/{outsider}", params=params).status_code == 403
 
 
@@ -806,10 +806,10 @@ def test_the_cap_goes_by_the_file_not_a_stored_duration(env, media, tmp_path):
     data = {"library_id": library_id, "rel_path": "lies.mov", "file_size": "1000", "media_type": "video",
             "width": "64", "height": "36", "exif": json.dumps({"content_hash": "sha256:" + os.urandom(32).hex(), "duration_sec": 2}),
             "lineage": ingest_made()}
-    r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=admin)
+    r = client.post("/v1/ingest", data=data, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, headers=admin)
     assert r.status_code == 200, r.text
     asset_id = r.json()["asset_id"]
-    _upload(env, asset_id, "analysis_proxy", media["long"])
+    _upload(env, asset_id, "lumiverb.video.analysis_proxy", media["long"])
     params = _public(env)
     url = _path(client.get(f"/v1/assets/{asset_id}/playback", params=params).json()["url"])
     assert _duration(_fetch(client, url).content, tmp_path) == pytest.approx(10, abs=0.6)
@@ -874,7 +874,7 @@ def test_stopping_the_api_kills_a_running_cut(tmp_path, monkeypatch):
     store = FileStore(LocalStorage(str(tmp_path)))
     store.write("ten_1/lib_1/previews/00/src.mp4", b"a preview")
     ask = playback._Ask(store, "ten_1/lib_1/previews/00/src.mp4", None, playback_cuts("ten_1", root=tmp_path),
-                        "ast_01M4CWVZ2MPTAV6FSGG6B6VXVP", "preview", "v1", strip=True)
+                        "ast_01M4CWVZ2MPTAV6FSGG6B6VXVP", "lumiverb.video.preview", "v1", strip=True)
     failed: list[Exception] = []
 
     def cut() -> None:
@@ -929,13 +929,13 @@ def test_public_pages_never_serve_where_a_clip_was_shot(env, gps_preview, tmp_pa
     # Previews made before the CLI stripped metadata still carry GPS.
     client, admin, *_ = env
     asset_id = _ingest(env, f"gps_{public_cap}.mov")
-    _upload(env, asset_id, "video_preview", gps_preview)
+    _upload(env, asset_id, "lumiverb.video.preview", gps_preview)
     assert _has_location(gps_preview, tmp_path)
     client.patch("/v1/tenant/settings", json={"public_video_preview_max_seconds": public_cap}, headers=admin)
     params = _public(env)
     for body in (
         _fetch(client, _path(client.get(f"/v1/assets/{asset_id}/playback", params=params).json()["url"])).content,
-        _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", params=params).content,
+        _fetch(client, f"/v1/assets/{asset_id}/artifacts/lumiverb.video.preview", params=params).content,
     ):
         assert body[:12].find(b"ftyp") != -1
         assert not _has_location(body, tmp_path)

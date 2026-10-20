@@ -166,14 +166,14 @@ def _ingest(env, library_id: str, f: File, *, preview: bool = True, headers: dic
     Image.new("RGB", (64, 36), color=(10, 20, 30)).save(buf, format="JPEG")
     buf.seek(0)
     video = f.rel_path.endswith(".mov")
-    r = env.client.post("/v1/ingest", headers=headers or env.editor, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data={
+    r = env.client.post("/v1/ingest", headers=headers or env.editor, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, data={
         "library_id": library_id, "rel_path": f.rel_path, "file_size": str(f.file_size),
         "file_mtime": f.mtime.isoformat(), "media_type": "video" if video else "image", "width": "64",
         "height": "36", "exif": json.dumps({"content_hash": f.sha}), "lineage": ingest_made(f.sha)})
     assert r.status_code == 200, r.text
     asset_id = r.json()["asset_id"]
     if video and preview:
-        r = env.client.post(f"/v1/assets/{asset_id}/artifacts/video_preview", headers=headers or env.editor,
+        r = env.client.post(f"/v1/assets/{asset_id}/artifacts/lumiverb.video.preview", headers=headers or env.editor,
                             files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
                             data={"lineage": made_json("lumiverb.video.preview", f.sha)})
         assert r.status_code == 200, r.text
@@ -375,7 +375,7 @@ def _lose_preview(env, asset_id: str) -> None:
     with env.db.connect() as conn:
         key = conn.execute(text("SELECT proxy_key FROM assets WHERE asset_id = :a"), {"a": asset_id}).scalar()
     get_store().delete(key)
-    _error(env.client.get(f"/v1/assets/{asset_id}/artifacts/proxy", headers=env.editor), 404, "artifact_missing")
+    _error(env.client.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview", headers=env.editor), 404, "artifact_missing")
     with Session(env.db) as session:
         assert missing_artifacts.repair(session)["cleared"] == 1
 
@@ -395,7 +395,7 @@ def test_a_photo_whose_preview_was_lost_is_uploaded_again(env):
     assert run.counts["unchanged"] == 1
     assert run.uploaded == {"a.jpg": asset, "c.jpg": changed}
     for clip in (asset, changed):
-        assert env.client.get(f"/v1/assets/{clip}/artifacts/proxy", headers=env.editor).status_code == 200
+        assert env.client.get(f"/v1/assets/{clip}/artifacts/lumiverb.preview", headers=env.editor).status_code == 200
     assert _scan(env, lib, [lost, kept, touched.touched()]).plan == {}  # made: nothing more to do
 
 

@@ -38,13 +38,15 @@ from sqlalchemy import text
 from sqlmodel import Session
 from ulid import ULID
 
+from src.producers.names import ANALYSIS_PROXY, VIDEO_PREVIEW
+
 # An upload expires this long after its last chunk.
 TTL = timedelta(hours=24)
 # The chunk size the server suggests, and the most it takes (Lumiverb's own nginx takes 100 MB a request).
 CHUNK_SIZE = 32 * 1024 * 1024
 MAX_CHUNK = 64 * 1024 * 1024
 # What's sent this way: a clip's videos. Pictures are small enough for one request.
-KINDS = ("video_preview", "analysis_proxy")
+KINDS = (VIDEO_PREVIEW, ANALYSIS_PROXY)
 
 
 def folder(tenant_id: str) -> Path:

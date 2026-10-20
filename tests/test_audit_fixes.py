@@ -157,7 +157,7 @@ def _key(tenant_url: str, asset_id: str, column: str) -> str | None:
 def test_stale_proxy_is_a_404_that_changes_nothing(
     audit_fixes_client: tuple[TestClient, str, str, str], public: bool,
 ) -> None:
-    """GET /artifacts/proxy for a stale proxy_key: 404 artifact_missing; the key stays."""
+    """GET /artifacts/lumiverb.preview for a stale proxy_key: 404 artifact_missing; the key stays."""
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
@@ -166,8 +166,8 @@ def test_stale_proxy_is_a_404_that_changes_nothing(
     if public:
         assert client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=auth).status_code == 200
     try:
-        r = (client.get(f"/v1/assets/{asset_id}/artifacts/proxy", params={"public_library_id": library_id})
-             if public else client.get(f"/v1/assets/{asset_id}/artifacts/proxy", headers=auth))
+        r = (client.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview", params={"public_library_id": library_id})
+             if public else client.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview", headers=auth))
     finally:
         client.patch(f"/v1/libraries/{library_id}", json={"is_public": False}, headers=auth)
     assert r.status_code == 404, (r.status_code, r.text)
@@ -179,14 +179,14 @@ def test_stale_proxy_is_a_404_that_changes_nothing(
 def test_stale_thumbnail_is_a_404_that_changes_nothing(
     audit_fixes_client: tuple[TestClient, str, str, str],
 ) -> None:
-    """GET /artifacts/thumbnail for a stale thumbnail_key: 404; the key stays."""
+    """GET /artifacts/lumiverb.preview.thumbnail for a stale thumbnail_key: 404; the key stays."""
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     asset_id = _clip(tenant_url, library_id, "stale_thumb_image.jpg", "image")
     _set_thumbnail_key(tenant_url, asset_id, "nonexistent/fake_thumb.jpg")
 
-    r = client.get(f"/v1/assets/{asset_id}/artifacts/thumbnail", headers=auth)
+    r = client.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview.thumbnail", headers=auth)
     assert r.status_code == 404, (r.status_code, r.text)
     assert _key(tenant_url, asset_id, "thumbnail_key") == "nonexistent/fake_thumb.jpg"
 
@@ -349,7 +349,7 @@ def _ingest(client: TestClient, auth: dict, library_id: str, rel_path: str, medi
         "/v1/ingest",
         data={"lineage": ingest_made(), "library_id": library_id, "rel_path": rel_path, "file_size": "1000",
               "media_type": media_type},
-        files={"proxy": ("proxy.jpg", buf, "image/jpeg")},
+        files={"lumiverb.preview": ("proxy.jpg", buf, "image/jpeg")},
         headers=auth,
     )
 

@@ -102,7 +102,7 @@ def _ingest(env, rel_path: str, media_type: str = "video", sha: str | None = Non
         data["exif"] = json.dumps({"content_hash": sha})
     if facet is not None:
         data["video_facet"] = json.dumps(facet)
-    r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
+    r = client.post("/v1/ingest", data=data, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]
 
@@ -110,7 +110,7 @@ def _ingest(env, rel_path: str, media_type: str = "video", sha: str | None = Non
 def _upload(env, asset_id: str, body: bytes | None = None, content_type="video/mp4"):
     client, headers, *_ = env
     return client.post(
-        f"/v1/assets/{asset_id}/artifacts/analysis_proxy",
+        f"/v1/assets/{asset_id}/artifacts/lumiverb.video.analysis_proxy",
         files={"file": ("analysis.mp4", io.BytesIO(playable() if body is None else body), content_type)},
         data={"lineage": made_json("lumiverb.video.analysis_proxy")},
         headers=headers,
@@ -166,7 +166,7 @@ def test_download_returns_the_file_with_ranges_and_an_etag(env) -> None:
     asset_id = _ingest(env, "dl/a.mov")
     sha = _upload(env, asset_id).json()["sha256"]
 
-    r = client.get(f"/v1/assets/{asset_id}/artifacts/analysis_proxy", headers=headers)
+    r = client.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.video.analysis_proxy", headers=headers)
     assert r.status_code == 200
     body = r.content
     assert hashlib.sha256(body).hexdigest() == sha
@@ -174,7 +174,7 @@ def test_download_returns_the_file_with_ranges_and_an_etag(env) -> None:
     assert r.headers["etag"] == f'"{sha}"'
     assert r.headers["accept-ranges"] == "bytes"
 
-    part = client.get(f"/v1/assets/{asset_id}/artifacts/analysis_proxy",
+    part = client.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.video.analysis_proxy",
                       headers={**headers, "Range": "bytes=10-19"})
     assert part.status_code == 206
     assert part.content == body[10:20]
@@ -184,7 +184,7 @@ def test_download_returns_the_file_with_ranges_and_an_etag(env) -> None:
 def test_download_before_render_is_not_ready(env) -> None:
     client, headers, *_ = env
     asset_id = _ingest(env, "dl/none.mov")
-    r = client.get(f"/v1/assets/{asset_id}/artifacts/analysis_proxy", headers=headers)
+    r = client.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.video.analysis_proxy", headers=headers)
     assert r.status_code == 404
     assert "artifact_not_ready" in r.text
 
@@ -213,13 +213,13 @@ def test_analysis_proxies_have_their_own_size_ceiling(env) -> None:
     with patch("src.server.api.routers.artifacts.MAX_UPLOAD_BYTES", 10):
         assert _upload(env, asset_id).status_code == 200
         r = client.post(
-            f"/v1/assets/{asset_id}/artifacts/video_preview",
+            f"/v1/assets/{asset_id}/artifacts/lumiverb.video.preview",
             files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
             data={"lineage": made_json("lumiverb.video.preview")},
             headers=headers,
         )
         assert r.status_code == 413
-    with patch.dict("src.server.api.routers.artifacts.MAX_UPLOAD_BYTES_BY_TYPE", {"analysis_proxy": 10}):
+    with patch.dict("src.server.api.routers.artifacts.MAX_UPLOAD_BYTES_BY_TYPE", {"lumiverb.video.analysis_proxy": 10}):
         assert _upload(env, asset_id).status_code == 413
 
 
