@@ -7,7 +7,11 @@ chosen value has its default.
 Every value is checked by its setting's schema (manifest.PluginSetting.check)
 before it's saved or handed on: a change names each setting it changes, a
 value or null (back to its default; a secret: cleared). A secret is never
-shown again, only whether it's set.
+shown again, only whether it's set, and it's kept sealed with the install's
+key (src/server/sealing.py): opened only to be handed to the plug-in. One
+sealed by another install's key (a backup restored elsewhere) is handed on
+as its default ("") and shown as unreadable, to be entered again; one stored
+before sealing is read as it is and sealed by upkeep (seal_stored).
 """
 
 from __future__ import annotations
@@ -20,6 +24,10 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from src.plugins.manifest import Manifest, PluginSetting
+from src.server.sealing import is_sealed, opened, seal
+from src.shared.utils import utcnow
+
+SECRET = "secret"
 
 ACCOUNT, SERVER = "account", "server"
 _TABLES = {ACCOUNT: "plugin_settings", SERVER: "plugin_server_settings"}
@@ -67,7 +75,8 @@ def changed(manifest: Manifest, scope: str, before: dict[str, Any],
             chosen.pop(key, None)
         else:
             try:
-                chosen[key] = setting.check(value)
+                checked = setting.check(value)
+                chosen[key] = seal(checked) if setting.type == SECRET else checked
             except ValueError as exc:
                 errors[key] = str(exc)
     return chosen, errors
@@ -78,6 +87,10 @@ def values(manifest: Manifest, account: dict[str, Any], server: dict[str, Any]) 
     out: dict[str, Any] = {}
     for s in manifest.settings:
         chosen = (server if s.scope == SERVER else account).get(s.key, s.default)
+        if s.type == SECRET:
+            chosen = opened(chosen) if isinstance(chosen, str) else chosen
+            if chosen is None:  # sealed by another install's key: as if not set (it's entered again)
+                chosen = s.default
         try:
             out[s.key] = s.check(chosen)
         except ValueError:
@@ -95,12 +108,29 @@ def server_values(manifest: Manifest, server: dict[str, Any]) -> dict[str, Any]:
 def shown(setting: PluginSetting, chosen: dict[str, Any], *, editable: bool) -> dict[str, Any]:
     """One setting as Settings › Plug-ins draws it: its schema, its value (never a secret's), whether it's set."""
     value = chosen.get(setting.key, setting.default)
-    secret = setting.type == "secret"
+    secret = setting.type == SECRET
     return {"key": setting.key, "type": setting.type, "label": setting.label, "help": setting.help,
             "default": None if secret else setting.default, "value": None if secret else value,
             "set": bool(value) if secret else setting.key in chosen,
+            # A secret set that this install can't read (sealed by another's key): entered again.
+            "readable": not (secret and value and isinstance(value, str) and opened(value) is None),
             "minimum": setting.minimum, "maximum": setting.maximum, "unit": setting.unit or None,
             "pattern": setting.pattern or None,
             "max_length": setting.max_length if setting.type in ("text", "secret") else None,
             "choices": [{"value": c.value, "label": c.label} for c in setting.choices],
             "scope": setting.scope, "advanced": setting.advanced, "remakes": setting.remakes, "editable": editable}
+
+
+def seal_stored(session: Session, scope: str, manifests: dict[str, Manifest]) -> int:
+    """Upkeep: the secret settings stored before sealing, of the plug-ins these manifests are, sealed in one
+    scope's table (an account's, or the server's). How many. Doesn't commit."""
+    repo = PluginSettingsRepository(session, scope)
+    n = 0
+    for plugin_id, manifest in manifests.items():
+        chosen = repo.get(plugin_id)
+        plain = [s.key for s in manifest.settings if s.type == SECRET and isinstance(chosen.get(s.key), str)
+                 and chosen[s.key] and not is_sealed(chosen[s.key])]
+        if plain:
+            repo.save(plugin_id, {**chosen, **{k: seal(chosen[k]) for k in plain}}, by="upkeep", now=utcnow())
+            n += len(plain)
+    return n

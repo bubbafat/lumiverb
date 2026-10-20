@@ -81,6 +81,8 @@ export interface PluginSetting {
   value: number | boolean | string | null;
   /** Chosen here rather than its default (a secret: set at all). */
   set: boolean;
+  /** False for a secret set that this install can't read (set on another install: a backup restored here). */
+  readable?: boolean;
   minimum?: number | null;
   maximum?: number | null;
   unit?: string | null;

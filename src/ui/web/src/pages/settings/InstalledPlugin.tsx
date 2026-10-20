@@ -244,7 +244,9 @@ function SettingsForm({ plugin, settings, scope, title, onSaved }: {
         ) : s.type === "secret" ? (
           <div className="flex items-center gap-2">
             <input id={id} type="password" autoComplete="new-password" className={`${inputClass} sm:max-w-64`}
-                   disabled={!s.editable} value={value} placeholder={s.set ? "Set: type to replace it" : "Not set"}
+                   disabled={!s.editable} value={value}
+                   placeholder={s.set && s.readable === false ? "Can't be read here: enter it again"
+                     : s.set ? "Set: type to replace it" : "Not set"}
                    maxLength={s.max_length ?? undefined} onChange={(e) => set(e.target.value)} />
             {s.set && s.editable && (
               <button type="button" disabled={save.isPending} className="text-sm text-indigo-300 hover:underline"

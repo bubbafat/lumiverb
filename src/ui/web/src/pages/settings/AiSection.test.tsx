@@ -399,6 +399,14 @@ describe("AiSection", () => {
     expect("api_key" in body).toBe(false);
   });
 
+  it("asks for a saved key again when this server can't read it (saved on another)", async () => {
+    machines = [machine({ name: "Gaming PC", has_key: true, key_readable: false })];
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Gaming PC" }));
+    const form = screen.getByRole("form", { name: "Edit Gaming PC" });
+    expect(form.textContent).toContain("Its saved key can't be read on this server");
+  });
+
   it("removing the last machine doing a job just removes it (never asks)", async () => {
     machines = [machine({ name: "Gaming PC" })];
     renderSection();

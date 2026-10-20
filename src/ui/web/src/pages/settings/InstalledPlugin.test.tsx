@@ -9,6 +9,7 @@ let serverAdmin = true;
 let running: PluginRunning = { state: "ready", memory_mb: 21, restarts: 0 };
 let chosen: Record<string, unknown> = {};
 let tokenSet = false;
+let tokenReadable = true;
 const sent: { method: string; path: string; body: unknown }[] = [];
 
 function setting(over: Partial<PluginSetting> & Pick<PluginSetting, "key" | "type" | "label">): PluginSetting {
@@ -29,7 +30,7 @@ function hello() {
               value: value("language", "en") as string,
               choices: [{ value: "en", label: "English" }, { value: "fr", label: "French" }] }),
     ...(serverAdmin ? [setting({ key: "token", type: "secret", label: "Token", help: "A token it never uses.",
-                                 scope: "server", advanced: true, set: tokenSet })] : []),
+                                 scope: "server", advanced: true, set: tokenSet, readable: tokenReadable })] : []),
   ];
   return {
     plugin_id: "hello", title: "Hello", description: "A plug-in for tests.", state: "on", acknowledgment: null,
@@ -84,6 +85,7 @@ afterEach(() => {
   running = { state: "ready", memory_mb: 21, restarts: 0 };
   chosen = {};
   tokenSet = false;
+  tokenReadable = true;
   sent.length = 0;
 });
 
@@ -186,6 +188,15 @@ describe("An installed plug-in in Settings › Plug-ins", () => {
     expect(token.value).toBe("");
     fireEvent.click(within(server).getByRole("button", { name: "Clear" }));
     await waitFor(() => expect(lastPut()?.body).toEqual({ settings: { token: null } }));
+  });
+
+  it("says a secret set on another server (a backup restored here) is entered again", async () => {
+    tokenSet = true;
+    tokenReadable = false;
+    renderSection();
+    const server = await screen.findByRole("form", { name: "Hello: for the whole server" });
+    expect((within(server).getByLabelText("Token") as HTMLInputElement).placeholder)
+      .toBe("Can't be read here: enter it again");
   });
 
   it("shows an account admin who isn't a server admin the account's settings only", async () => {

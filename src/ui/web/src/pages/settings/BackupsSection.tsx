@@ -160,6 +160,10 @@ function Frame({ children }: { children: React.ReactNode }) {
           Every night, every database: people, names, ratings, notes, projects and settings. Previews and the search
           index aren&apos;t in them; they&apos;re made again.
         </p>
+        <p className="mt-1 text-sm text-gray-400">
+          Keep a copy of this server&apos;s env file with them: it holds the key that opens the AI machines&apos; keys
+          and plug-ins&apos; secret settings, sealed in the databases. Restored without it, those are entered again.
+        </p>
       </div>
       {children}
     </div>

@@ -187,6 +187,64 @@ def test_its_work_makes_each_clips_facts_from_what_it_declares_and_nothing_else(
         assert private not in handed, f"{private} was handed to the plug-in"
 
 
+def _stored_server_settings() -> dict:
+    with get_control_session() as session:
+        return session.execute(text("SELECT chosen FROM plugin_server_settings WHERE plugin_id = 'facts'")).scalar_one()
+
+
+def _token(f) -> dict:
+    listed = f.client.get("/v1/plugins", headers=f.robert).json()["plugins"]
+    return next(s for p in listed if p["plugin_id"] == "facts" for s in p["settings"] if s["key"] == "token")
+
+
+@pytest.mark.slow
+def test_a_secret_setting_is_kept_sealed_and_handed_to_the_plug_in_opened(facts, monkeypatch):
+    """Sealed with the install's key (src/server/sealing.py): the database holds nothing readable; the plug-in
+    is handed it as set. Restored where another key is, it's said as unreadable and handed on as its default."""
+    from cryptography.fernet import Fernet
+
+    from src.server import sealing
+    from src.server.plugin_catalog import find
+    from src.server.plugin_settings import ACCOUNT, SERVER, PluginSettingsRepository, values
+
+    f = facts
+    r = f.client.put("/v1/plugins/facts/server-settings", json={"settings": {"token": "s3cret"}}, headers=f.robert)
+    assert r.status_code == 200, r.text
+    stored = _stored_server_settings()["token"]
+    assert stored.startswith("lv1:") and "s3cret" not in stored
+    assert (_token(f)["set"], _token(f)["readable"]) == (True, True)
+    manifest = find("facts").installed.manifest
+    with get_control_session() as session:
+        server = PluginSettingsRepository(session, SERVER).get("facts")
+    with get_tenant_session(f.tenant_id) as session:
+        account = PluginSettingsRepository(session, ACCOUNT).get("facts")
+    assert values(manifest, account, server)["token"] == "s3cret", "handed on opened"
+
+    monkeypatch.setattr(sealing, "_key", lambda: Fernet.generate_key().decode())
+    assert (_token(f)["set"], _token(f)["readable"]) == (True, False), "entered again"
+    assert values(manifest, account, server)["token"] == "", "handed on as its default"
+
+
+@pytest.mark.slow
+def test_a_secret_setting_stored_before_sealing_is_sealed_by_upkeep(facts):
+    from src.server.plugin_catalog import installed
+    from src.server.plugin_settings import SERVER, seal_stored
+
+    f = facts
+    assert f.client.put("/v1/plugins/facts/server-settings", json={"settings": {"token": "x"}},
+                        headers=f.robert).status_code == 200
+    with get_control_session() as session:
+        session.execute(text("UPDATE plugin_server_settings SET chosen = '{\"token\": \"s3cret\"}'::jsonb"
+                             " WHERE plugin_id = 'facts'"))
+        session.commit()
+        manifests = {pid: p.manifest for pid, p in installed().items()}
+        assert seal_stored(session, SERVER, manifests) == 1
+        session.commit()
+        assert seal_stored(session, SERVER, manifests) == 0
+    assert _stored_server_settings()["token"].startswith("lv1:")
+    assert (_token(f)["set"], _token(f)["readable"]) == (True, True)
+
+
 @pytest.mark.slow
 def test_a_clip_whose_inputs_change_is_due_again_and_shows_what_it_had_until_then(facts):
     f = facts

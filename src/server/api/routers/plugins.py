@@ -116,6 +116,9 @@ class SettingOut(BaseModel):
     default: int | float | bool | str | None = None  # None for a secret
     value: int | float | bool | str | None = None  # None for a secret: never shown again
     set: bool = False  # chosen here (a secret: set at all)
+    # A secret set that this install can't read (sealed by another install's key: a backup restored elsewhere):
+    # entered again (src/server/sealing.py). True for every other setting.
+    readable: bool = True
     minimum: float | None = None
     maximum: float | None = None
     unit: str | None = None

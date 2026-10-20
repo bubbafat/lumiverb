@@ -96,6 +96,12 @@ chooses the folder (on the machine itself); a folder on another drive keeps
 them if this one fails. Kept: every one from the last 7 days, one a week for
 4 weeks, and the last 3 before an upgrade.
 
+Keep a copy of the env file with your backups (on a Mac,
+`$(brew --prefix)/etc/lumiverb/env`): its `LUMIVERB_SECRETS_KEY` opens the AI
+machines' keys and plug-ins' secret settings, which the databases keep sealed.
+A backup restored on another machine without it restores everything else, and
+Settings › AI and Settings › Plug-ins ask for those again.
+
 To put one back, Settings › Backups › Restore… gives the commands for that
 backup. On a Mac:
 
