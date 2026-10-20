@@ -290,7 +290,9 @@ def test_the_names_add_two_account_migrations_and_none_of_the_control_plane_s():
     assert "a3c9e5f1b7d2" in {r.revision for r in tenant.walk_revisions("base", head)}
     assert tenant.get_revision("a3c9e5f1b7d2").down_revision == "f2a6c8e4b0d7"
     assert tenant.get_revision("f2a6c8e4b0d7").down_revision == "f8c4a2e6d0b5"
-    assert ScriptDirectory(str(REPO / "migrations" / "control")).get_heads() == ["d7f3b9e1c5a2"]
+    control = ScriptDirectory(str(REPO / "migrations" / "control"))
+    (head,) = control.get_heads()  # later migrations come after: none of them the names'
+    assert "d7f3b9e1c5a2" in {r.revision for r in control.walk_revisions("base", head)}
 
 
 @pytest.mark.parametrize("value", ["redo:lumiverb.image.text", "redo_ocr", "Lumiverb.image", "lumiverb.", "lumiverb..x",
