@@ -143,7 +143,10 @@ class Device:
                     self.reached.pop(library_id, None)
                     self.to_send.pop(library_id, None)
             for library_id, library in self.libraries.items():
-                if library_id not in self.told or self.marks.get(library_id) != library["mark"]:
+                # While a producer's settings are refused (told), asked afresh at each check-in: a change on
+                # the way needn't last, and the mark moves only when the server changes something.
+                if library_id not in self.told or self.marks.get(library_id) != library["mark"] \
+                        or self.producers.refused:
                     changes = self.client.get(f"/v1/libraries/{library_id}/reader-changes",
                                               params={"since": self.marks.get(library_id, 0)}).json()
                     self.told[library_id] = changes
@@ -219,7 +222,7 @@ class Device:
                     for artifact in ORDER:
                         if self.stopping.is_set():
                             return done
-                        if artifact in held:
+                        if artifact in held or artifact in self.producers.refused:  # refused: said in the log
                             continue
                         clips = [c for c in page if artifact in _ids(c.get(field))]
                         done += self._make(library_id, artifact, clips,

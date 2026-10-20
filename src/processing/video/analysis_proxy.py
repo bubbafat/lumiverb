@@ -64,6 +64,19 @@ class AnalysisProxySettings:
     # 0: none). A Mac's media engine takes every render.
     gpu_decodes: int = 1
 
+    def __post_init__(self) -> None:
+        """Numbers and fixed choices only, before any command is built from them (ffmpeg_run.whole): the
+        settings come from the server, and max_edge is pasted into a filter's text. ValueError otherwise."""
+        ffmpeg_run.whole(self.max_edge, 16, 8192, "max_edge")
+        ffmpeg_run.whole(self.fps_max, 1, 240, "fps_max")
+        ffmpeg_run.whole(self.crf, 0, 51, "crf")
+        ffmpeg_run.whole(self.audio_kbps_per_channel, 8, 512, "audio_kbps_per_channel")
+        ffmpeg_run.whole(self.gpu_decodes, 0, 64, "gpu_decodes")
+        if self.encoder not in ffmpeg_run.ENCODERS:
+            raise ValueError(f"encoder: one of {', '.join(ffmpeg_run.ENCODERS)}, not {str(self.encoder)[:40]!r}")
+        if not isinstance(self.decoder, str) or not ffmpeg_run.NAME.match(self.decoder):
+            raise ValueError(f"decoder: auto, cpu or an ffmpeg hwaccel's name, not {str(self.decoder)[:40]!r}")
+
     @classmethod
     def for_producer(cls, settings: Mapping[str, Any], encoder: str, decoder: str = "auto",
                      gpu_decodes: int = 1) -> AnalysisProxySettings:

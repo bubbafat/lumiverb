@@ -20,6 +20,7 @@ local file only, read only as one of the containers Lumiverb takes in."""
 from __future__ import annotations
 
 import functools
+import re
 import subprocess
 import tempfile
 import threading
@@ -39,6 +40,23 @@ SHARED_MEMORY = ("videotoolbox",)
 # "mov,mp4,m4a,3gp,3g2,mj2", "matroska" the one named "matroska,webm".
 DEMUXERS = {".mov": "mov", ".mp4": "mov", ".mkv": "matroska"}
 INPUT_FORMATS = ",".join(sorted({DEMUXERS[ext] for ext in VIDEO_EXTENSIONS}))
+
+
+# The H.264 encoders a render may use: what every browser plays (ADR-018 decision 11).
+ENCODERS = ("libx264", "h264_nvenc")
+# An ffmpeg name (a hwaccel's) as a command may carry it, its own argument: a lowercase letter, then lowercase
+# letters, digits, underscores and dashes.
+NAME = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
+
+
+def whole(value: object, least: int, most: int, what: str) -> int:
+    """A number for a command line: a whole number (never a bool, a float or text) from least to most, else
+    ValueError saying so. Every value a command is built from that came from settings goes through it, so
+    nothing but digits reaches ffmpeg's arguments or a filter's text (a value pasted into a filter could
+    otherwise add filters of its own)."""
+    if isinstance(value, bool) or not isinstance(value, int) or not least <= value <= most:
+        raise ValueError(f"{what}: a whole number from {least} to {most}, not {str(value)[:40]!r}")
+    return value
 
 
 class StalledError(Exception):
@@ -145,4 +163,6 @@ def decoded_by(choice: str) -> str | None:
         if vulkan_decodes():
             return "vulkan"
         return "videotoolbox" if videotoolbox_decodes() else None
+    if not NAME.match(choice):
+        raise ValueError(f"decoder: auto, cpu or an ffmpeg hwaccel's name, not {choice[:40]!r}")
     return choice

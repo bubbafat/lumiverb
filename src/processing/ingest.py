@@ -163,6 +163,7 @@ def _generate_video_preview(source_path: Path, crf: int = PREVIEW_CRF) -> bytes:
 
     from src.processing.video import ffmpeg_run
 
+    crf = ffmpeg_run.whole(crf, 0, 51, "crf")  # a number from settings, before it's in a command
     PREVIEW_DURATION_SEC = 10
     PREVIEW_MAX_HEIGHT = 720
 

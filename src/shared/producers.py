@@ -126,6 +126,51 @@ def resolved(artifact: str, settings: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+class SettingsRefusedError(ValueError):
+    """Settings a server told this machine to make something with that aren't ones this version makes it with."""
+
+
+def _same(told: Mapping[str, Any], means: Mapping[str, Any]) -> bool:
+    """Told exactly what a notch stands for: each number, and of its type (28, never "28", 28.0 or True)."""
+    return set(told) == set(means) and all(type(told[k]) is type(v) and told[k] == v for k, v in means.items())
+
+
+def checked(artifact: str, told: Any) -> dict[str, Any]:
+    """Settings a server told this machine to make the artifact with (reader-changes' made_with: a device's,
+    a scan's) as this machine uses them, every one held to what this version declares (ADR-018 decision 6: a
+    client takes the server's settings only as typed values, never a string where a number goes): each the
+    value of a setting it declares, within its bounds (Setting.check), or exactly what one of a notch's choices
+    stands for; its job's model, plain text ("" when the job is off). SettingsRefusedError saying what isn't, for a key missing or one it
+    doesn't know too: nothing told is used then."""
+    p = PRODUCERS[artifact]
+    if not isinstance(told, Mapping):
+        raise SettingsRefusedError(f"{p.title}: its settings aren't an object")
+    expected = set(effective_settings(artifact))
+    if set(told) != expected:
+        odd = sorted(map(str, set(told) ^ expected))
+        raise SettingsRefusedError(f"{p.title}: settings {', '.join(odd)[:200]} aren't this version's")
+    out: dict[str, Any] = {}
+    for s in p.settings:
+        if s.kind == "notch":
+            keys = set(s.means[s.default])
+            mine = {k: told[k] for k in keys}
+            if not any(_same(mine, means) for means in s.means.values()):
+                raise SettingsRefusedError(f"{p.title}: {', '.join(sorted(keys))} isn't what any {s.label} stands for")
+            out.update(mine)
+        elif s.key in told and not (p.job and s.key == "model"):  # a job's model is its job's, below
+            try:
+                out[s.key] = s.check(told[s.key])
+            except ValueError as exc:
+                raise SettingsRefusedError(f"{p.title}: {exc}") from None
+    for key in expected - set(out):
+        value = told[key]
+        if not (p.job and key == "model" and isinstance(value, str) and len(value) <= 200
+                and value.isprintable()):  # "": the job is off
+            raise SettingsRefusedError(f"{p.title}: {key} isn't one of its settings")
+        out[key] = value
+    return out
+
+
 def notches(artifact: str, overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
     """The producer's notches as chosen (its defaults, then overrides): what
     Settings shows, as the settings themselves are what they stand for."""
