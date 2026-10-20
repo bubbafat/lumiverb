@@ -21,10 +21,10 @@ scenes being found (`video_index_chunks.run`), an open upload's
 (`uploads.lineage`). The scheduler's last status (`scheduler.status`) has
 its kinds renamed, so its learned paces carry over.
 
-The mapping is written here, never imported (src/producers/names.py RENAMED
-goes in part 5): an install that skips releases, a restored backup and a
-downgrade still run this migration. tests/test_migration_names_stored.py
-holds it equal to RENAMED while both exist.
+The mapping is written here, never imported: an install that skips
+releases, a restored backup and a downgrade still run this migration.
+tests/test_migration_names_stored.py holds it equal to the names' history
+(src/producers/names.py WAS).
 
 Down: each renamed back, by the same mapping. A plug-in's work goes back
 to `plugin_<id>`, whether the up renamed it or part 3's code wrote it; a

@@ -17,8 +17,8 @@ from typer.testing import CliRunner
 pytestmark = pytest.mark.fast
 
 
-def _producer(artifact="vision", title="Descriptions and tags", **over) -> dict:
-    p = {"artifact": artifact, "producer": artifact, "version": "1", "title": title, "media": ["image"],
+def _producer(artifact="lumiverb.image.description", title="Descriptions and tags", **over) -> dict:
+    p = {"artifact": artifact, "version": "1", "title": title, "media": ["image"],
          "uniform": False, "settings": {"model": "qwen3-vl:8b-instruct"}, "settings_hash": "h",
          "counts": {"applicable": 10, "current": 6, "stale": 3, "missing": 1, "failing": 0},
          "redoable": True, "why_not": None, "redo_stopped": False, "redo_stopped_by": None, "redo_stopped_at": None,
@@ -70,10 +70,10 @@ def test_lists_each_producer_with_its_counts_and_its_redo(client):
         r = MagicMock()
         r.json.return_value = {"producers": [
             _producer(),
-            _producer("ocr", "Text in images (OCR)", redo_stopped=True),
-            _producer("faces", "Faces", paused=True),
-            _producer("scenes", "Scenes", redoable=False, why_not="Not yet."),
-            _producer("clip", "Visual search (CLIP)",
+            _producer("lumiverb.image.text", "Text in images (OCR)", redo_stopped=True),
+            _producer("lumiverb.image.faces", "Faces", paused=True),
+            _producer("lumiverb.video.scenes", "Scenes", redoable=False, why_not="Not yet."),
+            _producer("lumiverb.image.likeness", "Visual search (CLIP)",
                       counts={"applicable": 4, "current": 4, "stale": 0, "missing": 0, "failing": 0}),
         ]}
         return r
@@ -120,7 +120,7 @@ def _queue_get(queue: dict, producers: list | None = None):
 
 SWITCHES = [{"target": "scans", "title": "Scans", "paused": False},
             {"target": "upkeep", "title": "Upkeep", "paused": False},
-            {"target": "vision", "title": "Descriptions and tags", "paused": False}]
+            {"target": "lumiverb.image.description", "title": "Descriptions and tags", "paused": False}]
 
 
 def test_the_listing_says_the_state_and_each_switch_that_is_paused(client):
@@ -160,30 +160,25 @@ def test_stop_and_resume_a_redo(client):
     client.raw.return_value = _response(204)
     result = _run("redo", "stop", "image.description")
     assert result.exit_code == 0, result.output
-    # Sent as the server lists it: today's id before ADR-024 part 3.
-    client.raw.assert_called_with("POST", "/v1/producers/vision/pause", json={"scope": "redo"})
+    # Sent as the server lists it: by name (ADR-024).
+    client.raw.assert_called_with("POST", "/v1/producers/lumiverb.image.description/pause", json={"scope": "redo"})
     assert "Stopped redoing image.description" in result.output
     assert "lumiverb producers redo resume image.description" in " ".join(result.output.split())
     result = _run("redo", "resume", "lumiverb.image.description")
     assert result.exit_code == 0, result.output
-    client.raw.assert_called_with("POST", "/v1/producers/vision/resume", json={"scope": "redo"})
+    client.raw.assert_called_with("POST", "/v1/producers/lumiverb.image.description/resume", json={"scope": "redo"})
     assert "Redoing image.description again" in result.output
 
 
-def test_an_old_word_is_taken_with_a_warning_and_sent_as_the_server_lists_it(client):
+def test_an_old_word_is_refused_here_saying_the_name_to_type(client):
+    # Since ADR-024's part 5: nothing is sent, and the name is said.
+    for typed, name in (("vision", "image.description"), ("plugin_geonames", "geonames")):
+        result = _run("redo", "stop", typed)
+        assert result.exit_code == 2, result.output
+        assert f"{typed} is called {name} now: type that" in " ".join(result.output.split())
+    client.raw.assert_not_called()
     client.raw.return_value = _response(204)
-    result = _run("redo", "stop", "vision")
-    assert result.exit_code == 0, result.output
-    client.raw.assert_called_with("POST", "/v1/producers/vision/pause", json={"scope": "redo"})
-    assert "vision is called image.description now: type that" in " ".join(result.output.split())
-
-    def named(path, params=None):  # a server from part 3: the names
-        r = MagicMock()
-        r.json.return_value = {"producers": [_producer("lumiverb.image.description")]}
-        return r
-
-    client.get.side_effect = named
-    for typed in ("vision", "image.description", "lumiverb.image.description"):
+    for typed in ("image.description", "lumiverb.image.description"):
         result = _run("redo", "stop", typed)
         assert result.exit_code == 0, result.output
         client.raw.assert_called_with("POST", "/v1/producers/lumiverb.image.description/pause", json={"scope": "redo"})
@@ -219,10 +214,10 @@ def test_the_upgrade_commands_are_gone(client):
 
 
 FAILING = {"items": [
-    {"asset_id": "ast_1", "artifact": "vision", "title": "Descriptions and tags", "rel_path": "Day 1/a.jpg",
+    {"asset_id": "ast_1", "artifact": "lumiverb.image.description", "title": "Descriptions and tags", "rel_path": "Day 1/a.jpg",
      "library_id": "lib_1", "library_name": "Footage", "media_type": "image", "error": "the model said nothing",
      "attempts": 10, "failed_at": "2026-10-09T01:00:00Z", "retry_at": None, "given_up": True},
-    {"asset_id": "ast_2", "artifact": "ocr", "title": "Text in images (OCR)", "rel_path": "b.jpg",
+    {"asset_id": "ast_2", "artifact": "lumiverb.image.text", "title": "Text in images (OCR)", "rel_path": "b.jpg",
      "library_id": "lib_1", "library_name": "Footage", "media_type": "image", "error": "timed out",
      "attempts": 2, "failed_at": "2026-10-09T01:00:00Z", "retry_at": "2026-10-09T01:10:00Z", "given_up": False}],
     "next_cursor": None}
@@ -244,14 +239,15 @@ def test_failures_of_one_producer_in_one_library(client):
     client.raw.return_value = _response(200, {"items": [], "next_cursor": None})
     result = _run("failures", "image.description", "--library", "Footage")
     assert "Nothing is failing." in result.output
-    assert client.raw.call_args.kwargs["params"] == {"limit": 50, "artifact": "vision", "library_id": "lib_1"}
+    assert client.raw.call_args.kwargs["params"] == {"limit": 50, "artifact": "lumiverb.image.description",
+                                                     "library_id": "lib_1"}
 
 
 def test_retry_some_or_all(client):
     client.raw.return_value = _response(200, {"retried": 1})
     result = _run("retry", "image.description", "--asset", "ast_1")
     assert result.exit_code == 0 and "1 clip will be tried again shortly." in result.output
-    assert client.raw.call_args.kwargs["json"] == {"artifact": "vision", "asset_ids": ["ast_1"]}
+    assert client.raw.call_args.kwargs["json"] == {"artifact": "lumiverb.image.description", "asset_ids": ["ast_1"]}
     client.raw.return_value = _response(200, {"retried": 0})
     result = _run("retry", "all", "--all")
     assert "Nothing was failing." in result.output
@@ -260,7 +256,7 @@ def test_retry_some_or_all(client):
 
 def test_retry_names_what_it_tries_again_never_infers_all(client):
     """Robert, Oct 9: an impactful action needs an explicit target; all is named."""
-    for args in ((), ("vision",), ("all",), ("vision", "--all", "--asset", "ast_1")):
+    for args in ((), ("image.description",), ("all",), ("image.description", "--all", "--asset", "ast_1")):
         result = _run("retry", *args)
         assert result.exit_code == 2 and "Usage" in result.output, args
     client.raw.assert_not_called()
@@ -287,7 +283,7 @@ def settings_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     mod = importlib.import_module("src.client.cli.commands.producers")
     c = MagicMock()
     c.get.return_value.json.return_value = {"producers": [
-        _producer("transcript", "Transcripts", fields=_FIELDS, settings={"model": "small", "vad_min_silence_ms": 500})]}
+        _producer("lumiverb.video.transcript", "Transcripts", fields=_FIELDS, settings={"model": "small", "vad_min_silence_ms": 500})]}
     monkeypatch.setattr(mod, "LumiverbClient", lambda: c)
     return c
 
@@ -299,7 +295,7 @@ def _settings(*args: str, input: str | None = None):
 
 
 def test_settings_lists_each_with_what_it_can_be(settings_client):
-    result = _settings("transcript")
+    result = _settings("video.transcript")
     assert result.exit_code == 0, result.output
     flat = " ".join(result.output.split())  # the table wraps at 80 columns
     assert "Shortest" in flat and "100–2000" in flat and "fixed" in flat
@@ -307,9 +303,9 @@ def test_settings_lists_each_with_what_it_can_be(settings_client):
 
 def test_settings_changes_one(settings_client):
     settings_client.raw.return_value = _response(200, {"settings": {"vad_min_silence_ms": 800}})
-    result = _settings("transcript", "vad_min_silence_ms=800")
+    result = _settings("video.transcript", "vad_min_silence_ms=800")
     assert result.exit_code == 0, result.output
-    settings_client.raw.assert_called_once_with("PUT", "/v1/producers/transcript/settings",
+    settings_client.raw.assert_called_once_with("PUT", "/v1/producers/lumiverb.video.transcript/settings",
                                                 json={"settings": {"vad_min_silence_ms": 800}})
     assert "vad_min_silence_ms = 800" in result.output
 
@@ -322,7 +318,7 @@ _REMAKE = {"error": {"code": "redo_on_change", "message": "12 clips of transcrip
 def test_settings_asks_whether_to_remake_or_make_new_files_only_as_the_server_does(settings_client, typed, redo):
     # ADR-018 decision 6: new files only is the default.
     settings_client.raw.side_effect = [_response(409, _REMAKE), _response(200, {"settings": {"vad_min_silence_ms": 800}})]
-    result = _settings("transcript", "vad_min_silence_ms=800", input=f"{typed}\n")
+    result = _settings("video.transcript", "vad_min_silence_ms=800", input=f"{typed}\n")
     assert result.exit_code == 0, result.output
     assert "12 clips" in result.output
     assert settings_client.raw.call_args_list[1].kwargs["json"] == {"settings": {"vad_min_silence_ms": 800}, "redo": redo}
@@ -330,7 +326,7 @@ def test_settings_asks_whether_to_remake_or_make_new_files_only_as_the_server_do
 
 def test_settings_says_no_and_nothing_changes(settings_client):
     settings_client.raw.return_value = _response(409, _REMAKE)
-    result = _settings("transcript", "vad_min_silence_ms=800", input="c\n")
+    result = _settings("video.transcript", "vad_min_silence_ms=800", input="c\n")
     assert result.exit_code == 0 and "Nothing changed" in result.output
     assert settings_client.raw.call_count == 1
 
@@ -340,7 +336,7 @@ def test_settings_asks_yes_or_no_before_something_is_dropped(settings_client):
         _response(409, {"error": {"code": "redo_on_change", "message": "New settings remove location guesses from 3 clips.",
                                   "details": {"clips": 3, "question": "remove"}}}),
         _response(200, {"settings": {"vad_min_silence_ms": 800}})]
-    result = _settings("transcript", "vad_min_silence_ms=800", input="y\n")
+    result = _settings("video.transcript", "vad_min_silence_ms=800", input="y\n")
     assert result.exit_code == 0, result.output
     assert settings_client.raw.call_args_list[1].kwargs["json"]["redo"] is True
 
@@ -348,37 +344,37 @@ def test_settings_asks_yes_or_no_before_something_is_dropped(settings_client):
 @pytest.mark.parametrize("flag,redo", [("--remake", True), ("--yes", True), ("--new-only", False)])
 def test_settings_answers_ahead_when_told(settings_client, flag, redo):
     settings_client.raw.return_value = _response(200, {"settings": {"vad_min_silence_ms": 800}})
-    assert _settings("transcript", "vad_min_silence_ms=800", flag).exit_code == 0
+    assert _settings("video.transcript", "vad_min_silence_ms=800", flag).exit_code == 0
     assert settings_client.raw.call_args.kwargs["json"] == {"settings": {"vad_min_silence_ms": 800}, "redo": redo}
-    assert _settings("transcript", "vad_min_silence_ms=800", "--remake", "--new-only").exit_code == 2
+    assert _settings("video.transcript", "vad_min_silence_ms=800", "--remake", "--new-only").exit_code == 2
 
 
 def test_settings_takes_a_notch_by_its_name(settings_client):
     settings_client.get.return_value.json.return_value = {"producers": [_producer(
-        "analysis_proxy", "Analysis proxies", settings={"crf": 28},
+        "lumiverb.video.analysis_proxy", "Analysis proxies", settings={"crf": 28},
         fields=[{"key": "quality", "label": "Quality", "kind": "notch", "value": "better", "default": "better",
                  "minimum": None, "maximum": None, "unit": "", "advanced": False, "fixed": None,
                  "choices": ["good", "better", "best"]}])]}
     settings_client.raw.return_value = _response(200, {"settings": {"crf": 23}, "fields": [
         {"key": "quality", "value": "best"}]})
-    result = _settings("analysis_proxy", "quality=best", "--new-only")
+    result = _settings("video.analysis_proxy", "quality=best", "--new-only")
     assert result.exit_code == 0, result.output
     assert settings_client.raw.call_args.kwargs["json"] == {"settings": {"quality": "best"}, "redo": False}
     assert "quality = best" in result.output
-    assert _settings("analysis_proxy", "quality=superb").exit_code == 2
-    listed = " ".join(_settings("analysis_proxy").output.split())
+    assert _settings("video.analysis_proxy", "quality=superb").exit_code == 2
+    listed = " ".join(_settings("video.analysis_proxy").output.split())
     assert "good / better / best" in listed
 
 
 def test_settings_puts_one_back_to_its_default(settings_client):
     settings_client.raw.return_value = _response(200, {"settings": {"vad_min_silence_ms": 500}})
-    _settings("transcript", "vad_min_silence_ms=")
+    _settings("video.transcript", "vad_min_silence_ms=")
     assert settings_client.raw.call_args.kwargs["json"] == {"settings": {"vad_min_silence_ms": None}}
 
 
 def test_settings_refuses_what_isnt_a_setting_or_a_number(settings_client):
-    assert _settings("transcript", "silence=800").exit_code == 2
-    assert _settings("transcript", "vad_min_silence_ms=lots").exit_code == 2
+    assert _settings("video.transcript", "silence=800").exit_code == 2
+    assert _settings("video.transcript", "vad_min_silence_ms=lots").exit_code == 2
     assert _settings("teleport").exit_code == 2
     settings_client.raw.assert_not_called()
 
@@ -386,7 +382,7 @@ def test_settings_refuses_what_isnt_a_setting_or_a_number(settings_client):
 def test_settings_says_why_the_server_refused(settings_client):
     settings_client.raw.return_value = _response(
         422, {"error": {"code": "bad_setting", "message": "Shortest silence skipped is from 100 to 2000 ms"}})
-    result = _settings("transcript", "vad_min_silence_ms=50")
+    result = _settings("video.transcript", "vad_min_silence_ms=50")
     assert result.exit_code == 1 and "is from 100 to 2000 ms" in result.output
 
 
@@ -401,48 +397,48 @@ _AI_FIELDS = [
 @pytest.fixture
 def vision_client(settings_client: MagicMock) -> MagicMock:
     settings_client.get.return_value.json.return_value = {"producers": [
-        _producer("vision", "Descriptions and tags", fields=_AI_FIELDS, settings={})]}
+        _producer("lumiverb.image.description", "Descriptions and tags", fields=_AI_FIELDS, settings={})]}
     return settings_client
 
 
 def test_settings_shows_a_long_prompt_whole_below_the_table(vision_client):
-    result = _settings("vision")
+    result = _settings("image.description")
     assert result.exit_code == 0, result.output
     assert "Answer as key=value." in " ".join(result.output.split())
 
 
 def test_a_value_keeps_its_own_equals_signs(vision_client):
     vision_client.raw.return_value = _response(200, {"settings": {"prompt": "a=b, c=d"}})
-    assert _settings("vision", "prompt=a=b, c=d").exit_code == 0
+    assert _settings("image.description", "prompt=a=b, c=d").exit_code == 0
     assert vision_client.raw.call_args.kwargs["json"]["settings"] == {"prompt": "a=b, c=d"}
 
 
 def test_yes_doesnt_ask(vision_client):
     vision_client.raw.return_value = _response(200, {"settings": {"temperature": 0.5}})
-    result = _settings("vision", "temperature=0.5", "--yes")
+    result = _settings("image.description", "temperature=0.5", "--yes")
     assert result.exit_code == 0, result.output
-    vision_client.raw.assert_called_once_with("PUT", "/v1/producers/vision/settings",
+    vision_client.raw.assert_called_once_with("PUT", "/v1/producers/lumiverb.image.description/settings",
                                               json={"settings": {"temperature": 0.5}, "redo": True})
 
 
 @pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "1e400"])
 def test_a_number_that_isnt_finite_is_refused_here(vision_client, raw):
-    result = _settings("vision", f"temperature={raw}")
+    result = _settings("image.description", f"temperature={raw}")
     assert result.exit_code == 2 and "finite number" in result.output, result.output
     vision_client.raw.assert_not_called()
 
 
 def test_a_whole_number_may_be_written_800_point_0(settings_client):
     settings_client.raw.return_value = _response(200, {"settings": {"vad_min_silence_ms": 800}})
-    assert _settings("transcript", "vad_min_silence_ms=800.0").exit_code == 0
+    assert _settings("video.transcript", "vad_min_silence_ms=800.0").exit_code == 0
     assert settings_client.raw.call_args.kwargs["json"]["settings"] == {"vad_min_silence_ms": 800}
-    assert _settings("transcript", "vad_min_silence_ms=800.5").exit_code == 2
+    assert _settings("video.transcript", "vad_min_silence_ms=800.5").exit_code == 2
 
 
 def test_a_fixed_setting_is_refused_saying_why(settings_client):
     settings_client.raw.return_value = _response(
         422, {"error": {"code": "setting_fixed", "message": "Model: Chosen in Settings → AI"}})
-    result = _settings("transcript", "model=large-v3")
+    result = _settings("video.transcript", "model=large-v3")
     assert result.exit_code == 1 and "Settings → AI" in result.output
 
 
@@ -451,10 +447,10 @@ def test_says_how_long_until_each_and_everything_is_made(client):
     def get(path, params=None):
         r = MagicMock()
         if path == "/v1/producers/queue":
-            r.json.return_value = {"live": True, "eta": {"producers": {"vision": 7500.0, "ocr": None},
+            r.json.return_value = {"live": True, "eta": {"producers": {"lumiverb.image.description": 7500.0, "lumiverb.image.text": None},
                                                           "pools": {}, "caught_up": 7500.0, "jobs": []}}
         else:
-            r.json.return_value = {"producers": [_producer(), _producer("ocr", "Text in images (OCR)")]}
+            r.json.return_value = {"producers": [_producer(), _producer("lumiverb.image.text", "Text in images (OCR)")]}
         return r
 
     client.get.side_effect = get
@@ -471,7 +467,7 @@ def test_one_library_says_no_time_left_its_the_whole_accounts(client):
     def get(path, params=None):
         if path == "/v1/producers/queue":
             r = MagicMock()
-            r.json.return_value = {"live": True, "state": "paused", "eta": {"producers": {"vision": 7500.0},
+            r.json.return_value = {"live": True, "state": "paused", "eta": {"producers": {"lumiverb.image.description": 7500.0},
                                                                          "pools": {}, "caught_up": 7500.0, "jobs": []}}
             return r
         return base(path, params)
@@ -487,10 +483,10 @@ def test_the_headline_says_paused_work_gets_no_time(client):
     from src.client.cli.commands.producers import _caught_up
 
     assert _caught_up({"caught_up": None, "not_counted": [
-        {"artifact": "vision", "title": "Descriptions and tags", "why": "paused"}]}) == (
+        {"artifact": "lumiverb.image.description", "title": "Descriptions and tags", "why": "paused"}]}) == (
         "Paused.")
     assert _caught_up({"caught_up": 60.0 * 30, "not_counted": [
-        {"artifact": "vision", "title": "Descriptions and tags", "why": "paused"}]}) == (
+        {"artifact": "lumiverb.image.description", "title": "Descriptions and tags", "why": "paused"}]}) == (
         "Caught up in about 30 min, not counting descriptions and tags (paused).")
 
 
@@ -499,7 +495,7 @@ def test_the_headline_names_what_it_leaves_out(client):
     from src.client.cli.commands.producers import _caught_up
 
     assert _caught_up({"caught_up": 7500.0, "not_counted": [
-        {"artifact": "transcript", "title": "Transcripts", "why": "no_machine"}]}) == (
+        {"artifact": "lumiverb.video.transcript", "title": "Transcripts", "why": "no_machine"}]}) == (
         "Caught up in about 2 h 5 min, not counting transcripts (no machine doing them now).")
     assert _caught_up({"caught_up": 40 * 86400.0}) == "Caught up in over a month."
     assert _caught_up({"caught_up": 0}) == "Caught up: everything is made."
@@ -510,10 +506,10 @@ def test_a_paused_producers_left_says_paused(client):
         r = MagicMock()
         if path == "/v1/producers/queue":
             r.json.return_value = {"live": True, "eta": {
-                "producers": {"vision": None, "ocr": 1800.0}, "pools": {"vision": 1800.0}, "caught_up": 1800.0,
-                "jobs": [], "not_counted": [{"artifact": "vision", "title": "Descriptions and tags", "why": "paused"}]}}
+                "producers": {"lumiverb.image.description": None, "lumiverb.image.text": 1800.0}, "pools": {"vision": 1800.0}, "caught_up": 1800.0,
+                "jobs": [], "not_counted": [{"artifact": "lumiverb.image.description", "title": "Descriptions and tags", "why": "paused"}]}}
         else:
-            r.json.return_value = {"producers": [_producer(paused=True), _producer("ocr", "Text in images (OCR)")]}
+            r.json.return_value = {"producers": [_producer(paused=True), _producer("lumiverb.image.text", "Text in images (OCR)")]}
         return r
 
     client.get.side_effect = get
@@ -534,7 +530,7 @@ def faces_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     mod = importlib.import_module("src.client.cli.commands.producers")
     c = MagicMock()
     c.get.return_value.json.return_value = {"producers": [
-        _producer("faces", "Faces", fields=_FACE_FIELDS, settings={})]}
+        _producer("lumiverb.image.faces", "Faces", fields=_FACE_FIELDS, settings={})]}
     monkeypatch.setattr(mod, "LumiverbClient", lambda: c)
     return c
 
@@ -542,14 +538,14 @@ def faces_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 @pytest.mark.parametrize("raw, value", [("off", False), ("false", False), ("on", True), ("yes", True)])
 def test_a_yes_or_no_setting_takes_on_off_true_false(faces_client, raw, value):
     faces_client.raw.return_value = _response(200, {"settings": {}, "fields": [{**_FACE_FIELDS[0], "value": value}]})
-    result = _settings("faces", f"merge_close_clusters={raw}")
+    result = _settings("image.faces", f"merge_close_clusters={raw}")
     assert result.exit_code == 0, result.output
     assert faces_client.raw.call_args.kwargs["json"] == {"settings": {"merge_close_clusters": value}}
     assert f"merge_close_clusters = {value}" in result.output
 
 
 def test_a_yes_or_no_setting_refuses_anything_else(faces_client):
-    result = _settings("faces", "merge_close_clusters=maybe")
+    result = _settings("image.faces", "merge_close_clusters=maybe")
     assert result.exit_code == 2 and "true or false" in result.output
     faces_client.raw.assert_not_called()
 
@@ -569,7 +565,7 @@ def _saved(tmp_path, name: str, *producers: dict):
 
 def test_compare_says_nothing_changed_by_name_whatever_each_is_called(client, tmp_path):
     # Before: today's ids; after: names (part 3), and a plug-in's work by its id. The same producers.
-    before = _saved(tmp_path, "before.json", _producer(), _producer("ocr"), _producer("plugin_geonames"))
+    before = _saved(tmp_path, "before.json", _producer("vision"), _producer("ocr"), _producer("plugin_geonames"))
     after = _saved(tmp_path, "after.json", _producer("lumiverb.image.description"), _producer("lumiverb.image.text"),
                    _producer("geonames"))
     result = _run("--compare", before, after)
@@ -587,7 +583,7 @@ def test_compare_says_nothing_changed_by_name_whatever_each_is_called(client, tm
     ({"new_version": True}, "lumiverb.image.description new_version: None → True"),
 ])
 def test_compare_says_each_change_and_exits_1(client, tmp_path, change, says):
-    before = _saved(tmp_path, "before.json", _producer())
+    before = _saved(tmp_path, "before.json", _producer("vision"))
     after = _saved(tmp_path, "after.json", _producer("lumiverb.image.description", **change))
     result = _run("--compare", before, after)
     assert result.exit_code == 1, result.output
@@ -597,7 +593,7 @@ def test_compare_says_each_change_and_exits_1(client, tmp_path, change, says):
 def test_compare_says_a_producer_gone_or_new(client, tmp_path):
     from src.client.cli.commands.producers import compare
 
-    assert compare({"producers": [_producer(), _producer("ocr")]},
+    assert compare({"producers": [_producer("vision"), _producer("ocr")]},
                    {"producers": [_producer("lumiverb.image.description"), _producer("plugin_facts")]}) == [
         "facts: new", "lumiverb.image.text: gone"]
     assert compare({"producers": []}, {"producers": []}) == []

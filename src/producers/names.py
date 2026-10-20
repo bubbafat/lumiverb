@@ -6,20 +6,14 @@ what the scan reads, a person's location, the location a clip shows, the
 people in it) is named here. docs/data-names.md is written from both:
 ``uv run python -m src.producers --write``, never by hand.
 
-RENAMED is what each name was called before, by family (artifacts, lineage's
-producers, the scheduler's kinds, files; an installed plug-in's work was
-`plugin_<id>`). From part 3 every artifact, producer and kind is stored and
-sent as its name (the tenant migration f2a6c8e4b0d7 renamed what was stored,
-with a mapping of its own), and the old spellings are still taken on input,
-mapped to the names (`artifact_in`, `producer_in`, `kind_in`), each family's
-mapping only where that family is taken (one old word can be several things:
-`clip` is an artifact, an AI job and a model's id). From part 4 a file is
-kept and sent by its name too (the tenant migration a3c9e5f1b7d2: uploads and
-the missing-file reports), its old kind taken until part 5 (`file_in`). Part 5
-deletes RENAMED.
+Every artifact, producer, kind and file is stored and sent by its name (parts
+3 and 4: the tenant migrations f2a6c8e4b0d7 and a3c9e5f1b7d2 renamed what was
+stored, each with a mapping of its own). From part 5 nothing takes an old
+spelling: WAS, what each name was called before, is the page's history and
+what a refusal says to type instead (`now_called`), never a way in.
 
-A person types a name, with or without `lumiverb.`, or an old word, which is
-warned of (`typed`).
+A person types a name, with or without `lumiverb.` (`typed`); an old word is
+refused, naming the name.
 """
 
 from __future__ import annotations
@@ -87,46 +81,56 @@ LUMIVERB: tuple[Data, ...] = (
          made_by="a person, or Lumiverb (a face matched to someone named)", reads=(FACES, VIDEO_FACES)),
 )
 
-# Each file a name has: the name itself for its main file, a part under it for another. What it was called.
+# Each file a name has: the name itself for its main file, a part under it for another.
 THUMBNAIL = "lumiverb.preview.thumbnail"
 SCENE_PICTURE = "lumiverb.video.scenes.picture"
-FILES: Mapping[str, str] = {
-    PREVIEW: "proxy",
-    THUMBNAIL: "thumbnail",
-    VIDEO_PREVIEW: "video_preview",
-    ANALYSIS_PROXY: "analysis_proxy",
-    SCENE_PICTURE: "scene_rep",
-}
-_FILE_NAMES: Mapping[str, str] = {old: new for new, old in FILES.items()}
+FILES: tuple[str, ...] = (PREVIEW, THUMBNAIL, VIDEO_PREVIEW, ANALYSIS_PROXY, SCENE_PICTURE)
 
-# What each name was called, by family: old to new. Held to the registry by tests/test_data_names.py.
-ARTIFACTS: Mapping[str, str] = {
-    "probe": VIDEO_FORMAT, "capture": CAPTURE_TIME, "proxy": PREVIEW, "video_preview": VIDEO_PREVIEW,
-    "analysis_proxy": ANALYSIS_PROXY, "scenes": SCENES, "scene_vision": SCENE_DESCRIPTIONS, "vision": DESCRIPTION,
-    "ocr": TEXT, "clip": LIKENESS, "faces": FACES, "video_faces": VIDEO_FACES, "transcript": TRANSCRIPT,
-    "location": LOCATION_GUESS,
+# What each name was called until ADR-024's part 5, by family: its artifact's old id, its lineage producer's,
+# its job's kind's, and its file's old kind. The page's history, and what a refusal names (now_called): never
+# taken. Written out (it outlives the migrations' own mappings, which tests hold to it).
+WAS: Mapping[str, Mapping[str, str]] = {
+    VIDEO_FORMAT: {"artifact": "probe", "producer": "ffprobe", "kind": "probe"},
+    CAPTURE_TIME: {"artifact": "capture", "producer": "exiftool", "kind": "capture"},
+    PREVIEW: {"artifact": "proxy", "producer": "proxy", "file": "proxy"},
+    THUMBNAIL: {"file": "thumbnail"},
+    VIDEO_PREVIEW: {"artifact": "video_preview", "producer": "preview", "file": "video_preview"},
+    ANALYSIS_PROXY: {"artifact": "analysis_proxy", "producer": "analysis-proxy", "kind": "render",
+                     "file": "analysis_proxy"},
+    SCENES: {"artifact": "scenes", "producer": "scene-detect", "kind": "scenes"},
+    SCENE_PICTURE: {"file": "scene_rep"},
+    SCENE_DESCRIPTIONS: {"artifact": "scene_vision", "producer": "scene-vision", "kind": "scene_vision"},
+    DESCRIPTION: {"artifact": "vision", "producer": "vision", "kind": "vision"},
+    TEXT: {"artifact": "ocr", "producer": "ocr", "kind": "ocr"},
+    LIKENESS: {"artifact": "clip", "producer": "clip", "kind": "clip"},
+    FACES: {"artifact": "faces", "producer": "insightface", "kind": "faces"},
+    VIDEO_FACES: {"artifact": "video_faces", "producer": "insightface-video", "kind": "video_faces"},
+    TRANSCRIPT: {"artifact": "transcript", "producer": "whisper", "kind": "transcript"},
+    LOCATION_GUESS: {"artifact": "location", "producer": "location", "kind": "location"},
 }
-# Lineage's producers, by the artifact each makes: (artifact, producer) to the name.
-PRODUCERS: Mapping[tuple[str, str], str] = {
-    ("probe", "ffprobe"): VIDEO_FORMAT, ("capture", "exiftool"): CAPTURE_TIME, ("proxy", "proxy"): PREVIEW,
-    ("video_preview", "preview"): VIDEO_PREVIEW, ("analysis_proxy", "analysis-proxy"): ANALYSIS_PROXY,
-    ("scenes", "scene-detect"): SCENES, ("scene_vision", "scene-vision"): SCENE_DESCRIPTIONS,
-    ("vision", "vision"): DESCRIPTION, ("ocr", "ocr"): TEXT, ("clip", "clip"): LIKENESS,
-    ("faces", "insightface"): FACES, ("video_faces", "insightface-video"): VIDEO_FACES,
-    ("transcript", "whisper"): TRANSCRIPT, ("location", "location"): LOCATION_GUESS,
-}
-# The scheduler's kinds (a remake's kind, redo_<kind>, becomes redo:<name>).
-KINDS: Mapping[str, str] = {
-    "probe": VIDEO_FORMAT, "capture": CAPTURE_TIME, "render": ANALYSIS_PROXY, "scenes": SCENES,
-    "scene_vision": SCENE_DESCRIPTIONS, "vision": DESCRIPTION, "ocr": TEXT, "clip": LIKENESS, "faces": FACES,
-    "video_faces": VIDEO_FACES, "transcript": TRANSCRIPT, "location": LOCATION_GUESS,
-}
-RENAMED: Mapping[str, Mapping] = {"artifact": ARTIFACTS, "producer": PRODUCERS, "kind": KINDS,
-                                  "file": {old: new for new, old in FILES.items()}}
+# A plug-in's work before part 3: `plugin_` and its id, each dash an underscore (an id has none of its own).
+_ADDED_ID = re.compile(r"^plugin_([a-z][a-z0-9_]{0,39})$")
 
-# What a plug-in's id may not be (from part 1, and after part 5, so written out, not read from RENAMED): it shares
-# a namespace with Lumiverb's. The machine's words; the pools; every old word RENAMED takes; the first word of each
-# name (a name may be typed without `lumiverb.`). tests/test_data_names.py holds it to them.
+
+def now_called(word: str, family: str | None = None) -> str | None:
+    """The name an old word (of this family: artifact, producer, kind, file; any when None) was renamed to, for a
+    refusal to name: `vision` → lumiverb.image.description, `redo_vision` → redo:lumiverb.image.description,
+    `plugin_<id>` → the plug-in's id. None for a word that was never one of these."""
+    if word.startswith("redo_") and family in (None, "kind"):
+        name = now_called(word.removeprefix("redo_"), "kind")
+        return remakes_of(name) if name else None
+    match = _ADDED_ID.match(word)
+    if match and family in (None, "artifact", "producer", "kind"):
+        return match.group(1).replace("_", "-")
+    for name, was in WAS.items():
+        if word in (was.values() if family is None else (was.get(family),)):
+            return name
+    return None
+
+
+# What a plug-in's id may not be (from part 1, and after part 5, so written out): it shares a namespace with
+# Lumiverb's. The machine's words; the pools; every old word (WAS); the first word of each name (a name may be
+# typed without `lumiverb.`). tests/test_data_names.py holds it to them.
 MACHINE_WORDS = ("all", "upkeep", "scans", "scan", "person", "unknown")
 RESERVED: frozenset[str] = frozenset({
     *MACHINE_WORDS,
@@ -139,41 +143,7 @@ RESERVED: frozenset[str] = frozenset({
 })
 
 
-# A plug-in's work before part 3: `plugin_` and its id, each dash an underscore (an id has none of its own).
-_ADDED = "plugin_"
-_ADDED_ID = re.compile(r"^plugin_([a-z][a-z0-9_]{0,39})$")
-
-
-def _plugin_id(value: str) -> str | None:
-    match = _ADDED_ID.match(value)
-    return match.group(1).replace("_", "-") if match else None
-
-
-def artifact_in(value: str) -> str:
-    """An artifact as a client sent it or an older server answered it: its name. Its old id (`vision`), and an
-    installed plug-in's work as `plugin_<id>`, are taken until part 5; anything else is as it is."""
-    return ARTIFACTS.get(value) or _plugin_id(value) or value
-
-
-def file_in(value: str) -> str:
-    """A file as a client sent it or an older server answered it: its name. Its old kind (`proxy`) is taken
-    until part 5; anything else is as it is."""
-    return _FILE_NAMES.get(value, value)
-
-
-def producer_in(artifact: str, producer: str) -> str:
-    """Lineage's producer for this artifact (by its name or its old id), as a client sent it: its name when it's
-    the old id of the producer that makes it now (`whisper`, of lumiverb.video.transcript), or `plugin_<id>` of
-    that plug-in's work. Any other (an older producer, a person, unknown) is left as it is."""
-    artifact = artifact_in(artifact)
-    if any(new == artifact and old == producer for (_, old), new in PRODUCERS.items()) \
-            or _plugin_id(producer) == artifact:
-        return artifact
-    return producer
-
-
-# What a kind was called: a producer's (`render`) or its remakes' (`redo_render`). A producer's kind is its name
-# from part 3, its remakes' redo:<name>.
+# A producer's kind is its name, its remakes' redo:<name>.
 REDO = "redo:"
 
 
@@ -182,18 +152,10 @@ def remakes_of(name: str) -> str:
     return REDO + name
 
 
-def kind_in(value: str) -> str:
-    """A job's kind as a client sent it or an older server answered it: a name, or redo:<name>."""
-    if value.startswith("redo_"):
-        return remakes_of(kind_in(value.removeprefix("redo_")))
-    return KINDS.get(value) or _plugin_id(value) or value
-
-
 def made_by_file(file: str) -> str:
     """The name whose file this is: the name itself for its main file, the name it's under for another (the
     thumbnail, the preview's: lumiverb.preview)."""
-    name = file_in(file)
-    return name if name in ARTIFACTS.values() else name.rpartition(".")[0]
+    return file if file in WAS and "artifact" in WAS[file] else file.rpartition(".")[0]
 
 
 # The part of a name a person may leave out (`lumiverb pause image.description`).
@@ -206,19 +168,15 @@ def short(name: str) -> str:
 
 
 def typed(word: str, listed: Iterable[str]) -> tuple[str | None, str | None]:
-    """What a person typed for a producer or switch: a name (with or without `lumiverb.`), a plug-in's id, or
-    an old word (`vision`, `plugin_<id>`). Returns how the server lists it (listed: the server's own words,
-    whichever spelling it answers in), or None when nothing listed is called that; and a warning naming what
-    to type instead when it was an old word (from part 5 an old word is refused)."""
-    by_meaning = {artifact_in(x): x for x in listed}
-    if word in by_meaning:
-        return by_meaning[word], None
-    if PREFIX + word in by_meaning:
-        return by_meaning[PREFIX + word], None
-    meant = ARTIFACTS.get(word) or _plugin_id(word)
-    if meant in by_meaning:
-        return by_meaning[meant], f"{word} is called {short(meant)} now: type that (the old word goes in a later release)"
-    return None, None
+    """What a person typed for a producer or switch: a name (with or without `lumiverb.`) or a plug-in's id, as
+    listed (the server's own words). Returns it, or None when nothing listed is called that; and, for an old word
+    (`vision`, refused since ADR-024's part 5), what to type instead."""
+    listed = set(listed)
+    for found in (word, PREFIX + word):
+        if found in listed:
+            return found, None
+    meant = now_called(word, "artifact")  # a producer was typed by what it made (`preview` is a name's, now)
+    return None, (f"{word} is called {short(meant)} now: type that" if meant else None)
 
 
 def is_reserved(plugin_id: str) -> bool:
@@ -288,9 +246,6 @@ def page() -> str:
         for n in d.reads:
             readers.setdefault(n, []).append(f"`{d.name}`")
     inputs = {name: word for word, name in INPUT_NAMES.items()}
-    renamed = {new: old for old, new in ARTIFACTS.items()}
-    was_producer = {new: old for (_, old), new in PRODUCERS.items()}
-    was_kind = {new: old for old, new in KINDS.items()}
     lines = [
         "# Lumiverb's data, by name",
         "",
@@ -303,8 +258,8 @@ def page() -> str:
         "(photos: `image`, as a clip's `media_type` says) or `lumiverb.video.*`. What a reader would be handed is",
         "what the clip shows now: where a person wrote it, theirs.",
         "",
-        "Until part 3 of phase 1 renames what's stored and sent, the API keeps each one's old id, and takes",
-        "either (\"Was\" below); the old spellings end with part 5.",
+        "Until ADR-024 phase 1's part 5 each was also taken by what it was called before (\"Was\" below, its",
+        "history): since then the API refuses an old spelling, saying the name.",
         "",
     ]
     for name in names():
@@ -325,15 +280,15 @@ def page() -> str:
             lines.append(f"- **Read by:** {', '.join(readers[name])}.")
         if name in inputs:
             lines.append(f"- **Protocol 1's input:** `{inputs[name]}` (a plug-in's manifest says it that way).")
-        if name in renamed:
-            also = [f"lineage's producer `{was_producer[name]}`" if was_producer.get(name, renamed[name]) != renamed[name]
-                    else "", f"its job's kind `{was_kind[name]}`" if was_kind.get(name, renamed[name]) != renamed[name]
-                    else ""]
+        was = WAS.get(name, {})
+        if "artifact" in was:
+            also = [f"lineage's producer `{was['producer']}`" if was["producer"] != was["artifact"] else "",
+                    f"its job's kind `{was['kind']}`" if was.get("kind", was["artifact"]) != was["artifact"] else ""]
             also = [a for a in also if a]
-            lines.append(f"- **Was:** `{renamed[name]}`{' (' + ', '.join(also) + ')' if also else ''}.")
+            lines.append(f"- **Was:** `{was['artifact']}`{' (' + ', '.join(also) + ')' if also else ''}.")
         files = [f for f in FILES if f == name or f.startswith(name + ".")]
         if files:
-            lines.append("- **Files:** " + ", ".join(f"`{f}` (was `{FILES[f]}`)" for f in files) + ".")
+            lines.append("- **Files:** " + ", ".join(f"`{f}` (was `{WAS[f]['file']}`)" for f in files) + ".")
         lines.append("")
     return "\n".join(lines)
 

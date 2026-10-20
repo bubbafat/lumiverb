@@ -114,7 +114,7 @@ brew services start lumiverb
 It backs up what's there first, so a restore can be undone the same way.
 
 To pause or resume processing from the Mac itself, as Settings › Processing
-does (`all`, `scans`, `upkeep` or a producer such as `vision`):
+does (`all`, `scans`, `upkeep` or a producer such as `image.description`):
 
 ```bash
 lumiverb-server resume all --env "$(brew --prefix)/etc/lumiverb/env"

@@ -48,9 +48,9 @@ def _producers(env, **params) -> dict:
 
 
 def _want(env, artifact: str, sha: str | None) -> dict:
-    """Lineage as a current worker would send it."""
+    """Lineage as a current worker would send it: its producer is what it makes, by name."""
     p = _producers(env, counts="false")[artifact]
-    return {"producer": p["producer"], "version": p["version"], "settings_hash": p["settings_hash"],
+    return {"producer": p["artifact"], "version": p["version"], "settings_hash": p["settings_hash"],
             "source_hash": sha, **({"level": p["level"]} if p.get("level") is not None else {})}
 
 
@@ -148,7 +148,8 @@ def test_every_producer_with_its_settings_and_counts(env):
     producers = _producers(env)
     assert set(producers) == set(P.ARTIFACTS)
     t = producers["lumiverb.video.transcript"]
-    assert (t["producer"], t["version"], t["settings"]["model"]) == ("lumiverb.video.transcript", "1", "small")
+    assert (t["version"], t["settings"]["model"]) == ("1", "small")
+    assert "producer" not in t  # a producer is named by what it makes: its artifact (ADR-024 part 5)
     assert t["settings_hash"] == P.settings_hash(t["settings"])
     assert set(t["counts"]) == {"applicable", "current", "stale", "missing", "rechecking", "below", "failing",
                                 "given_up"}

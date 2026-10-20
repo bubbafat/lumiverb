@@ -53,10 +53,8 @@ class FailureReport:
         self._tries: dict[int, int] = {}  # id(item) → failed sends alone
 
     def add(self, artifact: str, asset_id: str, error: object) -> None:
-        from src.producers.names import artifact_in
         from src.shared.producers import PRODUCERS
 
-        artifact = artifact_in(artifact)  # its name (an old id taken too)
         if artifact not in PRODUCERS or not isinstance(asset_id, str) or not 0 < len(asset_id) <= MAX_ID:
             logger.warning("not reporting a failure the server can't take: %r for %r", artifact, asset_id)
             return

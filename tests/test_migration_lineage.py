@@ -34,8 +34,7 @@ def test_the_frozen_v1_hashes_are_the_registry_s():
     settings are now (scenes' knobs gave way to Detail, out of the hash)."""
     import importlib.util
 
-    from src.producers.names import ARTIFACTS
-    from src.producers.names import PRODUCERS as RENAMED_PRODUCERS
+    from src.producers.names import WAS, now_called
     from src.shared.producers import PRODUCERS, effective_settings, settings_hash
 
     spec = importlib.util.spec_from_file_location(
@@ -50,8 +49,8 @@ def test_the_frozen_v1_hashes_are_the_registry_s():
     spec.loader.exec_module(levels)
     carried = {"faces": (levels._hash(levels.OLD_DEFAULTS), levels._hash(levels.NEW_SETTINGS))}
     for artifact, (producer, h) in m.V1.items():
-        name = ARTIFACTS[artifact]  # the migration's ids, named since (ADR-024)
-        assert RENAMED_PRODUCERS[(artifact, producer)] == name, "the producer then is today's"
+        name = now_called(artifact, "artifact")  # the migration's ids, named since (ADR-024)
+        assert WAS[name]["producer"] == producer, "the producer then is today's"
         if PRODUCERS[name].version == "1":
             then, now = carried.get(artifact, (h, h))
             assert h == then and settings_hash(effective_settings(name)) == now, artifact

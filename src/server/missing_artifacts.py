@@ -28,7 +28,7 @@ import time
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.producers.names import ANALYSIS_PROXY, PREVIEW, THUMBNAIL, VIDEO_PREVIEW, file_in
+from src.producers.names import ANALYSIS_PROXY, PREVIEW, THUMBNAIL, VIDEO_PREVIEW
 from src.server.storage.store import NotFound, Store, Unavailable, get_store
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,6 @@ def repair(session: Session) -> dict[str, int]:
     checked = cleared = remade = 0
     for entry in entries:
         asset_id, _, kind = entry.rpartition(":")
-        kind = file_in(kind)  # by its name, or the kind a report had before ADR-024's part 4 (until part 5)
         columns = COLUMNS.get(kind)
         if not asset_id or columns is None:
             continue

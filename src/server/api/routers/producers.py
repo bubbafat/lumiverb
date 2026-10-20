@@ -30,7 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator, model_serializer
 from sqlmodel import Session
 
-from src.producers.names import artifact_in, producer_in
+from src.producers.names import now_called
 from src.server.api.content_hashes import ContentHash, why_not
 from src.server.api.dependencies import (
     get_current_user_id,
@@ -139,7 +139,6 @@ def require_lineage(value: LineageIn | dict | str | None, artifact: str) -> dict
             f"A machine write must say how it was made ({producer.title.lower()}): lineage (producer, version, "
             "settings_hash), as GET /v1/producers gives them.",
             {"artifact": artifact, "expected": producer.artifact})
-    made["producer"] = producer_in(artifact, made["producer"])  # by its name, or its old id until part 5 (ADR-024)
     if made["producer"] != producer.artifact:
         raise InvalidChoiceError(
             "lineage_wrong_producer",
@@ -192,7 +191,6 @@ class SettingField(BaseModel):
 
 class ProducerItem(BaseModel):
     artifact: str  # the name of what it makes (ADR-024), a plug-in's work its plug-in's id
-    producer: str  # the same: a producer is named by what it makes (goes with ADR-024's part 5)
     version: str
     # The names it's made from, of its own clip and of other clips (docs/data-names.md).
     reads: list[str] = []
@@ -372,7 +370,7 @@ def _item(artifact: str, want: dict[str, Any], waits: dict[str, Any], uses: dict
     installed = bool(p.plugin)  # an installed plug-in's work
     job_wait = waits.get(p.job) if p.job else None
     return ProducerItem(
-        artifact=artifact, producer=artifact, version=p.version, title=p.title, media=list(p.media),
+        artifact=artifact, version=p.version, title=p.title, media=list(p.media),
         reads=list(p.reads), reads_others=list(p.reads_others),
         uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],
         fields=[SettingField(key=s.key, label=s.label, kind=s.kind, value=values.get(s.key, s.default),
@@ -471,7 +469,6 @@ def set_settings(
     from src.producers import load
     from src.server.api.errors import InvalidChoiceError
 
-    artifact = artifact_in(artifact)
     p = producer_or_404(artifact)
     if p.plugin:
         raise InvalidChoiceError("setting_fixed", f"{p.title}: {SET_IN_PLUGINS}", {"plugin_id": p.plugin})
@@ -573,7 +570,6 @@ def pause_switch(
     stale clips stay as they are until it's resumed (Remake), or a change of
     its settings or model says to remake them (what's missing is still made). What's running finishes. Again is
     fine: who paused first stays."""
-    target = artifact_in(target)
     if target == PAUSE_ALL and body.scope == lineage.WORK:
         lineage.pause_everything(session, by=user_id)
     else:
@@ -585,7 +581,6 @@ def pause_switch(
 @router.post("/{target}/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
 def resume_switch(target: str, body: PauseIn, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
     """Resume one switch (admins), or "all", in that scope, whatever the others are."""
-    target = artifact_in(target)
     if target == PAUSE_ALL and body.scope == lineage.WORK:
         lineage.resume_everything(session)  # a row for what's no longer a switch goes too
     elif body.scope == lineage.REDO and target != PAUSE_ALL and target in PRODUCERS:
@@ -603,10 +598,9 @@ class Failure(BaseModel):
     @field_validator("artifact")
     @classmethod
     def _a_producer(cls, value: str) -> str:
-        # As the producers are now: a plug-in's work can be added while Lumiverb runs. By its id or its name.
-        value = artifact_in(value)
+        # As the producers are now: a plug-in's work can be added while Lumiverb runs. By its name.
         if value not in PRODUCERS:
-            raise ValueError(f"no producer makes {value!r}")
+            raise ValueError(_not_a_producer(value))
         return value
 
 
@@ -907,7 +901,6 @@ def list_failures(
     """Clips in sight whose last try failed, newest failure first, with the
     error, how many tries and when the next one is (none once given up)."""
     if artifact is not None:
-        artifact = artifact_in(artifact)
         producer_or_404(artifact)
     rows = lineage.failures(session, artifact=artifact, library_id=library_id, limit=limit + 1, after=after,
                             within=seen(request, session))
@@ -933,8 +926,10 @@ class RetryIn(BaseModel):
 
     @field_validator("artifact")
     @classmethod
-    def _by_name_too(cls, value: str | None) -> str | None:
-        return artifact_in(value) if value is not None else None
+    def _by_name(cls, value: str | None) -> str | None:
+        if value is not None and value not in PRODUCERS and now_called(value, "artifact"):
+            raise ValueError(_not_a_producer(value))  # an old word, refused since ADR-024's part 5
+        return value
 
 
 @router.post("/failures/retry", dependencies=[Depends(require_editor)])
@@ -967,8 +962,10 @@ class RunIn(BaseModel):
 
     @field_validator("producer")
     @classmethod
-    def _by_name_too(cls, value: str) -> str:
-        return artifact_in(value)
+    def _by_name(cls, value: str) -> str:
+        if value not in PRODUCERS and now_called(value, "artifact"):
+            raise ValueError(_not_a_producer(value))  # an old word, refused since ADR-024's part 5
+        return value
 
 
 class RunProducer(BaseModel):
@@ -1067,7 +1064,6 @@ def redo_below(artifact: str, body: BelowIn, request: Request,
     then, held while its redo is stopped or it's paused (each said)."""
     from src.server.api.limits import require_scope
 
-    artifact = artifact_in(artifact)
     p = producer_or_404(artifact)
     require_scope(body.asset_ids is not None, body.all, "asset_ids")
     if p.level is None or not lineage.redoable(artifact):
@@ -1084,6 +1080,19 @@ def redo_below(artifact: str, body: BelowIn, request: Request,
 
 
 def producer_or_404(artifact: str):
+    """The producer a path names, by its name: 404 for none, and 404 renamed, naming the name, for what one was
+    called before ADR-024 (refused since its part 5)."""
     if artifact not in PRODUCERS:
+        name = now_called(artifact, "artifact")
+        if name:
+            from src.server.api.errors import ApiError
+
+            raise ApiError(404, "renamed", _not_a_producer(artifact), {"sent": artifact, "name": name})
         raise HTTPException(status_code=404, detail="No such artifact")
     return PRODUCERS[artifact]
+
+
+def _not_a_producer(word: str) -> str:
+    """Why a word names no producer: what an old one is called now (ADR-024), or none."""
+    name = now_called(word, "artifact")
+    return f"{word} is called {name} now: use its name." if name else f"no producer makes {word!r}"

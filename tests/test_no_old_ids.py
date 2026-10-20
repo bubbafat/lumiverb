@@ -1,7 +1,8 @@
-"""No old id where a name belongs (ADR-024 phase 1 part 3): the artifacts',
-lineage's producers' and job kinds' old ids are written nowhere in src, the
-web's and the apps' code or their tests but where a family that keeps its
-word has them (tests/old_ids_allowed.py, each entry with its family and
+"""No old id where a name belongs (ADR-024 phase 1, parts 3 to 5): the
+artifacts', lineage's producers', job kinds' and files' old ids are written
+nowhere in src, the web's, the apps' and Resolve's code, their tests or the
+living docs but where a family that keeps its word has them (the names'
+history among them: tests/old_ids_allowed.py, each entry with its family and
 file). tests/old_ids.py finds them.
 """
 

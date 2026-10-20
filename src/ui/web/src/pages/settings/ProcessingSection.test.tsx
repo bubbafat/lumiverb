@@ -40,7 +40,7 @@ const sent: { method: string; url: string; body: unknown }[] = [];
 
 function producer(over: Partial<Producer>): Producer {
   return {
-    artifact: "lumiverb.image.description", producer: "lumiverb.image.description", version: "1", title: "Descriptions and tags", media: ["image"],
+    artifact: "lumiverb.image.description", version: "1", title: "Descriptions and tags", media: ["image"],
     uniform: false, settings: { model: "qwen3-vl:8b-instruct", temperature: 0.2 }, settings_hash: "h",
     fields: [
       { key: "model", label: "Model", kind: "text", value: "qwen3-vl:8b-instruct", default: "", minimum: null,

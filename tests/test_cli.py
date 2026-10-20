@@ -366,7 +366,7 @@ def test_download_refuses_tty_without_output(monkeypatch: pytest.MonkeyPatch) ->
                 library="TestLib",
                 asset_id=None,
                 path="Photos/one.jpg",
-                size="proxy",
+                size="preview",
                 output=None,
             )
 
@@ -511,15 +511,13 @@ def test_download_saves_to_directory(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(("size", "asked", "warned"), [
-    (None, "lumiverb.preview", False),
-    ("preview", "lumiverb.preview", False),
-    ("lumiverb.preview.thumbnail", "lumiverb.preview.thumbnail", False),
-    ("preview.thumbnail", "lumiverb.preview.thumbnail", False),
-    ("proxy", "lumiverb.preview", True),  # old words, warned of (ADR-024 phase 1 part 2)
-    ("thumbnail", "lumiverb.preview.thumbnail", True),
+@pytest.mark.parametrize(("size", "asked"), [
+    (None, "lumiverb.preview"),
+    ("preview", "lumiverb.preview"),
+    ("lumiverb.preview.thumbnail", "lumiverb.preview.thumbnail"),
+    ("preview.thumbnail", "lumiverb.preview.thumbnail"),
 ])
-def test_download_asks_for_the_file_by_its_name(tmp_path: Path, size, asked, warned) -> None:
+def test_download_asks_for_the_file_by_its_name(tmp_path: Path, size, asked) -> None:
     from contextlib import contextmanager
 
     from httpx import Request, Response
@@ -542,7 +540,18 @@ def test_download_asks_for_the_file_by_its_name(tmp_path: Path, size, asked, war
                                      "--output", str(tmp_path / "out.jpg"), *(["--size", size] if size else [])])
     assert result.exit_code == 0, result.output
     assert streamed == [f"/v1/assets/ast_123/artifacts/{asked}"]
-    assert ("is called" in result.output) == warned
+    assert "is called" not in result.output
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("size", "name"), [("proxy", "preview"), ("thumbnail", "preview.thumbnail")])
+def test_download_refuses_an_old_word_saying_the_name_to_type(tmp_path: Path, size, name) -> None:
+    # Since ADR-024's part 5.
+    with patch("src.client.cli.main.LumiverbClient") as client:
+        result = runner.invoke(app, ["download", "--library", "TestLib", "--asset-id", "ast_123",
+                                     "--output", str(tmp_path / "out.jpg"), "--size", size])
+    assert result.exit_code == 1 and f"{size} is called {name} now: type that" in result.output
+    client.assert_not_called()
 
 
 @pytest.mark.fast

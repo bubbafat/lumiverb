@@ -26,17 +26,13 @@ def described(scene: dict, lineage: dict | None) -> bool:
     """Whether a scene is already described the way this job would describe
     it, so it's skipped. A scene described another way (an older model, an
     upgrade's) is described again; a server that doesn't say how a scene
-    was made gets the old rule: described is done. Its producer in either
-    spelling (ADR-024: the server keeps today's id before part 3)."""
-    from src.producers.names import producer_in
-
+    was made gets the old rule: described is done."""
     if scene.get("description") is None:
         return False
     if lineage is None or "lineage" not in scene:
         return True
     made = scene.get("lineage") or {}
-    theirs, ours = (producer_in(SCENE_DESCRIPTIONS, str(x.get("producer"))) for x in (made, lineage))
-    return theirs == ours and all(made.get(k) == lineage.get(k) for k in ("version", "settings_hash"))
+    return all(made.get(k) == lineage.get(k) for k in ("producer", "version", "settings_hash"))
 
 
 @dataclass

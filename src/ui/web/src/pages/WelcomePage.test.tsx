@@ -18,7 +18,7 @@ function json(body: unknown, status = 200) {
 }
 
 function producer(artifact: string, fields: unknown[]) {
-  return { artifact, producer: artifact, version: "1", title: artifact, media: ["image"], uniform: false, settings: {},
+  return { artifact, version: "1", title: artifact, media: ["image"], uniform: false, settings: {},
            settings_hash: "", fields, counts: null, scheduled: true, redoable: true, why_not: null, redo_stopped: false,
            redo_stopped_by: null, redo_stopped_at: null, paused: false, paused_by: null, paused_at: null, waiting: null };
 }

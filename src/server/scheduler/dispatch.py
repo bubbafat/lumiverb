@@ -302,13 +302,9 @@ class Dispatcher:
     def seed_pace(self, tenant_id: str, pace: Mapping[str, object]) -> None:
         """Paces known before a restart (the last status): where each kind
         starts, counting as one unit of work, so its first real job outweighs
-        it. A kind by its old word (a status from before ADR-024's part 3) is
-        its name; unknown kinds and nonsense are left out."""
-        from src.producers.names import kind_in
-
+        it. Unknown kinds and nonsense are left out."""
         with self._lock:
-            for said, value in pace.items():
-                kind = said if said in self._kinds else kind_in(said)
+            for kind, value in pace.items():
                 if kind in self._kinds and isinstance(value, (int, float)) and value > 0 \
                         and (tenant_id, kind) not in self._paces:
                     self._paces[(tenant_id, kind)] = deque([(float(value), 1.0)], maxlen=PACE_JOBS)

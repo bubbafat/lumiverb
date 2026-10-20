@@ -56,11 +56,8 @@ PAGE = 500  # reader-work's clips a page
 
 
 def _ids(words: list[str] | None) -> set[str]:
-    """What the server lists (what's paused, a clip's work), whichever spelling it answers in (ADR-024: today's
-    ids before part 3, the names after), as names."""
-    from src.producers.names import artifact_in
-
-    return {artifact_in(w) for w in words or []}
+    """What the server lists (what's paused, a clip's work), by name."""
+    return set(words or [])
 
 
 class Device:

@@ -1,13 +1,15 @@
 """Where an old id of ADR-024 phase 1 (artifacts, lineage's producers, job
-kinds, and from part 4 the files' kinds) is still written in the code: src,
-the web's and the apps' code, and their tests. tests/test_no_old_ids.py holds
-every match to its allow-list.
+kinds, the files' kinds) is still written: src, the web's, the apps' and
+Resolve's code, their tests, and the living docs (docs/*.md and every
+README, CLAUDE.md; not the ADRs, which are history). tests/test_no_old_ids.py
+holds every match to its allow-list.
 
 A match is an old id as a whole string literal ("capture", 'scene-detect',
-in SQL too), `producer.<old>`, `missing_<old>`, `redo_<old>`, an installed
-plug-in's work id (`plugin_<id>`, `f"plugin_{...}"`) and an old id in a
-path (`/producers/vision/`, `/artifacts/proxy`). The old ids are written out here, never read
-from RENAMED, so the test stays when part 5 removes it.
+in SQL too; in a doc, `capture` too), `producer.<old>`, `missing_<old>`,
+`redo_<old>`, an installed plug-in's work id (`plugin_<id>`,
+`f"plugin_{...}"`) and an old id in a path (`/producers/vision/`,
+`/artifacts/proxy`). The old ids are written out here, never read from the
+code (src/producers/names.py WAS is one of the places they're kept).
 """
 
 from __future__ import annotations
@@ -36,9 +38,11 @@ _BUILT = re.compile(rf"\b(producer\.(?:{_ART})\b|missing_(?:{_ART})\b|redo_(?:{_
                     rf"|(?<!src)/producers/(?:{_WORD})(?=[/?\"'`]|$)|/artifacts/(?:{_FILE})(?=[/?\"'`]|$))")  # a route
 _SQL = re.compile(rf"'({_WORD})'")
 _QUOTED = re.compile(rf"""(["'`])({_WORD})\1""")
-_FILES = {".py": "python", ".ts": "script", ".tsx": "script", ".js": "script", ".swift": "script"}
+_FILES = {".py": "python", ".ts": "script", ".tsx": "script", ".js": "script", ".swift": "script", ".md": "doc"}
 _SKIP = {"node_modules", "__pycache__", ".venv", "dist", "build", "DerivedData", ".build", "fixtures"}
 ROOTS = ("src", "clients", "tests")
+# The living docs beside them: the ADRs and docs/archive are history, and say what each was.
+DOCS = ("docs/*.md", "*.md")
 
 
 def plugin_ids() -> frozenset[str]:
@@ -61,11 +65,11 @@ NOT_LOOKED_IN = (Path(__file__).with_name("old_ids_allowed.py"), Path(__file__).
 
 
 def files() -> Iterator[Path]:
-    for root in ROOTS:
-        for path in sorted((REPO / root).rglob("*")):
-            if path.suffix in _FILES and path.is_file() and not _SKIP & set(path.relative_to(REPO).parts) \
-                    and path not in NOT_LOOKED_IN:
-                yield path
+    found = [p for root in ROOTS for p in (REPO / root).rglob("*")] + [p for g in DOCS for p in REPO.glob(g)]
+    for path in sorted(set(found)):
+        if path.suffix in _FILES and path.is_file() and not _SKIP & set(path.relative_to(REPO).parts) \
+                and path not in NOT_LOOKED_IN:
+            yield path
 
 
 def _python(source: str, work: re.Pattern) -> Iterator[tuple[int, str]]:
@@ -87,11 +91,11 @@ def _python(source: str, work: re.Pattern) -> Iterator[tuple[int, str]]:
                     yield node.lineno, m.group(1)
 
 
-def _script(source: str, work: re.Pattern) -> Iterator[tuple[int, str]]:
+def _script(source: str, work: re.Pattern, doc: bool = False) -> Iterator[tuple[int, str]]:
     for number, line in enumerate(source.split("\n"), 1):
         code = line.strip()
-        if code.startswith(("//", "*", "/*")):
-            continue  # a comment
+        if not doc and code.startswith(("//", "*", "/*")):
+            continue  # a comment (a doc's every line is read: its words in backticks or quotes)
         for m in _QUOTED.finditer(line):
             yield number, m.group(2)
         for pattern in (_BUILT, work):
@@ -104,6 +108,7 @@ def matches() -> Iterator[tuple[str, int, str]]:
     work = _plugin_work(plugin_ids())
     for path in files():
         source = path.read_text(encoding="utf-8")
-        found = _python(source, work) if _FILES[path.suffix] == "python" else _script(source, work)
+        kind = _FILES[path.suffix]
+        found = _python(source, work) if kind == "python" else _script(source, work, doc=kind == "doc")
         for line, what in sorted(set(found)):
             yield str(path.relative_to(REPO)), line, what

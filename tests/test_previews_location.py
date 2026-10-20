@@ -430,7 +430,7 @@ def test_during_a_move_the_repair_finds_a_file_in_either_folder(install, monkeyp
     _moving(data, drive)  # PROXY is still in the old folder
     monkeypatch.setattr(missing_artifacts, "get_store", lambda: FileStore(LocalStorage(str(data))))
     session = MagicMock()
-    session.execute.return_value.scalar.side_effect = [json.dumps(["ast_1:proxy"]), PROXY]
+    session.execute.return_value.scalar.side_effect = [json.dumps(["ast_1:lumiverb.preview"]), PROXY]
     assert missing_artifacts.repair(session) == {"checked": 1, "cleared": 0, "remade": 0}
     assert not any("UPDATE" in str(c.args[0]) for c in session.execute.call_args_list)
 
