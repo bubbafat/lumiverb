@@ -97,7 +97,7 @@ def test_missing_until_made_then_current(env):
     assert _due(lib, "lumiverb.image.description") == [clip]
     assert _summary(lib)["missing"]["lumiverb.image.description"] == 1
     assert _counts(lib, "lumiverb.image.description") == {"applicable": 1, "current": 0, "stale": 0, "missing": 1, "rechecking": 0, "below": 0, "failing": 0,
-                                      "given_up": 0}
+                                      "given_up": 0, "lacking": []}
 
     _describe(lib, clip, sha)
     assert _due(lib, "lumiverb.image.description") == []
@@ -259,7 +259,7 @@ def test_a_failure_waits_then_is_handed_out_again(env):
 
     _describe(lib, clip, sha)  # made at last: the failure is behind it
     assert _counts(lib, "lumiverb.image.description") == {"applicable": 1, "current": 1, "stale": 0, "missing": 0, "rechecking": 0, "below": 0, "failing": 0,
-                                      "given_up": 0}
+                                      "given_up": 0, "lacking": []}
 
 
 @pytest.mark.slow

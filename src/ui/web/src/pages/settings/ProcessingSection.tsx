@@ -314,6 +314,11 @@ function ProducerRow({
           )}
         </p>
       )}
+      {!off && c?.lacking?.some((l) => l.clips > 0) && (
+        <p className="text-xs text-gray-500">
+          Not made for {c.lacking.filter((l) => l.clips > 0).map((l) => `${n(l.clips)} that have no ${l.label}`).join(", or ")}.
+        </p>
+      )}
       {!off && waits.length > 0 && (
         <ul className="space-y-0.5" aria-label={`Why ${producer.title} waits`}>
           {waits.map((w) => <WaitLine key={waitKey(w)} wait={w} say={say} />)}

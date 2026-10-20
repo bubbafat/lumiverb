@@ -55,7 +55,7 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         'location': (
             'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/ModelDecodingTests.swift',
             'docs/cursor-api.md', 'src/own_plugins/geonames/geonames.py', 'src/server/repository/clip_inputs.py',
-            'tests/plugins/facts/facts.py', 'tests/test_follow_moves.py', 'tests/test_geonames_plugin_acceptance.py',
+            'src/ui/web/src/pages/settings/ProcessingSection.test.tsx', 'tests/plugins/facts/facts.py', 'tests/test_follow_moves.py', 'tests/test_geonames_plugin_acceptance.py',
             'tests/test_library_admins.py', 'tests/test_location.py', 'tests/test_location_producer.py',
             'tests/test_plugin_work.py', 'tests/test_public_library_middleware.py', 'tests/test_public_no_emails.py',
             'tests/test_retry_after.py', 'tests/test_video_playback_api.py',

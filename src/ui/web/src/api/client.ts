@@ -1036,6 +1036,8 @@ export interface ProducerCounts {
   failing: number;
   /** Failing, and no longer tried (after 10 tries) until someone asks. */
   given_up?: number;
+  /** Clips of its media it doesn't apply to, by what they lack (an installed plug-in's: no location). */
+  lacking?: { name: string; label: string; clips: number }[];
 }
 
 /** What makes one kind of artifact (Settings → Processing). */

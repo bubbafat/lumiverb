@@ -50,13 +50,22 @@ WRITE = "LUMIVERB_WRITE_TESTER_NAMED_DATA"
 ADDED = ("makes", "reads", "reads_others")
 
 
+def _as_then(row: dict) -> dict:
+    """A producer's row without what was added since v0.1.104: phase 1's fields, and its counts' lacking (what
+    its clips may never have: an installed plug-in's, ADR-023)."""
+    row = {k: v for k, v in row.items() if k not in ADDED}
+    if row.get("counts"):
+        row["counts"] = {k: v for k, v in row["counts"].items() if k != "lacking"}
+    return row
+
+
 def _said(f) -> dict:
     """What clients and the plug-in get, with nothing that differs between runs (an account's ids)."""
     charged, outcome = _job(f)
     assert (charged, outcome) == ([], None)
     r = f.client.get("/v1/producers", params={"library_id": f.library_id}, headers=f.robert)
     assert r.status_code == 200, r.text
-    rows = [{k: v for k, v in row.items() if k not in ADDED} for row in r.json()["producers"]]
+    rows = [_as_then(row) for row in r.json()["producers"]]
     handed = (f.data / "plugins" / "facts" / "data" / "last-work.json").read_text()
     with get_tenant_session(f.tenant_id) as session:
         hashes = [session.execute(text("SELECT inputs_hash FROM plugin_outputs WHERE asset_id = :a AND plugin_id ="
@@ -187,8 +196,7 @@ def test_rename_an_account_from_before_migrated_up_answers_as_it_did_and_down_is
     clips = seeded["clips"]
     r = client.get("/v1/producers", params={"library_id": library_id}, headers=robert)
     assert r.status_code == 200, r.text
-    added = ("makes", "reads", "reads_others")
-    now = {"producers": [{k: v for k, v in row.items() if k not in added} for row in r.json()["producers"]],
+    now = {"producers": [_as_then(row) for row in r.json()["producers"]],
            "switches": client.get("/v1/producers/queue", headers=robert).json().get("switches"),
            "failures": client.get("/v1/producers/failures", headers=robert).json(),
            "due": {kind: sorted(clips[c["asset_id"]] for c in due(url, kind, [library_id]))

@@ -152,7 +152,8 @@ def test_every_producer_with_its_settings_and_counts(env):
     assert "producer" not in t  # a producer is named by what it makes: its artifact (ADR-024 part 5)
     assert t["settings_hash"] == P.settings_hash(t["settings"])
     assert set(t["counts"]) == {"applicable", "current", "stale", "missing", "rechecking", "below", "failing",
-                                "given_up"}
+                                "given_up", "lacking"}
+    assert t["counts"]["lacking"] == [], "Lumiverb's own producers lack nothing: an installed plug-in's may"
     assert producers["lumiverb.image.likeness"]["uniform"] is True and producers["lumiverb.video.transcript"]["uniform"] is False
     assert _producers(env, counts="false")["lumiverb.image.description"]["counts"] is None
 

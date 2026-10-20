@@ -37,9 +37,9 @@ import time
 
 from src.plugins.manifest import INPUT_NAMES
 from src.producers import INSTALLED, use_added
-from src.producers.contract import FIND, Pool, ProducerSpec, Setting
+from src.producers.contract import FIND, Lack, Pool, ProducerSpec, Setting
 from src.server.plugin_catalog import Installed, installed
-from src.server.repository.clip_inputs import hash_sql, present_sql
+from src.server.repository.clip_inputs import LACKING, has_sql, hash_sql, present_sql
 from src.server.repository.plugins import on_sql
 
 logger = logging.getLogger(__name__)
@@ -62,10 +62,13 @@ def spec_for(plugin: Installed) -> ProducerSpec:
         raise ValueError(f"{m.plugin_id} has no work")
     artifact = artifact_of(m.plugin_id)
     media = ", ".join(f"'{x}'" for x in work.media)
+    # Its media's clips while it's on; it applies to those with every input it reads that a clip can lack.
+    theirs = f"({on_sql(m.spec(), plugin.default)}) AND a.media_type IN ({media})"
     return ProducerSpec(
         artifact=artifact, version=work.version, media=work.media, title=work.title,
-        applies=(f"({on_sql(m.spec(), plugin.default)})"
-                 f" AND a.media_type IN ({media}) AND ({present_sql(work.inputs)})"),
+        applies=f"{theirs} AND ({present_sql(work.inputs)})",
+        lacks=tuple(Lack(INPUT_NAMES[i], LACKING[i], f"{theirs} AND NOT ({has_sql(i)})")
+                    for i in sorted(set(work.inputs)) if has_sql(i)),
         made=("EXISTS (SELECT 1 FROM plugin_outputs po WHERE po.asset_id = a.asset_id"
               f" AND po.plugin_id = '{m.plugin_id}' AND po.inputs_hash = {hash_sql(work.inputs)})"),
         settings=tuple(Setting(s.key, s.default, s.label, kind=_KIND[s.type], minimum=s.minimum,
