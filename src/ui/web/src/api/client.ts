@@ -1,4 +1,5 @@
 import type {
+  KeptPlugin,
   PlaceSearch,
   Plugin,
   ApiKeyCreateResponse,
@@ -324,6 +325,18 @@ export async function setLibraryPrivate(libraryId: string, isPrivate: boolean): 
 /** Every plug-in and its state in this account (ADR-021). */
 export async function listPlugins(): Promise<Plugin[]> {
   return (await apiFetch<{ plugins: Plugin[] }>("/plugins")).plugins;
+}
+
+/** The plug-ins uninstalled with what they made kept that made facts in this account. */
+export async function listKeptPlugins(): Promise<KeptPlugin[]> {
+  return (await apiFetch<{ plugins: KeptPlugin[] }>("/plugins/kept")).plugins;
+}
+
+/** A kept plug-in's facts deleted from this account (account admins): 409 confirm_delete_facts (details: count,
+ * title) until count is how many clips it made facts for here. */
+export async function deleteKeptFacts(pluginId: string, count: number): Promise<{ deleted: number }> {
+  return apiFetch<{ deleted: number }>(`/plugins/${encodeURIComponent(pluginId)}/facts?count=${count}`,
+                                       { method: "DELETE" });
 }
 
 /** Turn a plug-in on or off (account admins). Turning on one that asks an acknowledgment: 409

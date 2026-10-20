@@ -5,6 +5,8 @@ server admin's: src/server/plugin_catalog.py), as its default says in an
 account whose admin hasn't chosen.
 
 GET /v1/plugins                              — every plug-in, its state in this account, and what it asks (signed in)
+GET /v1/plugins/kept                         — those uninstalled with what they made kept, and this account's of it
+DELETE /v1/plugins/{plugin_id}/facts         — a kept one's facts deleted from this account (account admins)
 PUT /v1/plugins/{plugin_id}                  — turn one on or off (account admins)
 PUT /v1/plugins/{plugin_id}/settings         — an installed one's settings for this account (account admins)
 PUT /v1/plugins/{plugin_id}/server-settings  — an installed one's settings for the whole server (server admins)
@@ -43,7 +45,7 @@ from src.server.api.dependencies import (
 from src.server.api.errors import ApiError, ConflictError, DecisionRequiredError
 from src.server.config import get_settings
 from src.server.database import get_control_session
-from src.server.plugin_catalog import Entry, entries, find
+from src.server.plugin_catalog import Entry, entries, find, kept
 from src.server.plugin_client import PluginAnswerError, ask, socket_path
 from src.server.plugin_runner import READY, STATES, read_state
 from src.server.plugin_settings import ACCOUNT, SERVER, PluginSettingsRepository, changed, values
@@ -171,6 +173,25 @@ class PluginList(BaseModel):
     plugins: list[PluginOut]
 
 
+class KeptPlugin(BaseModel):
+    """A plug-in the server admin uninstalled with what it made kept: its facts shown and searched as they were,
+    made no more (src/server/plugin_install.py uninstall)."""
+
+    plugin_id: str
+    title: str
+    version: str
+    removed_at: datetime
+    clips: int  # the clips in this account it made facts for
+
+
+class KeptPluginList(BaseModel):
+    plugins: list[KeptPlugin]
+
+
+class FactsDeleted(BaseModel):
+    deleted: int
+
+
 class PluginChoice(BaseModel):
     enabled: bool
     # The version of its acknowledgment accepted, turning on a plug-in that asks one.
@@ -273,6 +294,45 @@ def list_plugins(
              server_admin=server_admin, chosen=account.get(e.spec.plugin_id),
              server_chosen=_server_chosen(e.spec.plugin_id) if server_admin else None)
         for e in entries()])
+
+
+@router.get("/kept", response_model=KeptPluginList, dependencies=[Depends(require_signed_in)])
+def list_kept(session: Annotated[Session, Depends(get_tenant_session)]) -> KeptPluginList:
+    """The plug-ins uninstalled with what they made kept that made facts in this account, by title."""
+    repo = PluginRepository(session)
+    out = []
+    for plugin_id, plugin in kept().items():
+        clips = repo.holds(plugin_id)["clips"]
+        if clips:
+            out.append(KeptPlugin(plugin_id=plugin_id, title=plugin.manifest.title, version=plugin.manifest.version,
+                                  removed_at=plugin.installed_at, clips=clips))
+    return KeptPluginList(plugins=sorted(out, key=lambda p: (p.title.lower(), p.plugin_id)))
+
+
+@router.delete("/{plugin_id}/facts", response_model=FactsDeleted, dependencies=[Depends(require_tenant_admin)])
+def delete_kept_facts(
+    plugin_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    count: int | None = None,
+) -> FactsDeleted:
+    """A plug-in uninstalled with what it made kept: everything it left in this account deleted (its facts,
+    their lineage, its settings and switch; who accepted its acknowledgment is kept), as the server admin's
+    --delete does for every account. 409 confirm_delete_facts (details: count, title) until count is the
+    number of clips it made facts for here. 404 unless it's one uninstalled with what it made kept."""
+    plugin = kept().get(plugin_id)
+    if plugin is None:
+        raise HTTPException(status_code=404, detail="No plug-in uninstalled with what it made kept has that id")
+    repo = PluginRepository(session)
+    n = repo.holds(plugin_id)["clips"]
+    title = plugin.manifest.title
+    if count != n:
+        raise DecisionRequiredError(
+            "confirm_delete_facts",
+            f"{title}'s facts for {n:,} clip{'' if n == 1 else 's'} will be deleted from this account for good, "
+            f"with its settings here. Send count: {n} to go ahead.", {"count": n, "title": title})
+    deleted = repo.forget(plugin_id)
+    session.commit()
+    return FactsDeleted(deleted=deleted)
 
 
 @router.put("/{plugin_id}", response_model=PluginOut, dependencies=[Depends(require_tenant_admin)])

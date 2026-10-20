@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, getCurrentUser, listPlugins, setPlugin } from "../../api/client";
-import type { Plugin, PluginAcknowledgment } from "../../api/types";
+import { ApiError, deleteKeptFacts, getCurrentUser, listKeptPlugins, listPlugins, setPlugin } from "../../api/client";
+import type { KeptPlugin, Plugin, PluginAcknowledgment } from "../../api/types";
 import { InstalledDetails } from "./InstalledPlugin";
 
 export const PLUGINS_QUERY_KEY = ["plugins"];
@@ -79,6 +79,7 @@ export default function PluginsSection() {
           ))}
         </ul>
       )}
+      <KeptPlugins admin={admin} />
       {asking && (
         <AcknowledgmentDialog
           acknowledgment={asking.acknowledgment}
@@ -90,6 +91,58 @@ export default function PluginsSection() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** Plug-ins the server admin uninstalled with what they made kept: their facts are shown and searched as they
+ * were, made no more. An account admin can delete one's facts from this account, after seeing how many. */
+function KeptPlugins({ admin }: { admin: boolean }) {
+  const queryClient = useQueryClient();
+  const { data: kept } = useQuery({ queryKey: [...PLUGINS_QUERY_KEY, "kept"], queryFn: listKeptPlugins });
+  const [confirming, setConfirming] = useState<KeptPlugin | null>(null);
+  const remove = useMutation({
+    mutationFn: (p: KeptPlugin) => deleteKeptFacts(p.plugin_id, p.clips),
+    onSuccess: () => {
+      setConfirming(null);
+      return queryClient.invalidateQueries({ queryKey: PLUGINS_QUERY_KEY });
+    },
+  });
+  if (!kept?.length) return null;
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium text-gray-300">Uninstalled, facts kept</h3>
+      <ul aria-label="Uninstalled, facts kept" className="divide-y divide-gray-800">
+        {kept.map((p) => (
+          <li key={p.plugin_id} aria-label={p.title} className="space-y-2 py-3">
+            <p className="text-sm text-gray-400">
+              <span className="text-gray-200">{p.title}</span> {p.version}: uninstalled {day(p.removed_at)}. Its
+              facts for {p.clips.toLocaleString()} clip{p.clips === 1 ? "" : "s"} are kept here, shown and searched
+              as they were.
+            </p>
+            {admin && (confirming?.plugin_id === p.plugin_id ? (
+              <div role="alertdialog" aria-label="Delete its facts?" className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-amber-100/90">
+                  Delete its facts for {p.clips.toLocaleString()} clip{p.clips === 1 ? "" : "s"} from this account, for good?
+                </span>
+                <button type="button" disabled={remove.isPending} onClick={() => remove.mutate(p)}
+                        className="rounded-md bg-red-600 px-3 py-1 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50">
+                  Delete
+                </button>
+                <button type="button" onClick={() => setConfirming(null)} className="text-sm text-gray-400">Cancel</button>
+              </div>
+            ) : (
+              <button type="button" onClick={() => { remove.reset(); setConfirming(p); }}
+                      className="text-sm text-red-300 hover:text-red-200">
+                Delete its facts here
+              </button>
+            ))}
+            {remove.error && confirming?.plugin_id === p.plugin_id && (
+              <p role="alert" className="text-sm text-red-300">{said(remove.error)}</p>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

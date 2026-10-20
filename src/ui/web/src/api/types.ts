@@ -370,6 +370,16 @@ export interface AssetDetail {
   facts?: PluginFacts[] | null;
 }
 
+/** A plug-in the server admin uninstalled with what it made kept: its facts shown and searched as they were. */
+export interface KeptPlugin {
+  plugin_id: string;
+  title: string;
+  version: string;
+  removed_at: string;
+  /** The clips in this account it made facts for. */
+  clips: number;
+}
+
 /** One plug-in's facts about a clip, in its manifest's order, and who to credit for them. */
 export interface PluginFacts {
   plugin_id: string;
