@@ -305,6 +305,9 @@ every account (each account's admin can still turn it on or off there):
 lumiverb-server plugins install FOLDER --off --env /opt/homebrew/etc/lumiverb/env
 ```
 
+`FOLDER` can also be a `.zip` of it, or an https URL to one (`--sha256` checks
+the download is the one you meant).
+
 A plug-in that works on each photo and video (its manifest's `work`) is
 handed only what it declares (a clip's location, when it was taken, its
 size and camera, a photo's preview) and gives back short facts that

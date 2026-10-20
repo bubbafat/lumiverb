@@ -2,7 +2,8 @@
 phase 1a), the server admin's, on the machine itself (as server-admins).
 
   plugins                                 what's installed, and Lumiverb's own
-  plugins install FOLDER --on|--off       install it (or a newer version), on or off by default
+  plugins install SOURCE --on|--off       install it (or a newer version), on or off by default: its
+                                          folder, a .zip of it, or an https URL to one (--sha256)
   plugins default ID on|off               its default, in every account that hasn't chosen
   plugins uninstall ID --keep|--trash|--delete
                                           no longer offered or run; what it made kept,
@@ -32,9 +33,12 @@ def add_parser(commands, env_option: Callable[[argparse.ArgumentParser, object],
         "plugins", help="the plug-ins installed on this server: install one, on or off by default, or uninstall it")
     env_option(parser, argparse.SUPPRESS)
     actions = parser.add_subparsers(dest="plugins_action")
-    install = actions.add_parser("install", help="install a plug-in from its folder (or a newer version of it)")
+    install = actions.add_parser("install", help="install a plug-in (or a newer version of it): its folder, a .zip, "
+                                                 "or an https URL to one")
     env_option(install, argparse.SUPPRESS)
-    install.add_argument("folder", type=Path, help="the plug-in's folder, with its lumiverb-plugin.json")
+    install.add_argument("source", help="the plug-in's folder (with its lumiverb-plugin.json), a .zip of it, or an "
+                                        "https URL to a .zip")
+    install.add_argument("--sha256", help="the .zip's SHA-256: installed only if it's that")
     default = install.add_mutually_exclusive_group()
     default.add_argument("--on", dest="on", action="store_const", const=True,
                          help="on in every account that hasn't turned it off")
@@ -82,9 +86,18 @@ def _show_acknowledgment(ack) -> None:
 
 
 def _install(args: argparse.Namespace, session, data: Path) -> int:
+    import tempfile
+
+    from src.server.plugin_fetch import fetched
+
+    with tempfile.TemporaryDirectory(prefix="lumiverb-plugin-") as work:
+        return _install_from(fetched(args.source, Path(work), sha256=args.sha256), args, session, data)
+
+
+def _install_from(folder: Path, args: argparse.Namespace, session, data: Path) -> int:
     from src.server import plugin_install
 
-    p = plugin_install.plan(args.folder, session, data)
+    p = plugin_install.plan(folder, session, data)
     on = p.on_by_default(args.on)
     m = p.manifest
     print(f"{m.title} {m.version}{f', by {m.author}' if m.author else ''} ({m.plugin_id})\n  {m.description}")
