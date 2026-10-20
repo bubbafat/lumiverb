@@ -2,7 +2,7 @@
 
 ## Status
 
-Revised (2026-10-19) after Robert's decision (section 5): rename everything. Agreed again by the builder, the reviewer and the tester; then the coordinator's go for part 1. Part 1 done (v0.1.105, 2026-10-19); part 2 done (v0.1.106, 2026-10-19); part 3 done (v0.1.107, 2026-10-19); part 4 done (v0.1.108, 2026-10-19); part 5 built. Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
+Revised (2026-10-19) after Robert's decision (section 5): rename everything. Agreed again by the builder, the reviewer and the tester; then the coordinator's go for part 1. Part 1 done (v0.1.105, 2026-10-19); part 2 done (v0.1.106, 2026-10-19); part 3 done (v0.1.107, 2026-10-19); part 4 done (v0.1.108, 2026-10-19); part 5 done (v0.1.109, 2026-10-20): phase 1 is done. Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
 
 ## What phase 1 does, and doesn't
 
