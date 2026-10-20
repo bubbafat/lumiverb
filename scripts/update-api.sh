@@ -158,6 +158,19 @@ fi
 DB_URL="$(grep '^CONTROL_PLANE_DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)"
 [[ -n "$DB_URL" ]] || fail "CONTROL_PLANE_DATABASE_URL not found in ${ENV_FILE}"
 
+# A backup before this version's migrations, as a Mac's service makes one
+# (src/server/backups.py: the 3 newest kept; into the backups folder, else
+# DATA_DIR/backups), only when there's something to migrate. One that can't
+# be made is warned of and the update goes on: the nightly ones are there.
+DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
+if CONTROL_PLANE_DATABASE_URL="$DB_URL" DATA_DIR="$DATA_DIR" \
+    sudo -u "$SVC_USER" --preserve-env=CONTROL_PLANE_DATABASE_URL,DATA_DIR \
+    "$APP_DIR/.venv/bin/lumiverb-server" backup --if-migrating; then
+  ok "Backed up before migrating (when there was anything to migrate)"
+else
+  warn "No backup before migrating (above); migrating anyway: the nightly backups are there"
+fi
+
 export ALEMBIC_CONTROL_URL="$DB_URL"
 sudo -u "$SVC_USER" --preserve-env=ALEMBIC_CONTROL_URL \
   "$APP_DIR/.venv/bin/python" -m alembic -c alembic-control.ini upgrade head

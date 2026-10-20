@@ -244,6 +244,45 @@ def test_update_makes_the_api_tmpdir():
     assert 'chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"' in data_step
 
 
+def _update_migrations(tmp_path: Path, backup_rc: int) -> tuple[str, list[str]]:
+    """Run update-api.sh's migrations step with sudo stubbed (the backup
+    answering backup_rc); returns its output and each sudo call, with the
+    database URL and DATA_DIR the backup was handed."""
+    env = tmp_path / "env"
+    env.write_text("CONTROL_PLANE_DATABASE_URL=postgresql://app@db/control_plane\nDATA_DIR=/mnt/ssd2/lumiverb\n")
+    calls = tmp_path / "sudo-calls"
+    calls.write_text("")
+    text = UPDATE_API.read_text()
+    block = text.split('step "Running migrations"', 1)[1].split("# ----", 1)[0]
+    script = (
+        'step() { :; }; ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }; fail() { echo "fail: $1"; exit 1; }\n'
+        "systemctl() { return 1; }\n"
+        f'sudo() {{ echo "$* | ${{CONTROL_PLANE_DATABASE_URL:-}} ${{DATA_DIR:-}}" >> "{calls}";'
+        f' [[ "$*" != *"backup --if-migrating"* ]] || return {backup_rc}; }}\n'
+        f'ENV_FILE="{env}"; APP_DIR=/opt/lumiverb; SVC_USER=lumiverb; UV_BIN=/usr/local/bin/uv\n'
+        + block
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+    return out.stdout + out.stderr, calls.read_text().splitlines()
+
+
+def test_an_update_backs_up_before_migrating(tmp_path):
+    # As a Mac's service does: the service user's lumiverb-server, only when there's something to migrate.
+    out, calls = _update_migrations(tmp_path, 0)
+    assert calls[0] == ("-u lumiverb --preserve-env=CONTROL_PLANE_DATABASE_URL,DATA_DIR "
+                        "/opt/lumiverb/.venv/bin/lumiverb-server backup --if-migrating"
+                        " | postgresql://app@db/control_plane /mnt/ssd2/lumiverb")
+    assert "alembic-control.ini upgrade head" in calls[1] and "migrate.sh" in calls[2]
+    assert "ok: Backed up before migrating" in out and "warn:" not in out
+
+
+def test_an_update_whose_backup_fails_says_so_and_migrates(tmp_path):
+    out, calls = _update_migrations(tmp_path, 1)
+    assert "warn: No backup before migrating" in out
+    assert "alembic-control.ini upgrade head" in calls[1] and "migrate.sh" in calls[2]
+
+
 def _update_scheduler(tmp_path: Path, env_text: str, *, processing: bool = True,
                       worker: bool = True) -> tuple[str, list[str], Path]:
     """Run update-api.sh's scheduler step; returns its output, the systemctl

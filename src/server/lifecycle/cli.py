@@ -374,25 +374,35 @@ def _install_own(env: dict[str, str], url: str, *, say, fail) -> None:
     install_own(url, data, environ=env, say=say, fail=fail)
 
 
-def backed_up_before_upgrade(env: dict[str, str], url: str) -> backups.Backup | None:
-    """A backup before migrations this version brings (an upgrade's), into
-    the backups folder, else DATA_DIR/backups (the chosen one may be a drive
-    that isn't plugged in). One that can't be made is logged, and the
-    upgrade goes on: the nightly ones are there, and a service that won't
-    start after an upgrade is worse. None when nothing needs migrating."""
-    if not pending(url):
-        return None
+def back_up_before_migrating(env: dict[str, str], url: str) -> backups.Backup:
+    """An upgrade's backup, into the backups folder, else DATA_DIR/backups
+    (the chosen one may be a drive that isn't plugged in). BackupError naming
+    each folder tried when neither takes it."""
     data, pg_bin = data_dir(env), env.get("PG_BIN") or None
     tried = []
     for dest in dict.fromkeys([backups.folder(data), backups.default_folder(data)]):
         try:
-            backup = backups.back_up(data, url, "before-upgrade", pg_bin=pg_bin, dest=dest)
-            logger.info("Backed up before migrating: %s", backup.path)
-            return backup
+            return backups.back_up(data, url, "before-upgrade", pg_bin=pg_bin, dest=dest)
         except backups.BackupError as exc:
             tried.append(f"{dest}: {exc}")
-    logger.error("No backup before migrating (%s); migrating anyway", "; ".join(tried))
-    return None
+    raise backups.BackupError("; ".join(tried))
+
+
+def backed_up_before_upgrade(env: dict[str, str], url: str) -> backups.Backup | None:
+    """A backup before migrations this version brings (an upgrade's: a Mac's
+    service), as back_up_before_migrating. One that can't be made is
+    logged, and the upgrade goes on: the nightly ones are there, and a
+    service that won't start after an upgrade is worse. None when nothing
+    needs migrating."""
+    if not pending(url):
+        return None
+    try:
+        backup = back_up_before_migrating(env, url)
+    except backups.BackupError as exc:
+        logger.error("No backup before migrating (%s); migrating anyway", exc)
+        return None
+    logger.info("Backed up before migrating: %s", backup.path)
+    return backup
 
 
 def _created_and_migrated(url: str, env: dict[str, str] | None = None) -> int:
@@ -710,13 +720,29 @@ def _backup(args: argparse.Namespace) -> int:
     as_data_owner(data)
     try:
         with up_while(Path(env["PG_BIN"]) if env.get("PG_BIN") else None, data, url, env):
-            backup = backups.back_up(data, url, "before-upgrade" if args.before_upgrade else "now",
-                                     pg_bin=env.get("PG_BIN") or None)
+            if args.if_migrating:
+                if not _migrating(url):
+                    print("✓ Nothing to migrate: no backup needed")
+                    return 0
+                backup = back_up_before_migrating(env, url)
+            else:
+                backup = backups.back_up(data, url, "before-upgrade" if args.before_upgrade else "now",
+                                         pg_bin=env.get("PG_BIN") or None)
     except (backups.BackupError, PostgresError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1
     print(f"✓ Backed up {len(backup.databases)} database(s), {_size(backup.bytes)}: {backup.path}")
     return 0
+
+
+def _migrating(url: str) -> bool:
+    """Whether this version has migrations to run here; when that can't be
+    told, as if it had: a backup too many is better than one missing."""
+    try:
+        return pending(url)
+    except MigrationError as exc:
+        print(f"! Can't tell whether there's anything to migrate ({exc}): backing up", file=sys.stderr)
+        return True
 
 
 def _which_backup(name: str, data: Path) -> backups.Backup:
@@ -990,6 +1016,9 @@ def main(argv: list[str] | None = None) -> int:
     _env_option(backup_command, argparse.SUPPRESS)
     backup_command.add_argument("--before-upgrade", action="store_true",
                                 help="an upgrade's backup, before migrating (the 3 newest kept however old)")
+    backup_command.add_argument("--if-migrating", action="store_true",
+                                help="an upgrade's backup, only when this version has migrations to run here, into "
+                                     "the backups folder or else DATA_DIR/backups (a Linux update's)")
     restore_command = commands.add_parser(
         "restore", help="put every database back from a backup, with Lumiverb stopped (what's there is backed up first)")
     _env_option(restore_command, argparse.SUPPRESS)

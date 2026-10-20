@@ -15,7 +15,8 @@ only: they hold password hashes.
 Kinds: nightly (the 5-minute upkeep starts one when none has been made
 since the latest 03:00 here, so a Mac asleep then makes it on waking), now
 (an admin's Back up now, or `lumiverb-server backup`), before-upgrade (a
-Mac's service, before migrations it hasn't run yet) and before-restore
+Mac's service, and a Linux update's `lumiverb-server backup --if-migrating`,
+before migrations not run yet) and before-restore
 (made by a restore first, so it can be undone).
 
 Kept: every backup of the last 7 days, the newest of each of the 4 latest

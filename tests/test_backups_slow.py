@@ -317,6 +317,26 @@ def test_an_upgrade_backs_up_to_the_data_folder_when_the_chosen_one_is_gone(serv
     assert made is not None and made.path.parent == data / "backups"
 
 
+def test_a_linux_update_backs_up_only_when_there_is_something_to_migrate(server, tmp_path, monkeypatch, capsys):
+    # scripts/update-api.sh's `lumiverb-server backup --if-migrating`, as the service user, before migrating.
+    base, name = server
+    w = _worker()
+    control_url, tenant_url = _install(base, name(f"bk9_control_{w}"), name(f"bk9_ten_{w}"))
+    monkeypatch.setenv("CONTROL_PLANE_DATABASE_URL", control_url)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PG_BIN", PG_BIN)
+    monkeypatch.delenv("LUMIVERB_ENV_FILE", raising=False)
+    assert cli.main(["backup", "--if-migrating"]) == 0
+    assert "Nothing to migrate: no backup needed" in capsys.readouterr().out
+    assert not (tmp_path / "backups").exists() or backups.list_backups(tmp_path / "backups") == []
+
+    subprocess.run([sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "downgrade", "-1"],
+                   cwd=APP_DIR, env={**os.environ, "ALEMBIC_TENANT_URL": tenant_url}, check=True, capture_output=True)
+    assert cli.main(["backup", "--if-migrating"]) == 0
+    assert "✓ Backed up 2 database(s)" in capsys.readouterr().out
+    assert [b.kind for b in backups.list_backups(tmp_path / "backups")] == ["before-upgrade"]
+
+
 def test_the_commands(server, tmp_path, monkeypatch, capsys):
     base, name = server
     w = _worker()
