@@ -111,6 +111,78 @@ def test_one_pass_adds_the_files_and_makes_what_needs_them(env, device):
     assert set(_clips(env, lib)) == {"photos/a.png", "videos/b.mp4"}
 
 
+class _ServerInNames(TestClient):
+    """The real API as a server from ADR-024 part 3 answers a reader: its lists in names (reader-changes'
+    made_with and paused, reader-work's work and remakes, GET /v1/producers' artifacts), at check-in
+    protocol 2. What the reader sends goes to the real API as it is (it takes names from part 1)."""
+
+    protocols: list[int]
+
+    def request(self, method, url, **kwargs):
+        import httpx
+
+        from src.producers.names import file_named, name_of
+
+        path = httpx.URL(str(url)).path
+        if path.endswith("/readers/check-in"):
+            self.protocols.append(kwargs["json"]["protocol"])
+        r = super().request(method, url, **kwargs)
+        if r.status_code != 200 or not (path.endswith(("/reader-changes", "/reader-work")) or path == "/v1/producers"):
+            return r
+        body = r.json()
+
+        def named(words: list[str]) -> list[str]:
+            return [file_named("proxy") if w == "previews" else name_of(w) for w in words]
+
+        if "made_with" in body:
+            body["made_with"] = {name_of(a): {**made, "producer": name_of(a)} for a, made in body["made_with"].items()}
+            body["paused"] = {k: named(v) for k, v in body["paused"].items()}
+        for clip in body.get("clips", []):
+            clip["work"], clip["remakes"] = named(clip.get("work") or []), named(clip.get("remakes") or [])
+        for row in body.get("producers", []):
+            row["artifact"] = row["producer"] = name_of(row["artifact"])
+        return httpx.Response(200, json=body, request=r.request)
+
+
+def test_against_a_server_in_names_one_pass_makes_the_same(env, device):
+    # ADR-024 phase 1 part 2: a part 2 reader speaks check-in protocol 2 and reads the lists in either spelling.
+    from src.server.api.main import app
+
+    lib, reader, api = device
+    names = _ServerInNames(app, headers=dict(api._client.headers))
+    names.protocols = []
+    api._client = names
+    _image(lib, "photos/a.png", 1)
+    _video(lib, "videos/b.mp4")
+
+    assert reader.once() == 1, "the analysis proxy, from the server's list in names"
+    video = _clips(env, lib)["videos/b.mp4"]
+    assert video["analysis_proxy_key"] and {"probe", "capture", "analysis_proxy"} <= set(video["made"])
+    assert _reader_work(env, lib) == [], "nothing left that needs the originals"
+    assert reader.once() == 0
+    assert names.protocols and set(names.protocols) == {2}
+
+
+def test_against_a_server_in_names_what_is_paused_waits(env, device):
+    from src.server.api.main import app
+
+    client, headers, *_ = env
+    lib, reader, api = device
+    names = _ServerInNames(app, headers=dict(api._client.headers))
+    names.protocols = []
+    api._client = names
+    _video(lib, "videos/b.mp4")
+    r = client.post("/v1/producers/lumiverb.video.analysis_proxy/pause", json={"scope": "work"}, headers=headers)
+    assert r.status_code == 204, r.text
+    try:
+        reader.once()
+        assert not _clips(env, lib)["videos/b.mp4"]["analysis_proxy_key"], "paused: told so in names, and waits"
+    finally:
+        client.post("/v1/producers/lumiverb.video.analysis_proxy/resume", json={"scope": "work"}, headers=headers)
+    reader.once()
+    assert _clips(env, lib)["videos/b.mp4"]["analysis_proxy_key"]
+
+
 def test_it_reads_only_its_own_libraries(env, device, tmp_path: Path):
     lib, reader, api = device
     client, headers, *_ = env

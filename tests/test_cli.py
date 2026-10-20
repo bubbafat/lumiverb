@@ -510,6 +510,50 @@ def test_download_saves_to_directory(tmp_path: Path) -> None:
     assert expected_file.read_bytes() == b"\x00" * 4
 
 
+@pytest.mark.fast
+@pytest.mark.parametrize(("size", "asked", "warned"), [
+    (None, "lumiverb.preview", False),
+    ("preview", "lumiverb.preview", False),
+    ("lumiverb.preview.thumbnail", "lumiverb.preview.thumbnail", False),
+    ("preview.thumbnail", "lumiverb.preview.thumbnail", False),
+    ("proxy", "lumiverb.preview", True),  # old words, warned of (ADR-024 phase 1 part 2)
+    ("thumbnail", "lumiverb.preview.thumbnail", True),
+])
+def test_download_asks_for_the_file_by_its_name(tmp_path: Path, size, asked, warned) -> None:
+    from contextlib import contextmanager
+
+    from httpx import Request, Response
+
+    mock_client = MagicMock()
+    mock_client.get.side_effect = lambda path, **kwargs: MagicMock(
+        json=MagicMock(return_value=[{"library_id": "lib_1", "name": "TestLib"}]))
+    streamed: list[str] = []
+
+    @contextmanager
+    def _stream_ctx(path: str, **kwargs):
+        streamed.append(path)
+        resp = Response(200, request=Request("GET", "http://example.com"))
+        resp.iter_bytes = lambda chunk_size=65536: iter([b"x"])  # type: ignore[assignment]
+        yield resp
+
+    mock_client.stream.side_effect = _stream_ctx
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(app, ["download", "--library", "TestLib", "--asset-id", "ast_123",
+                                     "--output", str(tmp_path / "out.jpg"), *(["--size", size] if size else [])])
+    assert result.exit_code == 0, result.output
+    assert streamed == [f"/v1/assets/ast_123/artifacts/{asked}"]
+    assert ("is called" in result.output) == warned
+
+
+@pytest.mark.fast
+def test_download_refuses_a_size_that_isnt_a_file(tmp_path: Path) -> None:
+    with patch("src.client.cli.main.LumiverbClient") as client:
+        result = runner.invoke(app, ["download", "--library", "TestLib", "--asset-id", "ast_123",
+                                     "--output", str(tmp_path / "out.jpg"), "--size", "huge"])
+    assert result.exit_code == 1 and "preview, preview.thumbnail" in result.output
+    client.assert_not_called()
+
+
 def _closed_port() -> int:
     """A port on this machine nothing listens on."""
     import socket

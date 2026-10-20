@@ -4,7 +4,7 @@ The scheduler's own disk cache of clips' previews (`src/processing/proxy/proxy_c
 
 **Beside the API there's none.** Where the API keeps the previews on the same machine (`STORAGE_PROVIDER=local`, as on a Mac's install), a job reads each clip's stored preview from the Store, by the key its queue row carries (`src/server/scheduler/inputs.py` `Inputs.preview_bytes`), sized for CLIP, faces, OCR and descriptions; this cache isn't asked. Its scans write nothing here and don't list unchanged files (`run_scan`, `cache_previews` false), and at its start it removes the copies an earlier scheduler kept when its cache is inside the server's data folder (`forget_preview_copies`).
 
-**Apart from the API** (`cache_previews` true, `src/server/scheduler/scans.py`), its scans keep each preview they make and download the unchanged clips', and its jobs read them here, downloading one it lacks (`GET /v1/assets/{asset_id}/artifacts/proxy`).
+**Apart from the API** (`cache_previews` true, `src/server/scheduler/scans.py`), its scans keep each preview they make and download the unchanged clips', and its jobs read them here, downloading one it lacks (`GET /v1/assets/{asset_id}/artifacts/lumiverb.preview`, by its name: ADR-024).
 
 ## Location
 

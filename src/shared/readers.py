@@ -16,6 +16,10 @@ from collections.abc import Mapping
 from typing import Any
 
 SERVER = "server"
+# The check-in protocol a reader speaks (POST /v1/readers/check-in): 2 is the names (ADR-024 phase 1 part 2).
+# A reader reads the server's lists in either spelling, so a server at protocol 1 (today's ids, before part 3)
+# is read as well; from part 3 a server speaks 2 only (src/server/check_ins.py).
+PROTOCOL = 2
 
 
 def read_by_server(library: Mapping[str, Any] | Any) -> bool:

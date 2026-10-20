@@ -4,13 +4,13 @@
 
 Accepted (2026-10-19, Robert: he answered its questions and set its phases). From Robert's question during ADR-023 phase 3: how does one producer know another's data is ready, and could a plug-in depend on data another plug-in makes? The decisions marked **Robert** are his, from that conversation, his answers to its questions included ("Robert's answers"); the rest are proposals that each phase's plan settles. Builds on ADR-023: it widens decision 4 (what a plug-in can read) and decision 5 (what it gives back).
 
-Phase 1's part 1 is built: the names (`src/producers/names.py`, `docs/data-names.md`), taken by the server. ADR-023 phase 3 (GeoNames moved out, done in v0.1.104) didn't anticipate it.
+Phase 1's part 1 is done (v0.1.105): the names (`src/producers/names.py`, `docs/data-names.md`), taken by the server; part 2, the clients speaking them, is built. ADR-023 phase 3 (GeoNames moved out, done in v0.1.104) didn't anticipate it.
 
 ## Progress
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Lumiverb's own data named (Robert: "refactor builtins to align to the new naming schema"): each built-in producer's data and protocol 1's inputs get `lumiverb.*` names in plain words, documented, and every built-in producer declares by name what it reads and makes | Being built: `docs/adr/024-phase-1-plan.md`, revised for Robert's decision (2026-10-19: "Rename everything. I don't want half-baked."): every identifier family renamed to the names, in five parts. Part 1 (the server takes the names, `migrate --to`, `lumiverb producers --compare`, the reserved plug-in ids) built; parts 2–5 not started |
+| 1 | Lumiverb's own data named (Robert: "refactor builtins to align to the new naming schema"): each built-in producer's data and protocol 1's inputs get `lumiverb.*` names in plain words, documented, and every built-in producer declares by name what it reads and makes | Being built: `docs/adr/024-phase-1-plan.md`, revised for Robert's decision (2026-10-19: "Rename everything. I don't want half-baked."): every identifier family renamed to the names, in five parts. Part 1 (the server takes the names, `migrate --to`, `lumiverb producers --compare`, the reserved plug-in ids) done in v0.1.105; part 2 (the clients speak the names: both CLIs, the device and scan at check-in protocol 2, the apps and Resolve) built; parts 3–5 not started |
 | 2 | Lumiverb's plug-ins renamed (Robert: "refactor existing plugins to use the new schema where they use the prefix that matches the plugin name"): GeoNames' `at` and `near` become `geonames.landmark` and `geonames.town`, the example's `example.caption`, `example.taken` and `example.shape` | Not started |
 | 3 | Plug-ins read each other's data: names, types, versions and contract in the manifest; the checks at install, upgrade and removal; waiting and the inputs' hash; broken chains warned of on Settings › Plug-ins | Not started |
 | 4 | Search by what a clip has: `has:<name>`, and not | Not started |

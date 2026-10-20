@@ -46,8 +46,10 @@ def _run(*args: str):
 
 
 @pytest.mark.parametrize(("args", "path"), [
-    (["pause", "vision"], "/v1/producers/vision/pause"),
-    (["resume", "vision"], "/v1/producers/vision/resume"),
+    # By the name of what it makes (ADR-024 phase 1 part 2), sent as the server lists it: today's id before part 3.
+    (["pause", "image.description"], "/v1/producers/vision/pause"),
+    (["resume", "lumiverb.image.description"], "/v1/producers/vision/resume"),
+    (["resume", "vision"], "/v1/producers/vision/resume"),  # its old word, warned of
     (["resume", "upkeep"], "/v1/producers/upkeep/resume"),
     (["pause", "all"], "/v1/producers/all/pause"),
     (["resume", "all"], "/v1/producers/all/resume"),
@@ -74,7 +76,7 @@ def test_without_a_name_nothing_happens_and_the_names_are_listed(client, command
     client.raw.assert_not_called()
     out = " ".join(result.output.split())
     assert f"lumiverb {command} <name>" in out
-    assert "all, scans, upkeep, vision, ocr" in out
+    assert "all, scans, upkeep, image.description, image.text" in out
 
 
 @pytest.mark.parametrize(("args", "body"), [
@@ -97,7 +99,7 @@ def test_a_library_that_isnt_there_or_without_scans_acts_on_nothing(client):
     client.get.side_effect = lambda path, **kw: _response(200, LIBRARIES)
     result = _run("pause", "scans", "--library", "Nope")
     assert result.exit_code == 1 and "Library not found: Nope" in result.output
-    result = _run("pause", "vision", "--library", "Footage")
+    result = _run("pause", "image.description", "--library", "Footage")
     assert result.exit_code == 2 and "--library goes with scans" in result.output
     client.raw.assert_not_called()
 
@@ -112,3 +114,24 @@ def test_refusals_say_why(client, args, status, body, says):
     client.raw.return_value = _response(status, body)
     result = _run(*args)
     assert result.exit_code == 1 and says in result.output
+
+
+def test_what_no_switch_is_called_is_asked_of_the_server_by_its_name(client):
+    # The server says why a producer has no switch (what scans make): asked by its name, as every server from
+    # v0.1.105 takes it.
+    client.raw.return_value = _response(409, {"error": {"code": "not_scheduled", "message": "made by scans"}})
+    result = _run("pause", "proxy")
+    client.raw.assert_called_once_with("POST", "/v1/producers/lumiverb.preview/pause", json={"scope": "work"})
+    assert "proxy is called preview now" in " ".join(result.output.split())
+
+
+def test_a_server_from_part_3_is_sent_the_names(client):
+    client.get.return_value = _response(200, {"state": "running", "switches": [
+        {"target": "upkeep", "title": "Upkeep"}, {"target": "lumiverb.image.description", "title": "Descriptions"},
+        {"target": "geonames", "title": "Place names"}]})
+    for typed, path in (("vision", "lumiverb.image.description"), ("image.description", "lumiverb.image.description"),
+                        ("geonames", "geonames"), ("plugin_geonames", "geonames")):
+        client.raw.reset_mock()
+        result = _run("pause", typed)
+        assert result.exit_code == 0, result.output
+        client.raw.assert_called_once_with("POST", f"/v1/producers/{path}/pause", json={"scope": "work"})

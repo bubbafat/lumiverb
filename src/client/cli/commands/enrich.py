@@ -5,8 +5,10 @@ The scheduler on the server does all processing (ADR-016): this asks it to
 try a producer's failing clips again at once and look again now, or with
 --redo to make again what it's made (re-detecting faces, say). The
 producer and the libraries are named (a producer or all; --library or
---all), never inferred from what's missing (Robert, Oct 9). It goes as the
-scheduler goes: by tier, within its pools, and what's paused waits.
+--all), never inferred from what's missing (Robert, Oct 9); a producer by
+the name of what it makes, with or without `lumiverb.`, or its old word,
+warned of (src/client/cli/words.py). It goes as the scheduler goes: by tier,
+within its pools, and what's paused waits.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from rich.markup import escape
 
 from src.client.cli.client import LumiverbClient
 from src.client.cli.commands.archive import library_id_for
+from src.client.cli.words import producers_listed, resolved
 
 console = Console()
 
@@ -49,7 +52,8 @@ def _said(p: dict, redo: bool) -> str:
 def register(app: typer.Typer) -> None:
     @app.command("enrich")
     def enrich(
-        producer: Annotated[str | None, typer.Argument(help="A producer (e.g. faces, transcript), or all.")] = None,
+        producer: Annotated[str | None, typer.Argument(
+            help="A producer (e.g. image.faces, video.transcript), or all.")] = None,
         library: Annotated[str | None, typer.Option("--library", "-l", help="A library (name or id).")] = None,
         every_library: Annotated[bool, typer.Option("--all", help="Every library.")] = False,
         redo: Annotated[bool, typer.Option("--redo", help="Make again what's made (admins).")] = False,
@@ -59,6 +63,7 @@ def register(app: typer.Typer) -> None:
             console.print("Usage: lumiverb enrich PRODUCER|all (--library NAME | --all) [--redo]")
             raise typer.Exit(2)
         client = LumiverbClient()
+        producer = resolved(producer, ["all", *producers_listed(client)])
         body = {"producer": producer, "scope": "redo" if redo else "new",
                 **({"all": True} if every_library else {"library_ids": [library_id_for(client, library or "")]})}
         r = client.raw("POST", "/v1/producers/run", json=body)

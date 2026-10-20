@@ -3,6 +3,8 @@
 One switch per processing action: each producer the scheduler makes and
 `upkeep`; `all` is every one, and every library's scans. `scans` is each
 library's own (ADR-018 phase 1): every library's, or one with --library.
+A producer is named by what it makes, with or without `lumiverb.`
+(`image.description`), or by its old word, warned of (src/client/cli/words.py).
 Without a name nothing happens and the names are listed. After acting it
 says the account's state, derived from the switches and the libraries'
 scans: Running, Partly paused or Paused.
@@ -17,6 +19,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from src.client.cli.client import LumiverbClient
+from src.client.cli.words import resolved, shown, switches_listed
 
 console = Console()
 
@@ -37,7 +40,7 @@ def _switches(client: LumiverbClient) -> dict:
 
 
 def _usage(client: LumiverbClient, command: str) -> None:
-    names = [sw["target"] for sw in _switches(client).get("switches") or []]
+    names = [shown(sw["target"]) for sw in _switches(client).get("switches") or []]
     console.print(f"Usage: lumiverb {command} <name> (scans: --library NAME for one library's)")
     console.print(f"Names: {', '.join(['all', 'scans', *names]) if names else 'all, scans, upkeep or a producer'}")
     raise typer.Exit(2)
@@ -64,10 +67,16 @@ def _act(command: str, name: str | None, library: str | None = None) -> None:
         body = {"library_ids": [_library_id(client, library)]} if library else {"all": True}
         r = client.raw("POST", f"/v1/libraries/scans/{command}", json=body)
     else:
-        # "all" is a target like any other; a switch's work, never only its redo.
+        # "all" is a target like any other; a switch's work, never only its redo. Sent as the server lists it
+        # (when it can't say, by the name of what each makes, which every server from v0.1.105 takes).
+        from src.producers.names import name_of
+        from src.shared.producers import pause_targets
+
+        listed = switches_listed(client) or ["all", *(name_of(a) for a in pause_targets())]
+        name = resolved(name, listed, "switch", server_says=True)
         r = client.raw("POST", f"/v1/producers/{name}/{command}", json={"scope": "work"})
     if r.status_code >= 400:
-        what = f"{name} of {library}" if library else name or ""
+        what = f"{name} of {library}" if library else shown(name or "")
         console.print(f"[red]Couldn't {command} {escape(what)}: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
     queue = _switches(client)
@@ -81,7 +90,8 @@ def _act(command: str, name: str | None, library: str | None = None) -> None:
 def register(app: typer.Typer) -> None:
     @app.command("pause")
     def pause(
-        name: Annotated[str | None, typer.Argument(help="A producer (e.g. vision), scans, upkeep, or all.")] = None,
+        name: Annotated[str | None, typer.Argument(
+            help="A producer (e.g. image.description), scans, upkeep, or all.")] = None,
         library: Annotated[str | None, typer.Option(help="With scans: this library's only (its name or id).")] = None,
     ) -> None:
         """Pause one processing switch, or all (admins). What's running finishes."""
@@ -89,7 +99,8 @@ def register(app: typer.Typer) -> None:
 
     @app.command("resume")
     def resume(
-        name: Annotated[str | None, typer.Argument(help="A producer (e.g. vision), scans, upkeep, or all.")] = None,
+        name: Annotated[str | None, typer.Argument(
+            help="A producer (e.g. image.description), scans, upkeep, or all.")] = None,
         library: Annotated[str | None, typer.Option(help="With scans: this library's only (its name or id).")] = None,
     ) -> None:
         """Resume one processing switch, or all (admins)."""

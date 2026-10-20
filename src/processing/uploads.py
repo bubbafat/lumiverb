@@ -31,10 +31,13 @@ def send(client: Any, asset_id: str, artifact: str, path: Path, lineage: dict, *
          chunk_size: int | None = None) -> dict:
     """Upload the file at path as the clip's video preview or analysis
     proxy, in chunks of the server's suggested size (or chunk_size, up to
-    the server's most). The finish's answer: {key, sha256, duration_sec}."""
+    the server's most). The finish's answer: {key, sha256, duration_sec}.
+    The file is sent by its name (ADR-024: lumiverb.video.analysis_proxy)."""
+    from src.producers.names import file_named
+
     size = path.stat().st_size
     upload = client.post(f"/v1/assets/{asset_id}/uploads", retry=True, json={
-        "artifact": artifact, "size": size, "sha256": sha256_of(path), "lineage": lineage}).json()
+        "artifact": file_named(artifact), "size": size, "sha256": sha256_of(path), "lineage": lineage}).json()
     url, received = upload["chunk_url"], upload["received"]
     step = min(chunk_size or upload["chunk_size"], upload["max_chunk"])
     with open(path, "rb") as f:

@@ -325,8 +325,9 @@ def test_the_unchanged_files_fill_the_schedulers_preview_cache(root: Path) -> No
                        plan={"a.jpg": ("unchanged", None, "ast_a"), "b.jpg": ("hash", "changed", "ast_b")},
                        decide=lambda rel, sha: {"decision": "unchanged", "asset_id": "ast_b"})
     _scan(server, root, cache_previews=True)
-    assert [r.path for r in server.requests if r.path.endswith("/artifacts/proxy")] == [
-        "/v1/assets/ast_a/artifacts/proxy", "/v1/assets/ast_b/artifacts/proxy"]
+    # Each preview by its name (ADR-024 phase 1 part 2: a server takes it from part 1).
+    assert [r.path for r in server.requests if "/artifacts/" in r.path] == [
+        "/v1/assets/ast_a/artifacts/lumiverb.preview", "/v1/assets/ast_b/artifacts/lumiverb.preview"]
 
 
 def test_where_previews_are_read_in_place_a_scan_keeps_no_copies(root: Path, tmp_path: Path) -> None:
@@ -339,7 +340,7 @@ def test_where_previews_are_read_in_place_a_scan_keeps_no_copies(root: Path, tmp
     stats = _scan(server, root, cache_previews=False)
     assert server.ingested() == ["b.jpg"] and stats.unchanged == 1
     assert {r.params.get("action") for r in server.requests if r.path.endswith("/plan")} == {"upload,hash,skipped"}
-    assert not [r for r in server.requests if r.path.endswith("/artifacts/proxy")]
+    assert not [r for r in server.requests if "/artifacts/" in r.path]
     assert not (tmp_path / "cache" / "lumiverb" / "proxies").exists()
 
 

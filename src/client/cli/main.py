@@ -1061,8 +1061,8 @@ def download(
     ] = None,
     size: Annotated[
         str,
-        typer.Option("--size", "-s", help="Which file to download: proxy or thumbnail."),
-    ] = "proxy",
+        typer.Option("--size", "-s", help="Which file to download: preview or preview.thumbnail."),
+    ] = "preview",
     output: Annotated[
         str | None,
         typer.Option(
@@ -1080,9 +1080,17 @@ def download(
     import os
     import sys
 
-    if size not in ("proxy", "thumbnail"):
-        console.print("[red]--size must be one of: proxy, thumbnail[/red]")
+    from src.producers.names import PREFIX, file_in, file_named, short
+
+    # A file by its name, with or without lumiverb. (ADR-024), or its old word, warned of.
+    files = ("lumiverb.preview", "lumiverb.preview.thumbnail")
+    name = next((n for n in (size, PREFIX + size, file_named(size)) if n in files), None)
+    if name is None:
+        console.print("[red]--size must be one of: preview, preview.thumbnail[/red]")
         raise typer.Exit(1)
+    if name == file_named(size) != size:
+        Console(stderr=True).print(f"[yellow]{size} is called {short(name)} now: type that (the old word goes "
+                                   "in a later release)[/yellow]")
 
     # Guard: refuse to write binary to a TTY
     stdout_is_tty = sys.stdout.isatty()
@@ -1099,9 +1107,9 @@ def download(
     resolved_asset_id = _resolve_asset_id(client, library_id, asset_id, path)
 
     # Stream the response so we don't buffer the whole file in memory
-    with client.stream(f"/v1/assets/{resolved_asset_id}/artifacts/{size}") as resp:
+    with client.stream(f"/v1/assets/{resolved_asset_id}/artifacts/{name}") as resp:
         if resp.status_code == 404:
-            console.print(f"[red]No {size} available for asset {resolved_asset_id}[/red]")
+            console.print(f"[red]No {short(name)} available for asset {resolved_asset_id}[/red]")
             raise typer.Exit(1)
 
         resp.raise_for_status()
@@ -1120,7 +1128,7 @@ def download(
                 # derive filename from asset rel_path
                 asset_resp = client.get(f"/v1/assets/{resolved_asset_id}").json()
                 stem = Path(asset_resp["rel_path"]).stem
-                out_path = out_dir / f"{stem}_{size}.jpg"
+                out_path = out_dir / f"{stem}_{file_in(name)}.jpg"  # named as before: scripts look for it
             else:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
 

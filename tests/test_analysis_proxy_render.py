@@ -723,7 +723,7 @@ class _Client:
 
 
 def _url(asset_id: str) -> str:
-    return f"/v1/assets/{asset_id}/artifacts/analysis_proxy"
+    return f"/v1/assets/{asset_id}/artifacts/lumiverb.video.analysis_proxy"  # by its name (ADR-024)
 
 
 def _cached(cache: AnalysisProxyCache, asset_id: str) -> Path | None:

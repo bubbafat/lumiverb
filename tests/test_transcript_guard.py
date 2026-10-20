@@ -226,7 +226,7 @@ def test_a_surprise_on_one_clip_charges_it_and_the_rest_go_on(library):
 
     with patch("src.producers.transcript.work.transcribe", side_effect=transcribe_one):
         _run(client, library, _clips("ast_a", "ast_b", "ast_c"))
-    assert [(c["asset_id"], c["artifact"]) for c in _charged(client)] == [("ast_a", "transcript")]
+    assert [(c["asset_id"], c["artifact"]) for c in _charged(client)] == [("ast_a", "lumiverb.video.transcript")]
     assert set(_transcripts(client)) == {"ast_c"}
 
 
@@ -248,7 +248,7 @@ def test_a_clip_the_machine_couldnt_make_sense_of_is_charged_once_the_machine_ch
 
     with patch("src.producers.transcript.work.transcribe", side_effect=transcribe_one):
         _run(client, library, _clips("ast_a", "ast_b"))
-    assert [(c["asset_id"], c["artifact"]) for c in _charged(client)] == [("ast_a", "transcript")]
+    assert [(c["asset_id"], c["artifact"]) for c in _charged(client)] == [("ast_a", "lumiverb.video.transcript")]
     assert set(_transcripts(client)) == {"ast_b"}
 
 

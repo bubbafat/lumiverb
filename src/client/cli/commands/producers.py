@@ -7,6 +7,9 @@ while the producer's redo runs: a new setting or model asks whether to
 remake them too or make only new files (ADR-018 decision 6), which stops
 its redo. An admin can stop a producer's redo and resume it. Pausing is
 `lumiverb pause|resume` (commands/pausing.py); the listing says the state.
+A producer is named by what it makes, with or without `lumiverb.`, or by its
+old word, warned of; what the server answers is read in either spelling
+(src/client/cli/words.py).
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
 from src.client.cli.commands.archive import library_id_for
+from src.client.cli.words import producers_listed, resolved, shown
 
 producers_app = typer.Typer(
     help="What each producer has made (current, missing, stale, failing), pausing and resuming, and its redo.",
@@ -115,12 +119,9 @@ COMPARED = ("counts", "settings", "settings_hash", "paused", "redo_stopped", "ne
 def _by_name(answer: dict) -> dict[str, dict]:
     """A saved GET /v1/producers answer's producers by name (ADR-024: what each was called before, by RENAMED;
     an installed plug-in's work by its plug-in's id), each with what --compare holds equal."""
-    from src.producers.names import ARTIFACTS
+    from src.producers.names import said
 
-    def name(artifact: str) -> str:
-        return ARTIFACTS.get(artifact) or artifact.removeprefix("plugin_")
-
-    return {name(p["artifact"]): {k: p.get(k) for k in COMPARED} for p in answer.get("producers", [])}
+    return {said(p["artifact"]): {k: p.get(k) for k in COMPARED} for p in answer.get("producers", [])}
 
 
 def compare(before: dict, after: dict) -> list[str]:
@@ -165,8 +166,12 @@ def producers_list(
             console.print(f"{sw['title']}: {'[yellow]Paused[/yellow]' if sw.get('paused') else 'Running'}")
     # How long is left is the whole account's: only with its counts, and while the scheduler runs.
     eta = (queue.get("eta") or {}) if queue.get("live") and not params else {}
-    left = eta.get("producers") or {}
-    paused_left = {n.get("artifact") for n in eta.get("not_counted") or [] if n.get("why") == "paused"}
+    from src.producers.names import said
+
+    # By what each makes, whichever spelling the server answers in.
+    left = {said(a): s for a, s in (eta.get("producers") or {}).items()}
+    paused_left = {said(n["artifact"]) for n in eta.get("not_counted") or [] if n.get("why") == "paused"
+                   and n.get("artifact")}
     table = Table(show_header=True, header_style="bold")
     columns = ("Producer", "Current", "Missing", "Stale", "Failing", "Redo", *(("Left",) if eta else ()))
     for col in columns:
@@ -175,19 +180,21 @@ def producers_list(
     for p in producers:
         c = p.get("counts") or {}
         paused = " [yellow]paused[/yellow]" if p.get("paused") else ""
-        took = left.get(p["artifact"])
-        held = p["artifact"] in paused_left
-        table.add_row(f"{escape(p['title'])} [dim]({p['artifact']})[/dim]{paused}", _n(c.get("current", 0)),
+        took = left.get(said(p["artifact"]))
+        held = said(p["artifact"]) in paused_left
+        table.add_row(f"{escape(p['title'])} [dim]({escape(shown(p['artifact']))})[/dim]{paused}",
+                      _n(c.get("current", 0)),
                       _n(c.get("missing", 0)), _n(c.get("stale", 0)), _n(c.get("failing", 0)), _redo(p),
                       *(("Paused" if held else _duration(took) if took else "",) if eta else ()))
         if p.get("paused"):
-            notes.append(f"{p['title']}: paused; lumiverb resume {p['artifact']} carries on.")
+            notes.append(f"{p['title']}: paused; lumiverb resume {shown(p['artifact'])} carries on.")
         if c.get("below"):
             notes.append(f"{p['title']}: {c['below']:,} made below the detail now (not counted as current).")
         if c.get("stale") and not p.get("redoable", True):
             notes.append(f"{p['title']} isn't made again yet: {p.get('why_not') or ''}")
         elif p.get("redo_stopped"):
-            notes.append(f"{p['title']}: redo stopped; lumiverb producers redo resume {p['artifact']} carries on.")
+            notes.append(f"{p['title']}: redo stopped; lumiverb producers redo resume {shown(p['artifact'])}"
+                         " carries on.")
     console.print(table)
     if eta:
         console.print(escape(_caught_up(eta)))
@@ -207,15 +214,18 @@ def _error(r) -> str:
 
 @redo_app.command("stop")
 def redo_stop(
-    artifact: Annotated[str, typer.Argument(help="The producer, as the listing names it (e.g. vision, ocr, clip).")],
+    artifact: Annotated[str, typer.Argument(
+        help="The producer, as the listing names it (e.g. image.description, image.text).")],
 ) -> None:
     """Stop redoing a producer's stale clips (admins). What's missing is still made."""
-    r = LumiverbClient().raw("POST", f"/v1/producers/{artifact}/pause", json={"scope": "redo"})
+    client = LumiverbClient()
+    artifact = resolved(artifact, producers_listed(client))
+    r = client.raw("POST", f"/v1/producers/{artifact}/pause", json={"scope": "redo"})
     if r.status_code >= 400:
         console.print(f"[red]Couldn't stop: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
-    console.print(f"Stopped redoing {escape(artifact)}: its stale clips stay as they are until lumiverb producers "
-                  f"redo resume {escape(artifact)} (or its model or settings change).")
+    console.print(f"Stopped redoing {escape(shown(artifact))}: its stale clips stay as they are until lumiverb "
+                  f"producers redo resume {escape(shown(artifact))} (or its model or settings change).")
 
 
 @redo_app.command("resume")
@@ -223,16 +233,19 @@ def redo_resume(
     artifact: Annotated[str, typer.Argument(help="The producer whose redo carries on.")],
 ) -> None:
     """Redo a producer's stale clips again (admins), after anything missing."""
-    r = LumiverbClient().raw("POST", f"/v1/producers/{artifact}/resume", json={"scope": "redo"})
+    client = LumiverbClient()
+    artifact = resolved(artifact, producers_listed(client))
+    r = client.raw("POST", f"/v1/producers/{artifact}/resume", json={"scope": "redo"})
     if r.status_code >= 400:
         console.print(f"[red]Couldn't resume: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
-    console.print(f"Redoing {escape(artifact)} again, after anything missing.")
+    console.print(f"Redoing {escape(shown(artifact))} again, after anything missing.")
 
 
 @producers_app.command("failures")
 def producers_failures(
-    artifact: Annotated[str | None, typer.Argument(help="Only this producer's (e.g. vision, transcript).")] = None,
+    artifact: Annotated[str | None, typer.Argument(
+        help="Only this producer's (e.g. image.description, video.transcript).")] = None,
     library: Annotated[str | None, typer.Option("--library", help="Only this library (name or id).")] = None,
     limit: Annotated[int, typer.Option("--limit", help="How many (newest failure first).")] = 50,
 ) -> None:
@@ -240,7 +253,7 @@ def producers_failures(
     client = LumiverbClient()
     params: dict = {"limit": max(1, min(limit, 500))}
     if artifact:
-        params["artifact"] = artifact
+        params["artifact"] = resolved(artifact, producers_listed(client))
     if library:
         params["library_id"] = library_id_for(client, library)
     r = client.raw("GET", "/v1/producers/failures", params=params)
@@ -257,7 +270,7 @@ def producers_failures(
         table.add_column(col, overflow="fold")
     for f in items:
         nxt = "given up" if f.get("given_up") else (f.get("retry_at") or "")[:16].replace("T", " ")
-        table.add_row(f"{escape(f['rel_path'])} [dim]({escape(f['library_name'])})[/dim]", f["artifact"],
+        table.add_row(f"{escape(f['rel_path'])} [dim]({escape(f['library_name'])})[/dim]", escape(shown(f["artifact"])),
                       str(f.get("attempts", 0)), nxt, escape(f.get("error", ""))[:300])
     console.print(table)
     if data.get("next_cursor"):
@@ -267,7 +280,7 @@ def producers_failures(
 
 @producers_app.command("retry")
 def producers_retry(
-    artifact: Annotated[str | None, typer.Argument(help="A producer (e.g. vision), or all.")] = None,
+    artifact: Annotated[str | None, typer.Argument(help="A producer (e.g. image.description), or all.")] = None,
     asset: Annotated[list[str] | None, typer.Option("--asset", help="This clip (repeatable).")] = None,
     library: Annotated[str | None, typer.Option("--library", help="A library (name or id).")] = None,
     every_library: Annotated[bool, typer.Option("--all", help="Every library.")] = False,
@@ -278,7 +291,7 @@ def producers_retry(
         console.print("Usage: lumiverb producers retry PRODUCER|all (--library NAME | --all | --asset ID...)")
         raise typer.Exit(2)
     client = LumiverbClient()
-    body: dict = {} if artifact == "all" else {"artifact": artifact}
+    body: dict = {} if artifact == "all" else {"artifact": resolved(artifact, producers_listed(client))}
     if asset:
         body["asset_ids"] = list(asset)
     else:
@@ -345,7 +358,7 @@ def _remake_or_not(question: str | None) -> bool | None:
 
 @producers_app.command("settings")
 def producers_settings(
-    artifact: Annotated[str, typer.Argument(help="The producer, as the listing names it (e.g. transcript).")],
+    artifact: Annotated[str, typer.Argument(help="The producer, as the listing names it (e.g. video.transcript).")],
     changes: Annotated[list[str] | None, typer.Argument(
         help="KEY=VALUE to change (admins); KEY= puts it back to its default.")] = None,
     remake: Annotated[bool, typer.Option(
@@ -365,10 +378,8 @@ def producers_settings(
     client = LumiverbClient()
     producers = {p["artifact"]: p for p in client.get("/v1/producers", params={"counts": "false"}).json()
                  .get("producers", [])}
-    p = producers.get(artifact)
-    if p is None:
-        console.print(f"[red]No producer {escape(artifact)}: one of {', '.join(producers)}.[/red]")
-        raise typer.Exit(2)
+    artifact = resolved(artifact, producers)
+    p = producers[artifact]
     fields = {f["key"]: f for f in p.get("fields") or []}
     if not changes:
         table = Table(show_header=True, header_style="bold", title=f"{p['title']} · version {p['version']}")

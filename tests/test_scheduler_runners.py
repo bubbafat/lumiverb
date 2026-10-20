@@ -189,7 +189,7 @@ def test_text_in_an_image_is_saved_with_its_lineage(acct, monkeypatch) -> None:
     _run(acct, "ocr", "ast_1")
     body = _posted(acct)["/v1/assets/batch-ocr"]
     assert body["items"] == [{"asset_id": "ast_1", "ocr_text": "STOP", "source_hash": SHA}]
-    assert body["model_id"] == acct.vision.model and body["lineage"]["producer"] == "ocr"
+    assert body["model_id"] == acct.vision.model and body["lineage"]["producer"] == "lumiverb.image.text"
 
 
 def test_no_text_result_is_judged_by_the_guard(acct, monkeypatch) -> None:
@@ -208,7 +208,7 @@ def test_a_clip_embedding_is_saved_with_its_lineage(acct) -> None:
     item, lineage = _item_posted(acct, "/v1/assets/batch-embeddings")
     assert item["vector"] == [0.1, 0.2] and item["source_hash"] == SHA
     assert (item["model_id"], item["model_version"]) == ("clip", "ViT-B-32-openai")
-    assert lineage["producer"] == "clip"
+    assert lineage["producer"] == "lumiverb.image.likeness"
     # The built-in machine's model is the scheduler's.
     acct.clip.embedder.assert_called_once_with(acct.models)
     acct.clip.embedder.return_value.embed.assert_called_once_with(b"the preview")
@@ -248,7 +248,7 @@ def test_a_probe_runs_on_the_librarys_storage_and_saves_the_facet(acct, monkeypa
     assert seen == [tmp_path / "ast_1.jpg"]
     body = acct.client.put.call_args.kwargs["json"]
     assert acct.client.put.call_args.args[0] == "/v1/assets/ast_1/video-facet"
-    assert body["duration_sec"] == 2.0 and body["lineage"]["producer"] == "ffprobe"
+    assert body["duration_sec"] == 2.0 and body["lineage"]["producer"] == "lumiverb.video.format"
     assert body["lineage"]["source_hash"] == SHA
 
 
@@ -325,7 +325,7 @@ def test_rendering_uses_the_servers_settings_and_this_machines_decoder(acct, mon
     # Sent in chunks (ADR-018 decision 9), the render as a path from the job's scratch.
     [(asset_id, artifact, body, lineage)] = sent
     assert (asset_id, artifact, body) == ("ast_1", "analysis_proxy", b"mp4")
-    assert lineage["producer"] == "analysis-proxy"
+    assert lineage["producer"] == "lumiverb.video.analysis_proxy"
     acct.analysis_cache.put.assert_called_once()
 
 
@@ -412,7 +412,7 @@ def test_a_transcript_is_saved_with_its_lineage(acct, monkeypatch, tmp_path) -> 
     assert not work_dir.parent.exists()
     body = _posted(acct)["/v1/assets/ast_1/transcript"]
     assert body["language"] == "es" and body["source"] == "whisper"
-    assert body["lineage"]["producer"] == "whisper"
+    assert body["lineage"]["producer"] == "lumiverb.video.transcript"
 
 
 def test_a_transcripts_lineage_says_its_model(acct, monkeypatch, tmp_path) -> None:
@@ -606,7 +606,7 @@ def test_scenes_are_found_from_the_analysis_copy_and_saved_as_found(acct, monkey
 
     assert _scenes_with(acct, monkeypatch, index, tmp_path) is None
     assert seen["asset_id"] == "ast_1" and seen["duration_sec"] == 30.0
-    assert seen["lineage"]["producer"] == "scene-detect" and seen["stopping"] is acct.stopping
+    assert seen["lineage"]["producer"] == "lumiverb.video.scenes" and seen["stopping"] is acct.stopping
     assert isinstance(seen["client"], runner.Saving)  # its chunks are saved through the runner's client
 
 
@@ -672,7 +672,7 @@ def test_each_scene_is_saved_as_its_described(acct, monkeypatch, tmp_path) -> No
     patched = [c.args[0] for c in acct.client.patch.call_args_list]
     assert patched == ["/v1/video/scenes/s1", "/v1/video/scenes/s2"]
     body = acct.client.patch.call_args.kwargs["json"]
-    assert body["description"] == "a beach" and body["lineage"]["producer"] == "scene-vision"
+    assert body["description"] == "a beach" and body["lineage"]["producer"] == "lumiverb.video.scene_descriptions"
     # Searchable once saved (ADR-019): no sync to ask for (its route is retired, 410).
     assert not [p for p in _posted(acct) if p.endswith("/sync")]
 
@@ -844,7 +844,7 @@ def test_a_jobs_faces_are_saved_together_and_the_clips_that_failed_charged(acct,
     assert _run(acct, "faces", "ast_1", "ast_2", "ast_3") is None
     body = _posted(acct)["/v1/assets/batch-faces"]
     assert [i["asset_id"] for i in body["items"]] == ["ast_1", "ast_3"]
-    assert body["items"][0]["source_hash"] == SHA and body["lineage"]["producer"] == "insightface"
+    assert body["items"][0]["source_hash"] == SHA and body["lineage"]["producer"] == "lumiverb.image.faces"
     assert _charged(acct) == [("faces", "ast_2")]
     from src.producers.faces.levels import gates
 

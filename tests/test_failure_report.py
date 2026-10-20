@@ -104,9 +104,12 @@ def test_what_the_server_cant_take_isnt_reported():
     report.add("no_such_artifact", "ast_a", "x")
     report.add("vision", "a" * 65, "x")
     report.add("vision", "ast_b", "nul\x00inside")
+    report.add("lumiverb.image.text", "ast_c", "unreadable")  # by its name too
     report.flush()
-    (item,) = client.post.call_args.kwargs["json"]["items"]
-    assert item == {"asset_id": "ast_b", "artifact": "vision", "error": "nulinside"}
+    # Sent by the name of what it makes (ADR-024 phase 1 part 2: a server takes it from part 1).
+    assert client.post.call_args.kwargs["json"]["items"] == [
+        {"asset_id": "ast_b", "artifact": "lumiverb.image.description", "error": "nulinside"},
+        {"asset_id": "ast_c", "artifact": "lumiverb.image.text", "error": "unreadable"}]
 
 
 def test_unsent_reports_are_kept_up_to_a_limit(monkeypatch: pytest.MonkeyPatch):

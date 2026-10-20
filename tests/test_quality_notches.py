@@ -177,7 +177,7 @@ def test_the_scan_makes_a_photos_and_a_videos_previews_at_the_accounts_notch(tmp
         scan._scan_one(**args, previews=previews)
     assert proxy.call_args.kwargs["jpeg_quality"] == 65 and webp.call_args.args[1] == 70
     [call] = [c for c in args["client"].post.call_args_list if c.args[0] == "/v1/ingest"]
-    assert json.loads(call.kwargs["data"]["lineage"])["proxy"] == shared.lineage(
+    assert json.loads(call.kwargs["data"]["lineage"])["lumiverb.preview"] == shared.lineage(
         "proxy", shared.effective_settings("proxy", {"quality": "good"}), SHA)
 
     args = _scan_args(tmp_path, "video")
@@ -193,7 +193,7 @@ def test_the_scan_makes_a_photos_and_a_videos_previews_at_the_accounts_notch(tmp
         scan._scan_one_video(**args, previews=previews)
     assert poster.call_args.kwargs["jpeg_quality"] == 65 and preview.call_args.kwargs["crf"] == 32
     posts = {c.args[0]: c for c in args["client"].post.call_args_list}
-    assert json.loads(posts["/v1/assets/ast_a/artifacts/video_preview"].kwargs["data"]["lineage"]) == shared.lineage(
+    assert json.loads(posts["/v1/assets/ast_a/artifacts/lumiverb.video.preview"].kwargs["data"]["lineage"]) == shared.lineage(
         "video_preview", shared.effective_settings("video_preview", {"quality": "good"}), SHA)
 
 

@@ -25,13 +25,17 @@ def described(scene: dict, lineage: dict | None) -> bool:
     """Whether a scene is already described the way this job would describe
     it, so it's skipped. A scene described another way (an older model, an
     upgrade's) is described again; a server that doesn't say how a scene
-    was made gets the old rule: described is done."""
+    was made gets the old rule: described is done. Its producer in either
+    spelling (ADR-024: the server keeps today's id before part 3)."""
+    from src.producers.names import producer_in
+
     if scene.get("description") is None:
         return False
     if lineage is None or "lineage" not in scene:
         return True
     made = scene.get("lineage") or {}
-    return all(made.get(k) == lineage.get(k) for k in ("producer", "version", "settings_hash"))
+    theirs, ours = (producer_in("scene_vision", str(x.get("producer"))) for x in (made, lineage))
+    return theirs == ours and all(made.get(k) == lineage.get(k) for k in ("version", "settings_hash"))
 
 
 @dataclass
@@ -110,11 +114,12 @@ class SceneVision(Work):
 
     def save(self, client, made: list[tuple[dict, Scene]]) -> None:
         from src.processing.api import LumiverbAPIError
+        from src.producers.names import file_named
 
         for clip, s in made:
             scene_id, asset_id = s.scene["scene_id"], clip["asset_id"]
             try:
-                client.post(f"/v1/assets/{asset_id}/artifacts/scene_rep",
+                client.post(f"/v1/assets/{asset_id}/artifacts/{file_named('scene_rep')}",
                             files={"file": ("rep.jpg", s.frame, "image/jpeg")},
                             data={"rep_frame_ms": str(s.scene["rep_frame_ms"])})
                 client.patch(f"/v1/video/scenes/{scene_id}", json={

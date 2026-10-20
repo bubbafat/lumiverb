@@ -164,10 +164,12 @@ def lineage(artifact: str, settings: Mapping[str, Any], source_hash: str | None,
             level: int | None = None) -> dict[str, Any]:
     """What a write records about how the artifact was made. level: the
     level it was made at, for a producer with a level setting (its default's
-    when not given); kept apart from the settings hash."""
+    when not given); kept apart from the settings hash. The producer by the
+    name of what it makes (ADR-024; a server takes it from part 1); an
+    installed plug-in's work by its own."""
     p = PRODUCERS[artifact]
     out = {
-        "producer": p.producer,
+        "producer": p.makes.name if p.makes is not None else p.producer,
         "version": p.version,
         "settings_hash": settings_hash(settings),
         "source_hash": source_hash,

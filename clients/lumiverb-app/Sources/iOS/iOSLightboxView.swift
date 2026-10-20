@@ -198,7 +198,7 @@ struct iOSLightboxView: View {
         defer { isPreparingShare = false }
 
         do {
-            guard let data = try await client?.getData("/v1/assets/\(assetId)/artifacts/proxy") else {
+            guard let data = try await client?.getData(ClipFile.preview.path(assetId)) else {
                 return
             }
             // Build a sensible filename — strip the path, fall back to assetId.

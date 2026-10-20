@@ -245,7 +245,7 @@ def test_the_people_in_a_video_with_their_times_and_their_crops_from_their_frame
     sent = json.loads(kwargs["data"]["faces"])
     assert [f["seen_ms"] for f in sent] == [[1500, 4200], [4200]]
     lineage = json.loads(kwargs["data"]["lineage"])
-    assert lineage["producer"] == "insightface-video" and lineage["level"] == 1  # Low (Off is 0)
+    assert lineage["producer"] == "lumiverb.video.faces" and lineage["level"] == 1  # Low (Off is 0)
     assert lineage["source_hash"] == CLIP["content_hash"]
     assert [name for name, _ in kwargs["files"]] == ["crops", "crops"]
     assert kwargs["files"][0][1][1] == found.crops[0]

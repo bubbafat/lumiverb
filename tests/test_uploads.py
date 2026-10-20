@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import text
 
+from src.producers.names import producer_in
 from src.server import uploads
 from tests.machine_lineage import made
 from tests.test_analysis_proxy_api import (  # noqa: F401 — the shared server fixture
@@ -86,9 +87,9 @@ def test_a_file_in_chunks_is_kept_as_one_upload_would_keep_it(env, data_dir):
     assert kept["duration_sec"] == pytest.approx(3.0, abs=0.1)
     assert _analysis_proxy_key(env, asset_id) == kept["key"]
     assert hashlib.sha256(storage.abs_path(kept["key"]).read_bytes()).hexdigest() == kept["sha256"]
-    with _db(env) as s:  # how it was made, as the start said
+    with _db(env) as s:  # how it was made, as the start said: sent by its name, kept as today's id until part 3
         assert s.execute(text("SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = 'analysis_proxy'"),
-                         {"a": asset_id}).scalar() == made("analysis_proxy")["producer"]
+                         {"a": asset_id}).scalar() == producer_in("analysis_proxy", made("analysis_proxy")["producer"])
     assert not any(data_dir.rglob("*.part")), "its bytes go once it's kept"
     assert _finish(env, upload).json() == kept  # sent again: the answer the first got
     status = client.get(upload["chunk_url"], headers=headers).json()

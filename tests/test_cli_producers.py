@@ -83,9 +83,10 @@ def test_lists_each_producer_with_its_counts_and_its_redo(client):
     assert result.exit_code == 0, result.output
     client.get.assert_any_call("/v1/producers", params={})
     out = result.output
-    assert "Descriptions and tags" in out and "redoing" in out
-    assert "stopped" in out and "lumiverb producers redo resume ocr" in out
-    assert "Faces: paused" in out and "lumiverb resume faces" in out
+    assert "Descriptions and tags" in out and "(image.description)" in out and "redoing" in out
+    # Each by the name of what it makes, as a person types it (ADR-024 phase 1 part 2).
+    assert "stopped" in out and "lumiverb producers redo resume image.text" in out
+    assert "Faces: paused" in out and "lumiverb resume image.faces" in out
     assert "Scenes isn't made again yet: Not yet." in out
     assert "after anything missing" in out
 
@@ -131,7 +132,7 @@ def test_the_listing_says_the_state_and_each_switch_that_is_paused(client):
     out = " ".join(result.output.split())
     assert "Processing: Partly paused" in out
     assert "Scans: Paused" in out and "Upkeep: Running" in out
-    assert "Descriptions and tags: paused; lumiverb resume vision carries on." in out
+    assert "Descriptions and tags: paused; lumiverb resume image.description carries on." in out
 
 
 @pytest.mark.parametrize(("state", "says"), [("running", "Processing: Running"), ("paused", "Processing: Paused")])
@@ -157,15 +158,41 @@ def test_pause_and_resume_are_no_longer_under_producers(client):
 
 def test_stop_and_resume_a_redo(client):
     client.raw.return_value = _response(204)
+    result = _run("redo", "stop", "image.description")
+    assert result.exit_code == 0, result.output
+    # Sent as the server lists it: today's id before ADR-024 part 3.
+    client.raw.assert_called_with("POST", "/v1/producers/vision/pause", json={"scope": "redo"})
+    assert "Stopped redoing image.description" in result.output
+    assert "lumiverb producers redo resume image.description" in " ".join(result.output.split())
+    result = _run("redo", "resume", "lumiverb.image.description")
+    assert result.exit_code == 0, result.output
+    client.raw.assert_called_with("POST", "/v1/producers/vision/resume", json={"scope": "redo"})
+    assert "Redoing image.description again" in result.output
+
+
+def test_an_old_word_is_taken_with_a_warning_and_sent_as_the_server_lists_it(client):
+    client.raw.return_value = _response(204)
     result = _run("redo", "stop", "vision")
     assert result.exit_code == 0, result.output
     client.raw.assert_called_with("POST", "/v1/producers/vision/pause", json={"scope": "redo"})
-    assert "Stopped redoing vision" in result.output
-    assert "lumiverb producers redo resume vision" in " ".join(result.output.split())
-    result = _run("redo", "resume", "vision")
-    assert result.exit_code == 0, result.output
-    client.raw.assert_called_with("POST", "/v1/producers/vision/resume", json={"scope": "redo"})
-    assert "Redoing vision again" in result.output
+    assert "vision is called image.description now: type that" in " ".join(result.output.split())
+
+    def named(path, params=None):  # a server from part 3: the names
+        r = MagicMock()
+        r.json.return_value = {"producers": [_producer("lumiverb.image.description")]}
+        return r
+
+    client.get.side_effect = named
+    for typed in ("vision", "image.description", "lumiverb.image.description"):
+        result = _run("redo", "stop", typed)
+        assert result.exit_code == 0, result.output
+        client.raw.assert_called_with("POST", "/v1/producers/lumiverb.image.description/pause", json={"scope": "redo"})
+
+
+def test_a_word_nothing_listed_is_called_is_refused_here(client):
+    result = _run("redo", "stop", "teleport")
+    assert result.exit_code == 2 and "No producer is called teleport: one of image.description" in result.output
+    client.raw.assert_not_called()
 
 
 def test_the_old_stop_command_is_gone(client):
@@ -175,10 +202,10 @@ def test_the_old_stop_command_is_gone(client):
 
 
 @pytest.mark.parametrize(("args", "status", "body", "says"), [
-    (["redo", "stop", "scenes"], 409, {"error": {"code": "cant_redo", "message": "Scenes isn't made again yet."}},
-     "Scenes isn't made again yet."),
-    (["redo", "stop", "scenes"], 403, {"detail": "Admins only"}, "Admins only"),
-    (["redo", "resume", "nope"], 404, {"detail": "No such artifact"}, "No such artifact"),
+    (["redo", "stop", "image.description"], 409,
+     {"error": {"code": "cant_redo", "message": "Scenes isn't made again yet."}}, "Scenes isn't made again yet."),
+    (["redo", "stop", "image.description"], 403, {"detail": "Admins only"}, "Admins only"),
+    (["redo", "resume", "image.description"], 404, {"detail": "No such artifact"}, "No such artifact"),
 ])
 def test_refusals_say_why(client, args, status, body, says):
     client.raw.return_value = _response(status, body)
@@ -207,21 +234,22 @@ def test_failures_say_why_and_when_the_next_try_is(client):
     assert result.exit_code == 0, result.output
     # The table folds long cells at 80 columns: compare without the spacing and borders.
     out = "".join(ch for ch in result.output if ch.isalnum() or ch in ":-")
-    assert "themodelsaid" in out and "givenup" in out and "2026-10-0901:10" in out and "timedout" in out
+    assert "themodelsaid" in out and "givenup" in out and "2026-10-09" in out and "01:10" in out and "timedout" in out
+    assert "imagedescripti" in out and "imagetext" in out  # each by its name (folded at 80 columns)
     assert client.raw.call_args.args == ("GET", "/v1/producers/failures")
     assert client.raw.call_args.kwargs["params"] == {"limit": 50}
 
 
 def test_failures_of_one_producer_in_one_library(client):
     client.raw.return_value = _response(200, {"items": [], "next_cursor": None})
-    result = _run("failures", "vision", "--library", "Footage")
+    result = _run("failures", "image.description", "--library", "Footage")
     assert "Nothing is failing." in result.output
     assert client.raw.call_args.kwargs["params"] == {"limit": 50, "artifact": "vision", "library_id": "lib_1"}
 
 
 def test_retry_some_or_all(client):
     client.raw.return_value = _response(200, {"retried": 1})
-    result = _run("retry", "vision", "--asset", "ast_1")
+    result = _run("retry", "image.description", "--asset", "ast_1")
     assert result.exit_code == 0 and "1 clip will be tried again shortly." in result.output
     assert client.raw.call_args.kwargs["json"] == {"artifact": "vision", "asset_ids": ["ast_1"]}
     client.raw.return_value = _response(200, {"retried": 0})
