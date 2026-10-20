@@ -9,8 +9,8 @@ handed one (ADR-024 phase 3). A name that only one kind of clip has says which: 
 (photos: `image`, as a clip's `media_type` says) or `lumiverb.video.*`. What a reader would be handed is
 what the clip shows now: where a person wrote it, theirs.
 
-Until part 3 of phase 1 renames what's stored and sent, the API keeps each one's old id, and takes
-either ("Was" below); the old spellings end with part 5.
+Until ADR-024 phase 1's part 5 each was also taken by what it was called before ("Was" below, its
+history): since then the API refuses an old spelling, saying the name.
 
 ## `lumiverb.capture_time`
 

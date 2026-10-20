@@ -68,7 +68,7 @@ final class FaceMomentsTests: XCTestCase {
         XCTAssertEqual(item.frameMs, 8_000)
         XCTAssertEqual(item.seenMs, [4_000, 8_000])
         let link = try decoder.decode(PlaybackLink.self, from: Data(#"""
-            {"url": "/v1/stream/tok", "expires_at": "2026-10-11T12:00:00Z", "source": "analysis_proxy",
+            {"url": "/v1/stream/tok", "expires_at": "2026-10-11T12:00:00Z", "source": "lumiverb.video.analysis_proxy",
              "max_seconds": null, "ready": true}
             """#.utf8))
         XCTAssertEqual(link.url, "/v1/stream/tok")
@@ -81,11 +81,11 @@ final class FaceMomentsTests: XCTestCase {
         func link(_ json: String) throws -> PlaybackLink {
             try decoder.decode(PlaybackLink.self, from: Data(json.utf8))
         }
-        let short = try link(#"{"url": "/v1/stream/t", "source": "preview", "max_seconds": null, "ready": true, "whole": true}"#)
+        let short = try link(#"{"url": "/v1/stream/t", "source": "lumiverb.video.preview", "max_seconds": null, "ready": true, "whole": true}"#)
         XCTAssertTrue(short.isWhole)  // a 1-second clip: no "10s preview" badge
-        let long = try link(#"{"url": "/v1/stream/t", "source": "preview", "max_seconds": null, "ready": true, "whole": false}"#)
+        let long = try link(#"{"url": "/v1/stream/t", "source": "lumiverb.video.preview", "max_seconds": null, "ready": true, "whole": false}"#)
         XCTAssertFalse(long.isWhole)
-        let older = try link(#"{"url": "/v1/stream/t", "source": "preview", "max_seconds": null, "ready": true}"#)
+        let older = try link(#"{"url": "/v1/stream/t", "source": "lumiverb.video.preview", "max_seconds": null, "ready": true}"#)
         XCTAssertFalse(older.isWhole)
     }
 

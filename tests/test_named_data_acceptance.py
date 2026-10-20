@@ -148,8 +148,9 @@ def _rows(session, seeded: dict) -> dict:
 
 
 def _renamed(value):
-    """What v0.1.104 said, said as the rename says it: an id where an id is, renamed, and a producer's row's
-    producer the name of what it makes (not a job's or a title's, which keep their words)."""
+    """What v0.1.104 said, said as the rename says it: an id where an id is, renamed (not a job's or a title's,
+    which keep their words), and a producer's row without its producer, a field part 5 removed (a producer is
+    named by what it makes)."""
     if isinstance(value, list):
         return [_renamed(v) for v in value]
     if isinstance(value, dict):
@@ -157,7 +158,7 @@ def _renamed(value):
                    else [RENAMED.get(x, x) for x in v] if k == "needs" and isinstance(v, list)
                    else _renamed(v)) for k, v in value.items()}
         if "producer" in out and isinstance(out.get("artifact"), str) and "title" in out:
-            out["producer"] = out["artifact"]
+            del out["producer"]
         return out
     return value
 

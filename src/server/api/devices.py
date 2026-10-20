@@ -28,7 +28,7 @@ from fastapi import HTTPException, Request
 from sqlmodel import Session
 from starlette.concurrency import run_in_threadpool
 
-from src.producers.names import artifact_in, file_in
+from src.producers.names import now_called
 from src.server.api.errors import ApiError
 from src.server.repository.devices import NAMED_BY, reader_of, readers_of_assets
 
@@ -81,13 +81,15 @@ async def gate(request: Request) -> None:
     if named_by == "items":
         # A body that can't be read as items does nothing: the route refuses it (422) before it runs.
         items = await _items(request) or []
-        if artifacts is not None and any(artifact_in(a) not in artifacts for _, a in items):
+        # An old word (refused since ADR-024's part 5) goes on to the route, which says its name.
+        if artifacts is not None and any(a not in artifacts and not now_called(a, "artifact") for _, a in items):
             raise ApiError(403, "not_for_devices", NOT_FOR_DEVICES)
         if items and await run_in_threadpool(_readers_of, request, [i for i, _ in items]) != {device_id}:
             raise HTTPException(status_code=404, detail="Asset not found")
         request.state.device_allowed = True
         return
-    if artifacts is not None and file_in(str(request.path_params.get("artifact_type"))) not in artifacts:
+    said = str(request.path_params.get("artifact_type"))
+    if artifacts is not None and said not in artifacts and not now_called(said, "file"):
         raise ApiError(403, "not_for_devices", NOT_FOR_DEVICES)
     if named_by != "own":
         if named_by == "form":

@@ -287,8 +287,9 @@ def test_a_device_says_nothing_of_who_it_is(env):
 
 
 @pytest.mark.slow
-def test_a_device_sends_by_id_or_by_name(env):
-    # ADR-024 phase 1: the gate takes an artifact's name and a file's (src/producers/names.py) as it takes the id.
+def test_a_device_sends_by_name_and_an_old_word_is_refused_naming_it(env):
+    # ADR-024 phase 1: the gate takes an artifact's name and a file's (src/producers/names.py); an old word goes
+    # on to the route, which refuses it saying the name (part 5), whatever it would have named.
     import io
 
     from PIL import Image
@@ -303,13 +304,20 @@ def test_a_device_sends_by_id_or_by_name(env):
     _reads(env, library_id, device_id)
     run = _scan(env, library_id, [File("n/photo.jpg", "named photo"), File("n/clip.mov", "named clip")], headers=device)
     photo, clip = run.uploaded["n/photo.jpg"], run.uploaded["n/clip.mov"]
-    for artifact in ("probe", "lumiverb.video.format"):
-        assert _ok(env.client.post("/v1/producers/failures", headers=device, json={"items": [
-            {"asset_id": clip, "artifact": artifact, "error": "unreadable"}]}))["recorded"] == 1, artifact
+    assert _ok(env.client.post("/v1/producers/failures", headers=device, json={"items": [
+        {"asset_id": clip, "artifact": "lumiverb.video.format", "error": "unreadable"}]}))["recorded"] == 1
     _not_for_devices(env.client.post("/v1/producers/failures", headers=device, json={"items": [
         {"asset_id": photo, "artifact": "lumiverb.image.description", "error": "unreadable"}]}))
-    for kind in ("proxy", "lumiverb.preview"):
-        _ok(env.client.post(f"/v1/assets/{photo}/artifacts/{kind}", headers=device, files={"file": jpeg()},
-                            data={"lineage": made_json("lumiverb.preview")}))
+    for old, name in (("probe", "lumiverb.video.format"), ("vision", "lumiverb.image.description")):
+        r = env.client.post("/v1/producers/failures", headers=device, json={"items": [
+            {"asset_id": clip, "artifact": old, "error": "unreadable"}]})
+        assert r.status_code == 422 and f"{old} is called {name} now" in r.text, r.text
+    _ok(env.client.post(f"/v1/assets/{photo}/artifacts/lumiverb.preview", headers=device, files={"file": jpeg()},
+                        data={"lineage": made_json("lumiverb.preview")}))
     _not_for_devices(env.client.post(f"/v1/assets/{clip}/artifacts/lumiverb.video.scenes.picture", headers=device,
                                      files={"file": jpeg()}))
+    for old, name in (("proxy", "lumiverb.preview"), ("scene_rep", "lumiverb.video.scenes.picture")):
+        r = env.client.post(f"/v1/assets/{photo}/artifacts/{old}", headers=device, files={"file": jpeg()},
+                            data={"lineage": made_json("lumiverb.preview")})
+        assert r.status_code == 404 and r.json()["error"]["code"] == "renamed", r.text
+        assert r.json()["error"]["details"] == {"sent": old, "name": name}

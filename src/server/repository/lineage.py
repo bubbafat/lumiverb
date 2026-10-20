@@ -39,7 +39,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.producers.names import producer_in, sql_spelling
+from src.producers.names import sql_spelling
 from src.producers.live import LiveMap, LiveSet, Made
 from src.shared.content_hash import FP1, FULL_UP_TO, SHA256
 from src.shared.producers import (
@@ -659,8 +659,8 @@ def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, An
     handed out before the swap is still of this content.
     produced_at: when it was made, for one kept and shown again (now otherwise)."""
     lineage = lineage or {}
-    # Its producer by its name (ADR-024), or the old id of the producer that makes it now (taken until part 5).
-    producer = PERSON if person else producer_in(artifact, str(lineage.get("producer") or UNKNOWN))
+    # Its producer by its name (ADR-024): a producer is named by what it makes.
+    producer = PERSON if person else str(lineage.get("producer") or UNKNOWN)
     if not person and producer != artifact:
         # Another kind's producer can't make this one, and a client can't
         # claim a person made it: whatever it is, it isn't current.

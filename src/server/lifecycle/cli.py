@@ -784,7 +784,7 @@ def _pausing(args: argparse.Namespace) -> int:
     from sqlalchemy import text
     from sqlalchemy.exc import SQLAlchemyError
 
-    from src.producers.names import artifact_in, short, typed
+    from src.producers.names import short, typed
     from src.server.api.errors import ApiError
     from src.server.api.routers import libraries as library_routes
     from src.server.api.routers import producers as producer_routes
@@ -805,13 +805,11 @@ def _pausing(args: argparse.Namespace) -> int:
     try:
         refresh()  # an installed plug-in's work is a producer too, as the API's requests read them (ADR-023)
         names = [PAUSE_ALL, PAUSE_SCANS, *pause_targets()]
-        target, warning = typed(args.name, names)
+        target, renamed = typed(args.name, names)
         if target is None:
-            print(f"✗ Nothing here is called {args.name}: {', '.join(short(artifact_in(n)) for n in names)}",
-                  file=sys.stderr)
+            print(f"✗ {renamed}" if renamed  # an old word, refused since ADR-024's part 5
+                  else f"✗ Nothing here is called {args.name}: {', '.join(short(n) for n in names)}", file=sys.stderr)
             return 2
-        if warning:
-            print(f"! {warning}", file=sys.stderr)
         with get_control_session() as ctrl:
             accounts = [(t.tenant_id, t.name) for t in TenantRepository(ctrl).list_all()
                         if args.account in (None, t.tenant_id, t.name)]

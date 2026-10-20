@@ -172,8 +172,9 @@ def test_the_env_helper_carries_the_clis_settings_over_once_and_maps_roots(tmp_p
 # ---------------------------------------------------------------------------
 
 
-def _enrich(monkeypatch, *args: str, answer: dict | None = None, listed: tuple[str, ...] = ("faces", "vision")):
-    """listed: the producers the server lists, as it spells them (ids before ADR-024 part 3, names after)."""
+def _enrich(monkeypatch, *args: str, answer: dict | None = None,
+            listed: tuple[str, ...] = ("lumiverb.image.faces", "lumiverb.image.description")):
+    """listed: the producers the server lists, by name (ADR-024)."""
     from typer.testing import CliRunner
 
     import importlib
@@ -195,7 +196,7 @@ def _enrich(monkeypatch, *args: str, answer: dict | None = None, listed: tuple[s
 
 
 def test_enrich_names_its_producer_and_libraries(monkeypatch) -> None:
-    for args in ((), ("faces",), ("faces", "--library", "Footage", "--all"), ("--all",)):
+    for args in ((), ("image.faces",), ("image.faces", "--library", "Footage", "--all"), ("--all",)):
         result, client = _enrich(monkeypatch, *args)
         assert result.exit_code == 2 and "Usage" in result.output, args
         client.raw.assert_not_called()
@@ -204,25 +205,26 @@ def test_enrich_names_its_producer_and_libraries(monkeypatch) -> None:
 def test_enrich_asks_the_scheduler_and_says_what_it_has_to_do(monkeypatch) -> None:
     answer = {"producers": [{"artifact": "lumiverb.image.faces", "title": "Faces", "missing": 3, "redo": 120, "retried": 1,
                              "paused": False, "redo_stopped": True}]}
-    result, client = _enrich(monkeypatch, "faces", "--library", "Footage", "--redo", answer=answer)
+    result, client = _enrich(monkeypatch, "image.faces", "--library", "Footage", "--redo", answer=answer)
     assert result.exit_code == 0, result.output
     assert client.raw.call_args.args == ("POST", "/v1/producers/run")
-    assert client.raw.call_args.kwargs["json"] == {"producer": "faces", "scope": "redo", "library_ids": ["lib_1"]}
+    assert client.raw.call_args.kwargs["json"] == {"producer": "lumiverb.image.faces", "scope": "redo",
+                                                   "library_ids": ["lib_1"]}
     assert "Faces: 3 to make, 120 to make again, 1 tried again (redo stopped)" in result.output
     result, client = _enrich(monkeypatch, "all", "--all")
     assert client.raw.call_args.kwargs["json"] == {"producer": "all", "scope": "new", "all": True}
 
 
-@pytest.mark.parametrize("listed, sent", [(("faces", "vision"), "faces"),
-                                          (("lumiverb.image.faces", "lumiverb.image.description"), "lumiverb.image.faces")])
-def test_enrich_takes_a_name_and_sends_it_as_the_server_lists_it(monkeypatch, listed, sent) -> None:
-    # ADR-024 phase 1 part 2: a server before part 3 lists today's ids, one from part 3 the names.
-    for typed in ("image.faces", "lumiverb.image.faces", "faces"):
-        result, client = _enrich(monkeypatch, typed, "--all", listed=listed)
+def test_enrich_takes_a_name_and_refuses_an_old_word_saying_the_name(monkeypatch) -> None:
+    # ADR-024: a name with or without lumiverb., sent as the server lists it; an old word refused (part 5).
+    for typed in ("image.faces", "lumiverb.image.faces"):
+        result, client = _enrich(monkeypatch, typed, "--all")
         assert result.exit_code == 0, result.output
-        assert client.raw.call_args.kwargs["json"]["producer"] == sent, typed
-        assert ("faces is called image.faces now" in result.output) == (typed == "faces"), typed
-    result, client = _enrich(monkeypatch, "teleport", "--all", listed=listed)
+        assert client.raw.call_args.kwargs["json"]["producer"] == "lumiverb.image.faces", typed
+    result, client = _enrich(monkeypatch, "faces", "--all")
+    assert result.exit_code == 2 and "faces is called image.faces now: type that" in result.output
+    client.raw.assert_not_called()
+    result, client = _enrich(monkeypatch, "teleport", "--all")
     assert result.exit_code == 2 and "No producer is called teleport: one of all, image.faces, image.description" in \
         result.output.replace("\n", " ")
     client.raw.assert_not_called()

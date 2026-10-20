@@ -68,11 +68,10 @@ def test_one_switch_and_one_librarys_scans(env, env_file, capsys):
     assert _paused(env) == set()
 
 
-def test_an_old_word_is_taken_with_a_warning(env, env_file, capsys):
-    assert _server(env, env_file, "pause", "vision") == 0
-    assert "! vision is called image.description now: type that" in capsys.readouterr().err
-    assert _paused(env) == {"lumiverb.image.description"}
-    assert _server(env, env_file, "resume", "vision") == 0
+def test_an_old_word_is_refused_saying_the_name_to_type(env, env_file, capsys):
+    # Since ADR-024's part 5: nothing changes.
+    assert _server(env, env_file, "pause", "vision") == 2
+    assert "✗ vision is called image.description now: type that" in capsys.readouterr().err
     assert _paused(env) == set()
 
 
@@ -87,7 +86,7 @@ def test_resuming_one_while_all_is_paused_leaves_the_rest_paused(env, env_file):
 
 @pytest.mark.parametrize(("args", "code", "said"), [
     (["pause", "nothing-like-this"], 2, "Nothing here is called nothing-like-this: all, scans, upkeep, video.format,"),
-    (["pause", "vision", "--library", "Footage"], 2, "--library goes with scans"),
+    (["pause", "image.description", "--library", "Footage"], 2, "--library goes with scans"),
     (["pause", "scans", "--library", "No such library"], 1, "No library here is No such library"),
     (["pause", "all", "--account", "Nobody"], 1, "No account here is Nobody"),
 ])

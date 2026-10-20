@@ -766,7 +766,7 @@ def test_upkeep_repairs_nothing_while_the_data_folder_is_gone(tmp_path, layout) 
     if layout == "empty_account_dir":
         (data / "ten_1").mkdir()
     session = MagicMock()
-    session.execute.return_value.scalar.side_effect = [json.dumps(["ast_1:proxy"]), "ten_1/lib_1/proxies/00/ast_1.webp"]
+    session.execute.return_value.scalar.side_effect = [json.dumps(["ast_1:lumiverb.preview"]), "ten_1/lib_1/proxies/00/ast_1.webp"]
     from src.server.storage.files import FileStore
 
     with patch("src.server.missing_artifacts.get_store", return_value=FileStore(LocalStorage(str(data)))):

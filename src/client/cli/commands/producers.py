@@ -117,11 +117,13 @@ COMPARED = ("counts", "settings", "settings_hash", "paused", "redo_stopped", "ne
 
 
 def _by_name(answer: dict) -> dict[str, dict]:
-    """A saved GET /v1/producers answer's producers by name (ADR-024: what each was called before, by RENAMED;
-    an installed plug-in's work by its plug-in's id), each with what --compare holds equal."""
-    from src.producers.names import artifact_in
+    """A saved GET /v1/producers answer's producers by name (ADR-024: one saved before part 3 by what each was
+    called before, its history in names.WAS; an installed plug-in's work by its plug-in's id), each with what
+    --compare holds equal."""
+    from src.producers.names import now_called
 
-    return {artifact_in(p["artifact"]): {k: p.get(k) for k in COMPARED} for p in answer.get("producers", [])}
+    return {now_called(p["artifact"], "artifact") or p["artifact"]: {k: p.get(k) for k in COMPARED}
+            for p in answer.get("producers", [])}
 
 
 def compare(before: dict, after: dict) -> list[str]:
@@ -166,12 +168,9 @@ def producers_list(
             console.print(f"{sw['title']}: {'[yellow]Paused[/yellow]' if sw.get('paused') else 'Running'}")
     # How long is left is the whole account's: only with its counts, and while the scheduler runs.
     eta = (queue.get("eta") or {}) if queue.get("live") and not params else {}
-    from src.producers.names import artifact_in
-
-    # By what each makes, whichever spelling the server answers in.
-    left = {artifact_in(a): s for a, s in (eta.get("producers") or {}).items()}
-    paused_left = {artifact_in(n["artifact"]) for n in eta.get("not_counted") or [] if n.get("why") == "paused"
-                   and n.get("artifact")}
+    # By what each makes.
+    left = eta.get("producers") or {}
+    paused_left = {n["artifact"] for n in eta.get("not_counted") or [] if n.get("why") == "paused" and n.get("artifact")}
     table = Table(show_header=True, header_style="bold")
     columns = ("Producer", "Current", "Missing", "Stale", "Failing", "Redo", *(("Left",) if eta else ()))
     for col in columns:
@@ -180,8 +179,8 @@ def producers_list(
     for p in producers:
         c = p.get("counts") or {}
         paused = " [yellow]paused[/yellow]" if p.get("paused") else ""
-        took = left.get(artifact_in(p["artifact"]))
-        held = artifact_in(p["artifact"]) in paused_left
+        took = left.get(p["artifact"])
+        held = p["artifact"] in paused_left
         table.add_row(f"{escape(p['title'])} [dim]({escape(shown(p['artifact']))})[/dim]{paused}",
                       _n(c.get("current", 0)),
                       _n(c.get("missing", 0)), _n(c.get("stale", 0)), _n(c.get("failing", 0)), _redo(p),

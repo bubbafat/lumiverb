@@ -75,8 +75,6 @@ from src.producers.names import (
     PREVIEW,
     VIDEO_FORMAT,
     VIDEO_PREVIEW,
-    artifact_in,
-    producer_in,
 )
 from src.shared.content_hash import content_hash, sampled, whole_file_sha256
 from src.shared.file_extensions import media_type_of
@@ -224,14 +222,10 @@ class Previews:
 
     @classmethod
     def told(cls, made_with: Mapping[str, dict]) -> Previews:
-        # Whichever spelling the server answers in (ADR-024: today's ids before part 3, the names after).
-        made_with = {artifact_in(a): made for a, made in made_with.items()}
-
         def settings(artifact: str) -> dict:
             spec, said = PRODUCERS[artifact], made_with.get(artifact) or {}
             ours = effective_settings(artifact)
-            producer = producer_in(artifact, str(said.get("producer")))
-            if (producer, said.get("version")) != (spec.artifact, spec.version) \
+            if (said.get("producer"), said.get("version")) != (spec.artifact, spec.version) \
                     or not isinstance(said.get("settings"), dict) or set(said["settings"]) != set(ours):
                 return ours
             return dict(said["settings"])

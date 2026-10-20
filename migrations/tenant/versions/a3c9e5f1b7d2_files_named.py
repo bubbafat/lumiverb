@@ -12,10 +12,10 @@ becomes `lumiverb.preview`, `video_preview` `lumiverb.video.preview`, and so
 on. Nothing else keeps a file's kind: storage keys are paths, and the
 clip's columns (`proxy_key`, ...) are its own.
 
-The mapping is written here, never imported (src/producers/names.py RENAMED
-goes in part 5): an install that skips releases, a restored backup and a
-downgrade still run this migration. tests/test_migration_files_named.py
-holds it equal to RENAMED while both exist.
+The mapping is written here, never imported: an install that skips
+releases, a restored backup and a downgrade still run this migration.
+tests/test_migration_files_named.py holds it equal to the names' history
+(src/producers/names.py WAS).
 
 Down: each renamed back, by the same mapping; a word that isn't one of
 these stays as it is.

@@ -18,8 +18,9 @@ from src.producers.names import (
     SCENE_PICTURE,
     THUMBNAIL,
     VIDEO_PREVIEW,
-    file_in,
+    WAS,
     made_by_file,
+    now_called,
 )
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.devices import may_call
@@ -125,6 +126,19 @@ async def _save_upload(store: Store, key: str, upload: UploadFile, artifact_type
             raise HTTPException(status_code=400, detail=f"{artifact_type} must be a JPEG, PNG or WebP image") from None
 
 
+def _file_named(artifact_type: str) -> str:
+    """The file a path names, by its name: 404 renamed, naming the name, for its kind before ADR-024 (refused
+    since its part 5); 400 for anything else."""
+    if artifact_type in ALLOWED_ARTIFACT_TYPES:
+        return artifact_type
+    name = now_called(artifact_type, "file")
+    if name:
+        raise ApiError(404, "renamed", f"The file {artifact_type} is called {name} now: ask for it by its name.",
+                       {"sent": artifact_type, "name": name})
+    raise HTTPException(status_code=400,
+                        detail=f"artifact_type must be one of: {', '.join(sorted(ALLOWED_ARTIFACT_TYPES))}")
+
+
 def artifact_key(tenant_id: str, asset, artifact_type: str) -> str:
     """Where a clip's proxy, thumbnail, video preview or analysis proxy is kept (scene frames go by their time)."""
     if artifact_type == PREVIEW:
@@ -181,18 +195,13 @@ async def upload_artifact(
     """
     from src.server.api.routers.producers import require_lineage
 
-    artifact_type = file_in(artifact_type)  # by today's kind or the file's name (ADR-024)
+    artifact_type = _file_named(artifact_type)
     # Proxies, previews and analysis copies say how they were made, before
     # anything is saved; a thumbnail as the proxy's (one producer makes both).
     made = (require_lineage(lineage, made_by_file(artifact_type))
             if artifact_type in (PREVIEW, VIDEO_PREVIEW, ANALYSIS_PROXY) else None)
     if artifact_type == THUMBNAIL:
         require_lineage(lineage, made_by_file(artifact_type))  # the preview's
-    if artifact_type not in ALLOWED_ARTIFACT_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"artifact_type must be one of: {', '.join(sorted(ALLOWED_ARTIFACT_TYPES))}",
-        )
     if width is not None and (width < 1 or width > 100_000):
         raise HTTPException(status_code=400, detail="width out of range")
     if height is not None and (height < 1 or height > 100_000):
@@ -249,30 +258,34 @@ async def upload_artifacts_batch(
     proxy: UploadFile | None = File(default=None),
     thumbnail: UploadFile | None = File(default=None),
     video_preview: UploadFile | None = File(default=None),
-    # The same files by their names (ADR-024).
+    # The files by their names (ADR-024): the fields above are their old kinds, refused since its part 5.
     preview_named: UploadFile | None = File(default=None, alias="lumiverb.preview"),
     thumbnail_named: UploadFile | None = File(default=None, alias="lumiverb.preview.thumbnail"),
     video_preview_named: UploadFile | None = File(default=None, alias="lumiverb.video.preview"),
     width: int | None = Form(default=None),
     height: int | None = Form(default=None),
-    # JSON: {"proxy": {...}, "video_preview": {...}}, how each was made (see LineageIn)
+    # JSON: {"lumiverb.preview": {...}, "lumiverb.video.preview": {...}}, how each was made (see LineageIn)
     lineage: str | None = Form(default=None),
 ) -> BatchArtifactUploadResponse:
     """Upload multiple artifacts for an asset in a single request.
 
-    Accepts optional multipart fields: proxy, thumbnail, video_preview (or
-    by their names: lumiverb.preview, lumiverb.preview.thumbnail,
-    lumiverb.video.preview). Each is kept as a single upload keeps it
-    (_save_upload: a proxy or thumbnail re-encoded), then the database updated.
+    Accepts optional multipart fields by the files' names: lumiverb.preview,
+    lumiverb.preview.thumbnail, lumiverb.video.preview (by their old kinds, a
+    422 renamed naming them). Each is kept as a single upload keeps it
+    (_save_upload: a preview or thumbnail re-encoded), then the database updated.
     """
     from src.server.api.routers.ingest import _per_kind
     from src.server.api.routers.producers import require_lineage
 
-    proxy, thumbnail = proxy or preview_named, thumbnail or thumbnail_named
-    video_preview = video_preview or video_preview_named
+    for name, old in ((PREVIEW, proxy), (THUMBNAIL, thumbnail), (VIDEO_PREVIEW, video_preview)):
+        if old is not None:
+            was = WAS[name]["file"]
+            raise ApiError(422, "renamed", f"The file {was} is called {name} now: send it by its name.",
+                           {"sent": was, "name": name})
+    proxy, thumbnail, video_preview = preview_named, thumbnail_named, video_preview_named
 
     # Each proxy or preview sent says how it was made, before anything is saved.
-    by_name = _per_kind(lineage)  # by the name each file is of (its old id too, until ADR-024's part 5)
+    by_name = _per_kind(lineage)  # by the name each file is of
     made = {kind: require_lineage(by_name.get(made_by_file(kind)), made_by_file(kind))
             for kind, sent in ((PREVIEW, proxy), (VIDEO_PREVIEW, video_preview)) if sent is not None}
     if thumbnail is not None:  # a thumbnail is the preview's too
@@ -344,14 +357,9 @@ def download_artifact(
     changes nothing). video_preview within the playback cap: 503
     playback_preparing (Retry-After) while the capped copy is made.
     analysis_proxy answers Range requests and carries its SHA-256 as the ETag.
-    Each by today's kind or the file's name (lumiverb.preview, …: ADR-024).
+    Each by the file's name (lumiverb.preview, …: ADR-024).
     """
-    artifact_type = file_in(artifact_type)
-    if artifact_type not in ALLOWED_ARTIFACT_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"artifact_type must be one of: {', '.join(sorted(ALLOWED_ARTIFACT_TYPES))}",
-        )
+    artifact_type = _file_named(artifact_type)
 
     public = getattr(request.state, "is_public_request", False)
     asset = AssetRepository(session).get_any(asset_id)  # out of sight too: signed in, those show

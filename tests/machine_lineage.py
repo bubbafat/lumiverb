@@ -21,11 +21,11 @@ INGEST_KINDS = ("lumiverb.preview", "lumiverb.image.description", "lumiverb.imag
 
 
 def made(artifact: str, source_hash: str | None = None) -> dict:
-    """How a worker made the artifact (its name, or a file's kind: the name it's of), with the registry's
+    """How a worker made the artifact (its name, or a file's: the name it's under), with the registry's
     settings. Without a source hash the server records the clip's file as it is now."""
     from src.producers.names import FILES, made_by_file
 
-    return _REGISTRY.lineage(made_by_file(artifact) if artifact in FILES.values() else artifact, source_hash)
+    return _REGISTRY.lineage(made_by_file(artifact) if artifact in FILES else artifact, source_hash)
 
 
 def made_json(artifact: str, source_hash: str | None = None) -> str:

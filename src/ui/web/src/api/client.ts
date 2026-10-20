@@ -1061,7 +1061,6 @@ export interface SettingField {
 
 export interface Producer {
   artifact: string;
-  producer: string;
   version: string;
   title: string;
   media: string[];

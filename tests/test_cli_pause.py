@@ -17,7 +17,8 @@ from typer.testing import CliRunner
 pytestmark = pytest.mark.fast
 
 SWITCHES = [{"target": "upkeep", "title": "Upkeep"},
-            {"target": "vision", "title": "Descriptions and tags"}, {"target": "ocr", "title": "Text in images (OCR)"}]
+            {"target": "lumiverb.image.description", "title": "Descriptions and tags"},
+            {"target": "lumiverb.image.text", "title": "Text in images (OCR)"}]
 LIBRARIES = [{"library_id": "lib_1", "name": "Footage"}, {"library_id": "lib_2", "name": "Stills"}]
 
 
@@ -35,7 +36,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     c = MagicMock()
     c.raw.return_value = _response(204)
     c.get.return_value = _response(200, {"state": "partly", "switches": [
-        {**sw, "paused": sw["target"] == "vision"} for sw in SWITCHES]})
+        {**sw, "paused": sw["target"] == "lumiverb.image.description"} for sw in SWITCHES]})
     monkeypatch.setattr(mod, "LumiverbClient", lambda: c)
     return c
 
@@ -46,10 +47,9 @@ def _run(*args: str):
 
 
 @pytest.mark.parametrize(("args", "path"), [
-    # By the name of what it makes (ADR-024 phase 1 part 2), sent as the server lists it: today's id before part 3.
-    (["pause", "image.description"], "/v1/producers/vision/pause"),
-    (["resume", "lumiverb.image.description"], "/v1/producers/vision/resume"),
-    (["resume", "vision"], "/v1/producers/vision/resume"),  # its old word, warned of
+    # By the name of what it makes (ADR-024), with or without lumiverb., sent as the server lists it.
+    (["pause", "image.description"], "/v1/producers/lumiverb.image.description/pause"),
+    (["resume", "lumiverb.image.description"], "/v1/producers/lumiverb.image.description/resume"),
     (["resume", "upkeep"], "/v1/producers/upkeep/resume"),
     (["pause", "all"], "/v1/producers/all/pause"),
     (["resume", "all"], "/v1/producers/all/resume"),
@@ -105,7 +105,7 @@ def test_a_library_that_isnt_there_or_without_scans_acts_on_nothing(client):
 
 
 @pytest.mark.parametrize(("args", "status", "body", "says"), [
-    (["pause", "proxy"], 409, {"error": {"code": "not_scheduled", "message": "Proxies and thumbnails are made by "
+    (["pause", "preview"], 409, {"error": {"code": "not_scheduled", "message": "Proxies and thumbnails are made by "
                                          "scans: pausing a library's scans stops them."}}, "made by scans"),
     (["pause", "all"], 403, {"error": {"code": "forbidden", "message": "Admins only", "details": {}}}, "Admins only"),
     (["resume", "nope"], 404, {"error": {"code": "not_found", "message": "No such artifact", "details": {}}}, "No such artifact"),
@@ -117,21 +117,26 @@ def test_refusals_say_why(client, args, status, body, says):
 
 
 def test_what_no_switch_is_called_is_asked_of_the_server_by_its_name(client):
-    # The server says why a producer has no switch (what scans make): asked by its name, as every server from
-    # v0.1.105 takes it.
+    # The server says why a producer has no switch (what scans make): asked by its name.
     client.raw.return_value = _response(409, {"error": {"code": "not_scheduled", "message": "made by scans"}})
-    result = _run("pause", "proxy")
+    result = _run("pause", "preview")
     client.raw.assert_called_once_with("POST", "/v1/producers/lumiverb.preview/pause", json={"scope": "work"})
-    assert "proxy is called preview now" in " ".join(result.output.split())
+    assert result.exit_code == 1 and "made by scans" in result.output
 
 
-def test_a_server_from_part_3_is_sent_the_names(client):
+def test_a_name_or_a_plug_ins_id_is_sent_and_an_old_word_refused_here(client):
     client.get.return_value = _response(200, {"state": "running", "switches": [
         {"target": "upkeep", "title": "Upkeep"}, {"target": "lumiverb.image.description", "title": "Descriptions"},
         {"target": "geonames", "title": "Place names"}]})
-    for typed, path in (("vision", "lumiverb.image.description"), ("image.description", "lumiverb.image.description"),
-                        ("geonames", "geonames"), ("plugin_geonames", "geonames")):
+    for typed, path in (("image.description", "lumiverb.image.description"), ("geonames", "geonames")):
         client.raw.reset_mock()
         result = _run("pause", typed)
         assert result.exit_code == 0, result.output
         client.raw.assert_called_once_with("POST", f"/v1/producers/{path}/pause", json={"scope": "work"})
+    client.raw.reset_mock()
+    # Since ADR-024's part 5: nothing sent, the name to type said.
+    for typed, name in (("vision", "image.description"), ("plugin_geonames", "geonames"), ("proxy", "preview")):
+        result = _run("pause", typed)
+        assert result.exit_code == 2, result.output
+        assert f"{typed} is called {name} now: type that" in " ".join(result.output.split())
+    client.raw.assert_not_called()

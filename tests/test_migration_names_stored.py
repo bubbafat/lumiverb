@@ -2,12 +2,11 @@
 """Tenant migration f2a6c8e4b0d7: Lumiverb's own data stored by its names
 (ADR-024 phase 1 part 3).
 
-- Its mapping is its own, and while src/producers/names.py RENAMED exists the
-  two are the same.
+- Its mapping is its own, and the names' history (src/producers/names.py
+  WAS) says the same.
 - An account from before part 3 upgraded straight to the head: every row it
-  renames, written out here as each is named after (never read from RENAMED,
-  so the test stays when part 5 removes it), and what it keeps; down, every
-  row as it was.
+  renames, written out here as each is named after (never read from the
+  code), and what it keeps; down, every row as it was.
 - An account made through today's code (lineage made, empty, failed, stale,
   an older version, new files only, a new version held, pauses of work and
   redo, crashes, settings, a plug-in's work, scenes and their run, an upload
@@ -44,7 +43,7 @@ REPO = Path(__file__).resolve().parents[1]
 BEFORE, AFTER = "f8c4a2e6d0b5", "f2a6c8e4b0d7"
 
 # What part 3 renamed, as v0.1.104 kept it: every artifact's id, the producer that made each, and the kinds
-# that weren't an artifact's id. Written out (never imported) so the net stays when RENAMED goes.
+# that weren't an artifact's id. Written out (never imported), as the migration's own.
 OLD_ARTIFACTS = {"probe", "capture", "proxy", "video_preview", "analysis_proxy", "scenes", "scene_vision", "vision",
                  "ocr", "clip", "faces", "video_faces", "transcript", "location"}
 CURRENT = {"probe": "ffprobe", "capture": "exiftool", "proxy": "proxy", "video_preview": "preview",
@@ -65,15 +64,15 @@ def _migration():
     return m
 
 
-def test_the_migration_s_mapping_is_renamed():
-    # Its mapping is its own (part 5 deletes RENAMED); while both exist they're the same.
+def test_the_migration_s_mapping_is_the_names_history():
+    # Its mapping is its own; the names' history (WAS, the page's "Was") says the same.
     from src.producers import registry
-    from src.producers.names import ARTIFACTS, KINDS, PRODUCERS, RESERVED
+    from src.producers.names import RESERVED, WAS
 
     m = _migration()
-    assert dict(ARTIFACTS) == m.ARTIFACTS
-    assert {(a, p): ARTIFACTS[a] for a, p in m.PRODUCERS.items()} == dict(PRODUCERS)
-    assert dict(KINDS) == m.KINDS
+    assert {was["artifact"]: name for name, was in WAS.items() if "artifact" in was} == m.ARTIFACTS
+    assert {was["artifact"]: was["producer"] for was in WAS.values() if "artifact" in was} == m.PRODUCERS
+    assert {was["kind"]: name for name, was in WAS.items() if "kind" in was} == m.KINDS
     assert set(m._POOLS) == {p.pool.name for p in registry().values() if p.pool and not p.plugin} | {"scan"}
     assert m._RESERVED == RESERVED
     # Down: a word no plug-in may have stays, every way; one that could be a plug-in's id is its work.
@@ -532,7 +531,7 @@ def test_an_account_made_today_goes_down_and_up_as_it_was(env, data_dir):
     other = _ingest_with(lib, "other.mov", osha := _sha(), media_type="video")
     data = playable(2.0)
     r = client.post(f"/v1/assets/{other}/uploads", headers=headers, json={
-        "artifact": "analysis_proxy", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+        "artifact": ANALYSIS_PROXY, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
         "lineage": _want(lib, ANALYSIS_PROXY, osha)})
     assert r.status_code == 200, r.text
     upload = r.json()

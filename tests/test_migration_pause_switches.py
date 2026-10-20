@@ -24,10 +24,10 @@ def _rows(engine) -> dict:
 
 @pytest.mark.migration
 def test_an_old_pause_all_becomes_every_switch_paused() -> None:
-    from src.producers.names import ARTIFACTS
+    from src.producers.names import WAS
     from src.shared.producers import pause_targets
 
-    old_id = {name: old for old, name in ARTIFACTS.items()}  # that time's ids (ADR-024)
+    old_id = {name: was["artifact"] for name, was in WAS.items() if "artifact" in was}  # that time's ids (ADR-024)
 
     with PostgresContainer(PG_IMAGE) as pg:
         url = _ensure_psycopg2(pg.get_connection_url())

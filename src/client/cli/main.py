@@ -1084,17 +1084,16 @@ def download(
     import os
     import sys
 
-    from src.producers.names import PREFIX, PREVIEW, THUMBNAIL, file_in, short
+    from src.producers.names import PREFIX, PREVIEW, THUMBNAIL, now_called, short
 
-    # A file by its name, with or without lumiverb. (ADR-024), or its old word, warned of.
+    # A file by its name, with or without lumiverb. (ADR-024); an old word is refused, saying the name.
     files = (PREVIEW, THUMBNAIL)
-    name = next((n for n in (size, PREFIX + size, file_in(size)) if n in files), None)
+    name = next((n for n in (size, PREFIX + size) if n in files), None)
     if name is None:
-        console.print("[red]--size must be one of: preview, preview.thumbnail[/red]")
+        renamed = now_called(size, "file")
+        console.print(f"[red]{size} is called {short(renamed)} now: type that[/red]" if renamed in files
+                      else "[red]--size must be one of: preview, preview.thumbnail[/red]")
         raise typer.Exit(1)
-    if name == file_in(size) != size:
-        Console(stderr=True).print(f"[yellow]{size} is called {short(name)} now: type that (the old word goes "
-                                   "in a later release)[/yellow]")
 
     # Guard: refuse to write binary to a TTY
     stdout_is_tty = sys.stdout.isatty()

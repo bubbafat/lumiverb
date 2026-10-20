@@ -26,7 +26,8 @@ from src.producers.names import (
     LIKENESS,
     PREVIEW,
     VIDEO_FORMAT,
-    artifact_in,
+    WAS,
+    now_called,
 )
 from src.server import preview_image
 from src.server.api.content_hashes import why_not
@@ -108,20 +109,32 @@ def _parse_optional_json_list(field: str | None, field_name: str) -> list[dict] 
 
 
 def _per_kind(raw: str | None) -> dict:
-    """The lineage form field: a JSON object by each artifact's name (its old id too until ADR-024's part 5), or {}."""
+    """The lineage form field: a JSON object by each artifact's name, or {}. A key by what it was called before
+    ADR-024 (refused since its part 5) is a 422 renamed, naming the name."""
     try:
         value = json.loads(raw) if raw else {}
     except ValueError:
         return {}
-    return {artifact_in(k): v for k, v in value.items()} if isinstance(value, dict) else {}
+    if not isinstance(value, dict):
+        return {}
+    for key in value:
+        name = now_called(key, "artifact")
+        if name and key != name:
+            raise ApiError(422, "renamed", f"lineage's {key} is called {name} now: key it by its name.",
+                           {"sent": key, "name": name})
+    return value
 
 
-def preview_sent(proxy: UploadFile | None, named: UploadFile | None) -> UploadFile:
-    """The preview a client sent, as `proxy` or by its name (`lumiverb.preview`, ADR-024): 422 without one."""
-    sent = proxy or named
-    if sent is None:
-        raise ApiError(422, "preview_required", "Send the clip's preview: the file proxy (or lumiverb.preview).")
-    return sent
+def preview_sent(old: UploadFile | None, named: UploadFile | None) -> UploadFile:
+    """The preview a client sent, by its name (`lumiverb.preview`): 422 without one, and 422 renamed for the
+    field by its old kind (refused since ADR-024's part 5)."""
+    if old is not None:
+        was = WAS[PREVIEW]["file"]
+        raise ApiError(422, "renamed", f"The file {was} is called {PREVIEW} now: send it by its name.",
+                       {"sent": was, "name": PREVIEW})
+    if named is None:
+        raise ApiError(422, "preview_required", f"Send the clip's preview: the file {PREVIEW}.")
+    return named
 
 
 def _required_lineage(raw: str | None, vision_data: dict | None, embeddings_data: list[dict] | None,
@@ -392,7 +405,7 @@ async def create_and_ingest(
     exists, it is updated (idempotent).
 
     Required form fields:
-      - proxy: image file
+      - lumiverb.preview: image file (by its old kind, refused since ADR-024's part 5)
       - library_id: target library
       - rel_path: relative path within the library root
       - file_size: source file size in bytes

@@ -2,15 +2,15 @@
 """Tenant migration a3c9e5f1b7d2: Lumiverb's own files kept by their names
 (ADR-024 phase 1 part 4).
 
-- Its mapping is its own, and while src/producers/names.py RENAMED exists the
-  two are the same.
+- Its mapping is its own, and the names' history (src/producers/names.py
+  WAS) says the same.
 - An account from before part 4 upgraded straight to the head: its open
   uploads and the missing-file reports waiting for upkeep, written out here
-  as each is named after (a test that stays when part 5 removes RENAMED),
-  and the CHECK on uploads taking only the names; down, every row as it was.
+  as each is named after, and the CHECK on uploads taking only the names;
+  down, every row as it was.
 - Through today's code: an upload open and a missing-file report pending
   across a migration down and up are as they were, and the upload finishes
-  and the repair repairs after.
+  and the repair repairs after. A report in an old kind is let go (part 5).
 
 Runs Alembic against throwaway databases only.
 """
@@ -47,13 +47,13 @@ def _migration():
     return m
 
 
-def test_the_migration_s_mapping_is_renamed():
-    # Its mapping is its own (part 5 deletes RENAMED); while both exist they're the same.
-    from src.producers.names import RENAMED
+def test_the_migration_s_mapping_is_the_names_history():
+    # Its mapping is its own; the names' history (WAS, the page's "Files") says the same.
+    from src.producers.names import FILES, WAS
     from src.server import uploads
 
     m = _migration()
-    assert dict(RENAMED["file"]) == m.FILES
+    assert {WAS[name]["file"]: name for name in FILES} == m.FILES
     assert {m.FILES[old] for old in m.UPLOADED} == set(uploads.KINDS)
 
 
@@ -190,8 +190,10 @@ def test_an_open_upload_and_a_pending_repair_go_down_and_up_and_finish(env, data
     assert client.get(f"/v1/assets/{photo}", headers=headers).json()["proxy_key"] is None
 
 
-def test_a_report_from_before_part_4_is_still_repaired(env):
-    # One an older API worker wrote as the upgrade went on (the old kind): taken until part 5.
+def test_a_report_in_an_old_kind_is_let_go_and_the_file_reported_again_by_its_name(env):
+    # None is written since part 4 and the migration renamed those waiting: one left is let go (part 5), and the
+    # file's next GET reports it by its name.
+    from src.producers.names import PREVIEW
     from src.server import missing_artifacts
     from src.server.database import get_engine_for_url
     from tests.test_lineage_api import _ingest_with, _sha
@@ -206,5 +208,12 @@ def test_a_report_from_before_part_4_is_still_repaired(env):
                              " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"),
                         {"v": json.dumps([f"{photo}:proxy"])})
         session.commit()
+        assert missing_artifacts.repair(session) == {"checked": 0, "cleared": 0, "remade": 0}
+        assert missing_artifacts.reported(session) == []
+    assert client.get(f"/v1/assets/{photo}", headers=headers).json()["proxy_key"] is not None
+    r = client.get(f"/v1/assets/{photo}/artifacts/{PREVIEW}", headers=headers)
+    assert r.status_code == 404 and r.json()["error"]["code"] == "artifact_missing", r.text
+    with Session(get_engine_for_url(url)) as session:
+        assert missing_artifacts.reported(session) == [f"{photo}:{PREVIEW}"]
         assert missing_artifacts.repair(session)["cleared"] == 1
     assert client.get(f"/v1/assets/{photo}", headers=headers).json()["proxy_key"] is None

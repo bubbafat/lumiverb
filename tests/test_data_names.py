@@ -5,8 +5,9 @@ worked out from them.
 The names change nothing the scheduler works out but its words: the
 registry is held to what it was before names (tests/fixtures/
 producers_before_names.json, written from main before part 1), each old word
-read as its name through RENAMED, and what each producer reads to the SQL
-that decides whether it's due. The registry's own refusals are in
+read as its name through the names' history (WAS), and what each producer
+reads to the SQL that decides whether it's due. An old word is never taken
+(part 5): test_names_taken.py. The registry's own refusals are in
 test_producer_contract.py; the migration that renamed what's stored (part 3),
 test_migration_names_stored.py.
 """
@@ -24,23 +25,19 @@ import pytest
 from src.plugins.manifest import INPUT_NAMES, INPUTS, read
 from src.producers import names, registry, use_added
 from src.producers.names import (
-    ARTIFACTS,
     FILES,
-    KINDS,
     LUMIVERB,
     MACHINE_WORDS,
-    PRODUCERS,
-    RENAMED,
     RESERVED,
-    artifact_in,
-    file_in,
+    WAS,
     is_reserved,
-    kind_in,
+    made_by_file,
     makers,
     needs_of,
+    now_called,
     page,
-    producer_in,
     sql_spelling,
+    typed,
 )
 
 pytestmark = pytest.mark.fast
@@ -72,15 +69,26 @@ def _now() -> dict:
 
 def _sql_named(sql: str) -> str:
     """Main's SQL with each artifact, producer and settings key it names as it's named now."""
-    for (old, producer), name in PRODUCERS.items():
-        sql = re.sub(rf"(\bartifact = )'{re.escape(old)}'", rf"\1'{name}'", sql)
-        sql = re.sub(rf"(\bproducer = )'{re.escape(producer)}'", rf"\1'{name}'", sql)
-        sql = sql.replace(f"'producer.{old}'", f"'producer.{name}'")
+    for name, was in WAS.items():
+        if "artifact" in was:
+            sql = re.sub(rf"(\bartifact = )'{re.escape(was['artifact'])}'", rf"\1'{name}'", sql)
+            sql = re.sub(rf"(\bproducer = )'{re.escape(was['producer'])}'", rf"\1'{name}'", sql)
+            sql = sql.replace(f"'producer.{was['artifact']}'", f"'producer.{name}'")
     return sql
 
 
+def artifact_in(word: str) -> str:
+    """An artifact's old id as its name (WAS), anything else as it is."""
+    return now_called(word, "artifact") or word
+
+
+def kind_in(word: str) -> str:
+    """A kind's old word as its name, a remake's as redo:<name> (WAS), anything else as it is."""
+    return now_called(word, "kind") or word
+
+
 def _before_named() -> dict:
-    """tests/fixtures/producers_before_names.json, each old word as its name (RENAMED)."""
+    """tests/fixtures/producers_before_names.json, each old word as its name (WAS)."""
     before = json.loads(BEFORE.read_text())
     return {
         "producers": {artifact_in(a): {"needs": [artifact_in(n) for n in p["needs"]],
@@ -143,45 +151,48 @@ def test_every_name_is_made_once_and_spelt_once_for_sql():
     assert {d.name for d in LUMIVERB}.isdisjoint(p.makes.name for p in registry().values())
 
 
-def test_renamed_is_the_registry():
-    # Each family's old words, to the names the registry has: every name one of them, and main's words.
+def test_the_names_history_is_the_registry():
+    # Each name's old words, by family: every name the registry has, and main's words.
     from src.server.api.routers.artifacts import ALLOWED_ARTIFACT_TYPES
     from src.server.scheduler.kinds import KINDS as SCHEDULER_KINDS
 
     before = json.loads(BEFORE.read_text())
     own = {a for a, p in registry().items() if not p.plugin}
-    assert dict(ARTIFACTS) == {a: artifact_in(a) for a in before["producers"]} and set(ARTIFACTS.values()) == own
-    assert set(PRODUCERS) == {(a, p["producer"]) for a, p in before["producers"].items()}
-    assert all(name == ARTIFACTS[a] for (a, _), name in PRODUCERS.items())
-    assert set(KINDS) == {p["kind"] for p in before["producers"].values() if p["kind"]}
-    assert {KINDS[k] for k in KINDS} == {k for k in SCHEDULER_KINDS if k != "scan" and not k.startswith("redo:")}
-    assert set(FILES) == ALLOWED_ARTIFACT_TYPES  # by their names from part 4
+    artifacts = {was["artifact"]: name for name, was in WAS.items() if "artifact" in was}
+    assert set(artifacts) == set(before["producers"]) and set(artifacts.values()) == own
+    assert {(was["artifact"], was["producer"]) for was in WAS.values() if "artifact" in was} \
+        == {(a, p["producer"]) for a, p in before["producers"].items()}
+    assert {was["kind"] for was in WAS.values() if "kind" in was} \
+        == {p["kind"] for p in before["producers"].values() if p["kind"]}
+    assert {name for name, was in WAS.items() if "kind" in was} \
+        == {k for k in SCHEDULER_KINDS if k != "scan" and not k.startswith("redo:")}
+    assert set(FILES) == ALLOWED_ARTIFACT_TYPES == {name for name, was in WAS.items() if "file" in was}
     assert all(f in makers() or f.rpartition(".")[0] in makers() for f in FILES)
-    assert set(RENAMED) == {"artifact", "producer", "kind", "file"}
-    assert RENAMED["file"] == {old: new for new, old in FILES.items()}
+    assert {made_by_file(f) for f in FILES} <= own
+    assert all(set(was) <= {"artifact", "producer", "kind", "file"} for was in WAS.values())
 
 
-def test_either_spelling_comes_in_as_its_name():
-    # From part 3 what's stored and sent is the name; an old word is taken until part 5.
-    assert artifact_in("lumiverb.image.text") == artifact_in("ocr") == "lumiverb.image.text"
-    assert artifact_in("analysis_proxy") == "lumiverb.video.analysis_proxy"
-    assert artifact_in("plugin_facts") == artifact_in("facts") == "facts"  # a plug-in's work, its id
-    assert artifact_in("plugin_my_tool") == "my-tool"  # each underscore was a dash
-    assert artifact_in("upkeep") == "upkeep" and artifact_in("all") == "all"
-    assert file_in("lumiverb.preview") == file_in("proxy") == "lumiverb.preview"  # by their names from part 4
-    assert file_in("thumbnail") == "lumiverb.preview.thumbnail"
-    assert file_in("scene_rep") == "lumiverb.video.scenes.picture"
-    assert file_in("lumiverb.video.analysis_proxy") == file_in("analysis_proxy") == "lumiverb.video.analysis_proxy"
-    assert producer_in("lumiverb.image.faces", "insightface") == producer_in("faces", "insightface") \
-        == producer_in("faces", "lumiverb.image.faces") == "lumiverb.image.faces"
-    assert producer_in("facts", "plugin_facts") == "facts"
-    # Only the producer that makes it now, for its own artifact; another (an older one, a person's) as it came.
-    assert producer_in("lumiverb.image.description", "insightface") == "insightface"
-    assert producer_in("lumiverb.image.description", "manual") == "manual"
-    assert kind_in("render") == "lumiverb.video.analysis_proxy"
-    assert kind_in("redo_vision") == "redo:lumiverb.image.description"
-    assert kind_in("plugin_facts") == "facts" and kind_in("redo_plugin_facts") == "redo:facts"
-    assert kind_in("scan") == "scan" and kind_in("lumiverb.image.text") == "lumiverb.image.text"
+def test_an_old_word_is_said_by_its_name_and_never_taken():
+    # What a refusal names (part 5): each family's old word, a remake's kind, a plug-in's work before part 3.
+    assert now_called("ocr") == now_called("ocr", "artifact") == "lumiverb.image.text"
+    assert now_called("analysis_proxy", "file") == now_called("render", "kind") == "lumiverb.video.analysis_proxy"
+    assert now_called("insightface", "producer") == "lumiverb.image.faces"
+    assert now_called("thumbnail", "file") == "lumiverb.preview.thumbnail"
+    assert now_called("scene_rep") == "lumiverb.video.scenes.picture"
+    assert now_called("redo_vision", "kind") == "redo:lumiverb.image.description"
+    assert now_called("plugin_facts") == "facts" and now_called("plugin_my_tool", "artifact") == "my-tool"
+    # A word of another family isn't one, and a name, a machine's word or a plug-in's id never was.
+    assert now_called("thumbnail", "artifact") is None and now_called("render", "artifact") is None
+    for word in ("lumiverb.image.text", "facts", "upkeep", "all", "scan", "redo:lumiverb.image.text", ""):
+        assert now_called(word) is None, word
+    # Typed: a name with or without lumiverb., as listed; an old word refused, saying what to type.
+    listed = ["lumiverb.image.description", "facts", "scans"]
+    assert typed("image.description", listed) == ("lumiverb.image.description", None)
+    assert typed("lumiverb.image.description", listed) == ("lumiverb.image.description", None)
+    assert typed("facts", listed) == ("facts", None)
+    assert typed("vision", listed) == (None, "vision is called image.description now: type that")
+    assert typed("plugin_facts", listed) == (None, "plugin_facts is called facts now: type that")
+    assert typed("teleport", listed) == (None, None)
 
 
 def test_needs_are_the_artifacts_its_reads_are_made_by():
@@ -247,9 +258,9 @@ def test_a_plug_in_reading_what_nothing_makes_is_refused():
 
 
 def test_the_ids_a_plug_in_cant_have():
-    # Written out, so they stay refused after part 5 deletes RENAMED: the machine's words, the pools, every old
-    # word of every family and the first word of each name, as they are now.
-    old = {*ARTIFACTS, *(p for _, p in PRODUCERS), *KINDS, *FILES.values()}
+    # Written out: the machine's words, the pools, every old word of every family (WAS) and the first word of
+    # each name, as they are now.
+    old = {word for was in WAS.values() for word in was.values()}
     pools = {p.pool.name for p in registry().values() if p.pool and not p.plugin}
     first = {n.split(".")[1] for n in names.names()}
     assert {*MACHINE_WORDS, *pools, *old, *first} == RESERVED
@@ -266,7 +277,7 @@ def test_the_ids_a_plug_in_cant_have():
 
 def test_the_names_add_two_account_migrations_and_none_of_the_control_plane_s():
     # Part 3's renames what's stored (its rollback, migrate --to f8c4a2e6d0b5), part 4's the files (its rollback,
-    # migrate --to f2a6c8e4b0d7); parts 1 to 4 touch no control database.
+    # migrate --to f2a6c8e4b0d7); parts 1 to 5 touch no control database, and part 5 no account's.
     from alembic.script import ScriptDirectory
 
     tenant = ScriptDirectory(str(REPO / "migrations" / "tenant"))
