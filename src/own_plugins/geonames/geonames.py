@@ -13,8 +13,8 @@ the old one answering searches meanwhile.
                            one is fetched); preparing, with how far; failed,
                            with why
   POST /v1/work            each clip's location -> the landmark it's at
-                           ("at") and the nearest town within its radius
-                           ("near"), as facts; while it has no list of this
+                           ("landmark") and the nearest town within its
+                           radius ("town"), as facts; while it has no list of this
                            version, every clip's error is its own (whose:
                            plugin): they wait, uncharged
   POST /v1/lookups/places  {"q", "limit"} or {"id"}: places by name, or one
@@ -218,15 +218,16 @@ class Keeper:
 
 
 def facts(found: places.Places, where: dict[str, Any] | None, within_m: float) -> dict[str, Any]:
-    """A clip's facts from where it is: the landmark it's at ("at": its name when a town is near, else its
-    label, which says where) and the nearest town ("near": its label), as the Lightbox has said them."""
+    """A clip's facts from where it is: the landmark it's at ("landmark": its name when a town is near, else
+    its label, which says where) and the nearest town ("town": its label), as the Lightbox has said them."""
     if not where:
-        return {"at": None, "near": None}
+        return {"landmark": None, "town": None}
     lat, lon, sure = float(where["lat"]), float(where["lon"]), float(where.get("sure_m") or 0)
     town = found.nearest(lat, lon, within_m)
     mark = found.landmark_at(lat, lon, sure)
-    return {"at": {"text": places.cut(mark["name"] if town else places.label(mark), places.FACT_MAX)} if mark else None,
-            "near": {"text": places.cut(places.label(town), places.FACT_MAX)} if town else None}
+    return {"landmark": {"text": places.cut(mark["name"] if town else places.label(mark), places.FACT_MAX)}
+            if mark else None,
+            "town": {"text": places.cut(places.label(town), places.FACT_MAX)} if town else None}
 
 
 def work(keeper: Keeper, sent: dict[str, Any]) -> dict[str, Any]:

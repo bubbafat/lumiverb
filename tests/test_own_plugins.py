@@ -36,6 +36,8 @@ from tests.test_first_run_setup import _env_file, control  # noqa: F401 (control
 
 pytestmark = pytest.mark.slow
 GEONAMES = "geonames"
+# The version Lumiverb ships (its manifest), so a new one changes no test here.
+SHIPPED = json.loads((Path(__file__).resolve().parents[1] / "src/own_plugins/geonames/lumiverb-plugin.json").read_text())["version"]
 
 
 def _row() -> dict | None:
@@ -87,12 +89,12 @@ def test_it_comes_installed_off_by_default_once(control, tmp_path) -> None:  # n
     said = _install(control, data)
     row = _row()
     assert (row["version"], row["on_by_default"], row["acknowledged_version"], row["installed_by"]) == (
-        "2", False, None, BY)
-    assert said == ["✓ Place names (GeoNames) 2 installed, off until an account's admin turns it on"]
+        SHIPPED, False, None, BY)
+    assert said == [f"✓ Place names (GeoNames) {SHIPPED} installed, off until an account's admin turns it on"]
     assert (program_dir(data, GEONAMES) / "geonames.py").read_text() == (own_plugins.OWN / GEONAMES / "geonames.py").read_text()
     # Again (every start migrates): nothing changes, nothing more is kept.
     assert _install(control, data) == [] and len(_log()) == 1
-    assert _status() == [{"plugin_id": GEONAMES, "title": "Place names (GeoNames)", "shipped": "2", "installed": "2",
+    assert _status() == [{"plugin_id": GEONAMES, "title": "Place names (GeoNames)", "shipped": SHIPPED, "installed": SHIPPED,
                           "failed": None, "uninstalled": False}]
     assert own_plugins_row(own=_status(), now=utcnow()).state == GREEN
 
@@ -105,10 +107,10 @@ def test_a_newer_one_keeps_the_server_admins_default_and_what_they_accepted(cont
                                                       now=utcnow())
         session.commit()
     # A later release rewords its text: what was accepted stands.
-    _shipped(tmp_path / "a", monkeypatch, version="2.1", acknowledgment={"version": "3.1"})
-    assert _install(control, data) == ["✓ Place names (GeoNames) updated from 2 to 2.1"]
+    _shipped(tmp_path / "a", monkeypatch, version=f"{SHIPPED}.1", acknowledgment={"version": "3.1"})
+    assert _install(control, data) == [f"✓ Place names (GeoNames) updated from {SHIPPED} to {SHIPPED}.1"]
     row = _row()
-    assert (row["version"], row["on_by_default"], row["acknowledged_version"], row["changed_by"]) == ("2.1", True, "3", BY)
+    assert (row["version"], row["on_by_default"], row["acknowledged_version"], row["changed_by"]) == (f"{SHIPPED}.1", True, "3", BY)
     assert _log()[-1]["by"] == BY and _log()[-1]["action"] == "install"
     from src.plugins.manifest import parse
 
@@ -119,12 +121,12 @@ def test_a_newer_one_keeps_the_server_admins_default_and_what_they_accepted(cont
 
     assert follower() == ON
     # A later one asks it again: nobody accepts it for them, so the accounts following the default wait.
-    _shipped(tmp_path / "b", monkeypatch, version="3", acknowledgment={"version": "4", "reaccept_from": "4"})
+    _shipped(tmp_path / "b", monkeypatch, version=f"{SHIPPED}.2", acknowledgment={"version": "4", "reaccept_from": "4"})
     _install(control, data)
     assert _row()["acknowledged_version"] == "3" and follower() == WAITING
     # One that reads more is accepted with Lumiverb, and said.
-    _shipped(tmp_path / "c", monkeypatch, version="4", internet=True)
-    assert _install(control, data) == ["✓ Place names (GeoNames) updated from 3 to 4 (it also: Uses the internet, "
+    _shipped(tmp_path / "c", monkeypatch, version=f"{SHIPPED}.3", internet=True)
+    assert _install(control, data) == [f"✓ Place names (GeoNames) updated from {SHIPPED}.2 to {SHIPPED}.3 (it also: Uses the internet, "
                                        "accepted with Lumiverb)"]
 
 
@@ -138,7 +140,7 @@ def test_one_the_server_admin_uninstalled_stays_uninstalled_until_they_install_i
     monkeypatch.setenv("DATA_DIR", str(data))
     monkeypatch.setenv("APP_HOST", "http://localhost:6464")
     assert cli.main(["migrate", "--env", str(env)]) == 0
-    assert "✓ Place names (GeoNames) 2 installed" in capsys.readouterr().out
+    assert f"✓ Place names (GeoNames) {SHIPPED} installed" in capsys.readouterr().out
     assert cli.main(["plugins", "uninstall", GEONAMES, "--yes", "--env", str(env)]) == 0
     said = _install(control, data)
     assert _row() is None and said == [
@@ -148,7 +150,7 @@ def test_one_the_server_admin_uninstalled_stays_uninstalled_until_they_install_i
     assert cli.main(["plugins", "--env", str(env)]) == 0
     assert "Lumiverb's own: geonames (Place names (GeoNames)) uninstalled by the server admin" in capsys.readouterr().out
     assert cli.main(["plugins", "install", str(own_plugins.OWN / GEONAMES), "--off", "--yes", "--env", str(env)]) == 0
-    assert _row()["version"] == "2"
+    assert _row()["version"] == SHIPPED
     assert _install(control, data) == [], "theirs again: nothing to do"
 
 
@@ -200,7 +202,7 @@ def test_what_it_takes_from_the_install_is_its_own_folders_to_say(control, tmp_p
     else:
         (folder / own_plugins.CARRIED).write_text(carried)
     lines = _install(control, tmp_path / "data", environ={"LUMIVERB_GEONAMES_URL": "http://mirror.lan/"})
-    assert _row() is not None and lines[0].startswith("✓ Place names (GeoNames) 2 installed")
+    assert _row() is not None and lines[0].startswith(f"✓ Place names (GeoNames) {SHIPPED} installed")
     assert (lines[1:] == []) if said is None else lines[1].startswith(said), lines
     with get_control_session() as session:
         assert PluginSettingsRepository(session, SERVER).get(GEONAMES) == {}
@@ -223,12 +225,12 @@ def test_one_that_cant_be_installed_is_said_kept_with_why_once_and_shown(control
     monkeypatch.setattr(own_plugins, "OWN", Path(own_plugins.__file__).resolve().parents[1] / "own_plugins")
     own_plugins.shipped.cache_clear()
     install_own(control, tmp_path / "data", say=lambda line: None)
-    assert _row()["version"] == "2" and own_plugins_row(own=_status(), now=utcnow()).state == GREEN
+    assert _row()["version"] == SHIPPED and own_plugins_row(own=_status(), now=utcnow()).state == GREEN
 
 
 def test_an_older_one_waiting_for_the_next_start_is_yellow(control, tmp_path, monkeypatch) -> None:  # noqa: F811
     _install(control, tmp_path / "data")
-    _shipped(tmp_path, monkeypatch, version="3")
+    _shipped(tmp_path, monkeypatch, version=f"{SHIPPED}.1")
     row = own_plugins_row(own=_status(), now=utcnow())
     assert row.state == YELLOW and row.reason == "Place names (GeoNames): installed at the next start of Lumiverb."
 
@@ -240,7 +242,7 @@ def test_two_installs_at_once_install_it_once(control, tmp_path) -> None:  # noq
         t.start()
     for t in both:
         t.join(120)
-    assert [e["action"] for e in _log()] == ["install"] and _row()["version"] == "2"
+    assert [e["action"] for e in _log()] == ["install"] and _row()["version"] == SHIPPED
 
 
 def test_every_account_that_had_it_on_has_it_on_and_no_one_else(control, tmp_path) -> None:  # noqa: F811
@@ -272,7 +274,7 @@ def test_a_linux_update_installs_it_as_migrate_sh_s_last_step(control, tmp_path,
     assert out.returncode == 0, out.stdout + out.stderr
     assert "=== Step 4: Lumiverb's own plug-ins ===" in out.stdout
     if with_data_dir:
-        assert "✓ Place names (GeoNames) 2 installed" in out.stdout and _row()["installed_by"] == BY
+        assert f"✓ Place names (GeoNames) {SHIPPED} installed" in out.stdout and _row()["installed_by"] == BY
         assert (program_dir(data, GEONAMES) / "geonames.py").is_file()
     else:
         assert f"✗ geonames couldn't be installed: {NO_DATA_DIR}" in out.stderr and _row() is None

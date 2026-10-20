@@ -652,7 +652,7 @@ def test_part2_the_program_answers_as_the_built_in_did_on_the_testers_lists(site
                     outputs = said[str(n)]["outputs"]
                     checked_outputs(g.manifest.work, outputs)  # raises: what Lumiverb would refuse
                     at, near = golden["work"][str(km)][start + n - 1]
-                    want = {"at": names[at] if at >= 0 else None, "near": names[near] if near >= 0 else None}
+                    want = {"landmark": names[at] if at >= 0 else None, "town": names[near] if near >= 0 else None}
                     got = {k: (v or {}).get("text") for k, v in outputs.items()}
                     if got != want:
                         differences.append(("work", km, la, lo, sure, want, got))
@@ -807,7 +807,7 @@ def _part3s(folder: Path) -> Path:
     manifest = json.loads((old / MANIFEST).read_text())
     manifest["version"] = "1"
     for output in manifest["work"]["outputs"]:
-        if output["key"] == "at":
+        if output["key"] == "landmark":
             output.pop("searchable", None)
     (old / MANIFEST).write_text(json.dumps(manifest, indent=2))
     return old
@@ -884,10 +884,10 @@ def test_part4_a_landmarks_name_finds_its_clips_named_before_the_upgrade_and_aft
         before = clips_at(QUILLSTONE, "q1.jpg", "q2.jpg") + clips_at(BRINDLEMOOR, "b1.jpg")
         name_whats_due()
         then = {clip: shown(clip) for clip in before}
-        assert [then[c]["at"] for c in before[:2]] == [QUILLSTONE] * 2, then
-        assert then[before[2]]["at"].startswith(f"{BRINDLEMOOR}, ") and then[before[2]]["near"] == "Not near a town"
+        assert [then[c]["landmark"] for c in before[:2]] == [QUILLSTONE] * 2, then
+        assert then[before[2]]["landmark"].startswith(f"{BRINDLEMOOR}, ") and then[before[2]]["town"] == "Not near a town"
         assert found("Quillstone") == found("Brindlemoor") == set(), "part 3: At isn't searched"
-        near = then[before[0]]["near"].split(",")[0]
+        near = then[before[0]]["town"].split(",")[0]
         assert set(before[:2]) <= found(near), "Near is"
     finally:
         runner.stop_all()  # the upgrade: the services stopped
@@ -1063,7 +1063,7 @@ def test_part4_an_account_from_before_part_3_upgraded_straight_to_head_loses_not
         assert not {t for t in tables if t.startswith("geonames_")} | ({"plugin_data"} & tables)
         installed = session.execute(text("SELECT version, installed_by FROM installed_plugins"
                                          " WHERE plugin_id = 'geonames'")).one()
-        assert tuple(installed) == ("2", "lumiverb")
+        assert tuple(installed) == (json.loads((GEONAMES / "lumiverb-plugin.json").read_text())["version"], "lumiverb")
     refresh()
 
     def shown(clip: str) -> dict:
@@ -1106,9 +1106,9 @@ def test_part4_an_account_from_before_part_3_upgraded_straight_to_head_loses_not
         run_job(PluginWork, acct, tenant_id, "geonames", items)
         assert acct.failures.charged == []
         named = {name: shown(clip) for name, clip in clips.items()}
-        assert [named[n]["at"] for n in ("q1", "q2", "picked")] == [QUILLSTONE] * 3, named
-        assert named["b1"]["at"].startswith(f"{BRINDLEMOOR}, ") and named["b1"]["near"] == "Not near a town", named
-        assert named["far"]["near"] != "Not near a town" and "at" not in named["far"], \
+        assert [named[n]["landmark"] for n in ("q1", "q2", "picked")] == [QUILLSTONE] * 3, named
+        assert named["b1"]["landmark"].startswith(f"{BRINDLEMOOR}, ") and named["b1"]["town"] == "Not near a town", named
+        assert named["far"]["town"] != "Not near a town" and "landmark" not in named["far"], \
             f"its town is 28 to 37 km away: named at the 40 km chosen before, not 25 ({named['far']})"
         assert found("Quillstone") == {clips["q1"], clips["q2"], clips["picked"]}
         assert found("Brindlemoor") == {clips["b1"]}

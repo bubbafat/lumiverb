@@ -5,8 +5,9 @@ the hash of the inputs they were made from (src/server/repository/clip_inputs.py
 and the text of those its manifest says are searchable (search_text: its
 words are indexed, src/server/search/text_search.py facts). A newer version
 of the plug-in that searches other outputs has its saved ones' text written
-again by the search sweep (searched_again), from what they say: nothing is
-made again for it.
+again by the search sweep (searched_again), from what they say, and one that
+renames an output (its `was`, ADR-024 phase 2) has what's saved under the old
+key renamed first (renamed_again): nothing is made again for either.
 
 What's shown and searched is only a plug-in's that's installed and on in the
 account, for a clip that's one of its media and still has every input its
@@ -55,6 +56,19 @@ class PluginOutputRepository:
             " ON CONFLICT (asset_id, plugin_id) DO UPDATE SET outputs = EXCLUDED.outputs,"
             "   inputs_hash = EXCLUDED.inputs_hash, made_at = EXCLUDED.made_at, search_text = EXCLUDED.search_text"
         ), {"a": asset_id, "p": plugin_id, "o": json.dumps(outputs), "h": inputs_hash, "now": utcnow()})
+
+    def renamed_again(self, plugin_id: str, work: Any) -> int:
+        """Its saved outputs under a key a newer version renamed (an output's `was`), under their key now, as
+        they were (an empty one too): how many rows. Nothing is made again: the inputs' hash and when it was
+        made stay. Doesn't commit."""
+        n = 0
+        for o in work.outputs:
+            if o.was:
+                n += self._session.execute(text(
+                    "UPDATE plugin_outputs SET outputs = (outputs - :was) || jsonb_build_object(:key, outputs -> :was)"
+                    " WHERE plugin_id = :p AND outputs -> :was IS NOT NULL AND outputs -> :key IS NULL"
+                ), {"p": plugin_id, "was": o.was, "key": o.key}).rowcount
+        return n
 
     def searched_again(self, plugin_id: str, work: Any) -> int:
         """Its saved outputs' search text, written again where its work now searches others (a newer version

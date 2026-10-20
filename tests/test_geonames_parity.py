@@ -155,9 +155,10 @@ def test_through_lumiverb_its_facts_say_what_the_golden_file_says(lumiverb) -> N
         assert "place" not in detail, "the built-in's place is gone: the plug-in's section says it"
         section = next(s for s in detail["facts"] if s["plugin_id"] == GEONAMES)
         facts = {fact["key"]: (None if fact["empty"] else fact["text"]) for fact in section["facts"]}
-        assert _collapsed({"at": facts.get("at"), "near": facts.get("near")}) == _collapsed(lines), point
+        # The golden file is the built-in's, its lines At and Near: the plug-in's landmark and town now.
+        assert _collapsed({"at": facts.get("landmark"), "near": facts.get("town")}) == _collapsed(lines), point
         if lines["near"] is None:
-            assert {"key": "near", "label": "Near", "text": "Not near a town", "url": None, "empty": True} in section["facts"]
+            assert {"key": "town", "label": "Near", "text": "Not near a town", "url": None, "empty": True} in section["facts"]
 
 
 def _found(f, words: str) -> set[str]:
@@ -177,13 +178,45 @@ def test_search_finds_a_clip_by_the_landmark_it_is_at_and_the_town_it_is_near(lu
     assert _found(f, "eiffel") == {eiffel}, "At Tour Eiffel"
     assert _found(f, "paris") == {eiffel, town}, "both near Paris"
     with get_tenant_session(f["tenant_id"]) as session:  # as version 1 saved it: its near alone
-        session.execute(text("UPDATE plugin_outputs SET search_text = outputs->'near'->>'text'"
+        session.execute(text("UPDATE plugin_outputs SET search_text = outputs->'town'->>'text'"
                              " WHERE asset_id = :a"), {"a": eiffel})
         session.commit()
     assert _found(f, "eiffel") == set()
     with get_tenant_session(f["tenant_id"]) as session:
         assert run_search_sync_sweep(session)["facts_synced"] == 1
         assert run_search_sync_sweep(session)["facts_synced"] == 0, "once"
+    assert _found(f, "eiffel") == {eiffel}
+    assert due(tenant_database_url(f["tenant_id"]), "geonames", [f["library_id"]]) == [], "nothing made again"
+
+
+def test_facts_saved_under_the_old_keys_are_renamed_by_the_search_sweep_nothing_made_again(lumiverb) -> None:
+    """Version 3 calls its outputs landmark and town (ADR-024 phase 2: geonames.landmark, geonames.town), each
+    saying it was at or near: what earlier versions saved under those is renamed by the search sweep, an empty
+    one too, and nothing is made again."""
+    from src.server.search.sync import run_search_sync_sweep
+
+    f = lumiverb
+    eiffel, nowhere = _named(f, [lists.EIFFEL, lists.CASTLE])
+    with get_tenant_session(f["tenant_id"]) as session:  # as version 2 saved them
+        session.execute(text("UPDATE plugin_outputs SET outputs = jsonb_build_object('at', outputs -> 'landmark',"
+                             " 'near', outputs -> 'town') WHERE plugin_id = :p"), {"p": GEONAMES})
+        session.commit()
+        before = session.execute(text("SELECT asset_id, inputs_hash, made_at FROM plugin_outputs"
+                                      " WHERE plugin_id = :p ORDER BY asset_id"), {"p": GEONAMES}).all()
+    with get_tenant_session(f["tenant_id"]) as session:
+        assert run_search_sync_sweep(session)["facts_synced"] == 4, "two clips, two outputs each"
+        assert run_search_sync_sweep(session)["facts_synced"] == 0, "once"
+        rows = session.execute(text("SELECT asset_id, inputs_hash, made_at, outputs FROM plugin_outputs"
+                                    " WHERE plugin_id = :p ORDER BY asset_id"), {"p": GEONAMES}).all()
+    assert [r[:3] for r in rows] == [tuple(r) for r in before], "nothing made again"
+    assert all(set(r[3]) == {"landmark", "town"} for r in rows), rows
+    detail = f["client"].get(f"/v1/assets/{eiffel}", headers=f["robert"]).json()
+    section = next(s for s in detail["facts"] if s["plugin_id"] == GEONAMES)
+    assert [(x["key"], x["text"]) for x in section["facts"]] == [
+        ("landmark", "Tour Eiffel"), ("town", "Paris, Île-de-France, France")]
+    shown = f["client"].get(f"/v1/assets/{nowhere}", headers=f["robert"]).json()
+    town = next(s for s in shown["facts"] if s["plugin_id"] == GEONAMES)["facts"][-1]
+    assert (town["key"], town["text"], town["empty"]) == ("town", "Not near a town", True), "its empty line kept"
     assert _found(f, "eiffel") == {eiffel}
     assert due(tenant_database_url(f["tenant_id"]), "geonames", [f["library_id"]]) == [], "nothing made again"
 

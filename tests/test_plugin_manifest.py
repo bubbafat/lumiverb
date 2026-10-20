@@ -89,6 +89,24 @@ def test_an_outputs_empty_line_and_a_credits_license() -> None:
     assert parse(copy.deepcopy(EXAMPLE)).credit.shown()["license"] is None, "naming none is fine"
 
 
+def test_an_output_renamed_says_the_key_it_was_saved_under() -> None:
+    # ADR-024 phase 2: a newer version that renames an output says what it was, so what's saved is renamed.
+    data = copy.deepcopy(EXAMPLE)
+    data["work"]["outputs"][0].update(key="landmark", was="at")
+    data["work"]["outputs"][1].update(key="town", was="near")
+    m = parse(data)
+    assert [(o.key, o.was) for o in m.work.outputs] == [("landmark", "at"), ("town", "near")]
+    assert [o.was for o in parse(copy.deepcopy(EXAMPLE)).work.outputs] == ["", ""], "none renamed"
+    for was, change in (
+        ("At", lambda o: o[0].update(was="At")),  # not a key
+        ("its own", lambda o: o[0].update(was="at")),
+        ("another's key", lambda o: o[0].update(key="landmark", was="near")),
+        ("two outputs'", lambda o: (o[0].update(key="landmark", was="old"), o[1].update(key="town", was="old"))),
+    ):
+        problems = _problems(lambda d, change=change: change(d["work"]["outputs"]))
+        assert any("was" in p for p in problems), (was, problems)
+
+
 def test_only_what_it_needs_is_required() -> None:
     m = parse({"id": "hello", "version": "1", "protocol": 1, "title": "Hello", "description": "Says hello.",
                "run": ["python3", "hello.py"]})
