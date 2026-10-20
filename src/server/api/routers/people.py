@@ -637,7 +637,8 @@ def get_face_crop(
     except NotFound:
         raise HTTPException(status_code=404, detail="Crop file missing") from None
 
-    return Response(crop, media_type="image/webp", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+    # A person's face: kept by the browser that asked, never by a cache between (private).
+    return Response(crop, media_type="image/webp", headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
 
 @faces_router.post("/{face_id}/assign", status_code=200, dependencies=[Depends(require_editor)])

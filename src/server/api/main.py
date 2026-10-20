@@ -115,7 +115,10 @@ async def lifespan(app: FastAPI):
 set_application_name("lumiverb-api")  # its connections, as PostgreSQL shows them
 # A device's key goes no further than the routes a scan calls (src/server/api/devices.py); a person
 # no further than the libraries they can see, editing where they're an editor (library_access.py).
+# No docs pages or schema served (/docs, /redoc, /openapi.json), as the AI worker serves none: the API's
+# contract is docs/cursor-api.md, and a map of every route is no one's to read anonymously.
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan, telemetry=NO_TELEMETRY,
+              docs_url=None, redoc_url=None, openapi_url=None,
               dependencies=[Depends(devices.gate), Depends(library_access.gate)])
 
 

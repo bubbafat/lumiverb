@@ -147,6 +147,7 @@ def test_a_videos_people_are_saved_with_their_times_and_crops(env):
     for face_id, crop in zip((a_id, b_id), crops, strict=True):
         got = client.get(f"/v1/faces/{face_id}/crop", headers=auth)
         assert got.status_code == 200 and got.content == crop
+        assert got.headers["cache-control"].startswith("private,"), "a face is no shared cache's to keep"
     with engine.connect() as conn:
         row = conn.execute(text("SELECT producer, level, outcome FROM artifact_lineage"
                                 " WHERE asset_id = :a AND artifact = 'lumiverb.video.faces'"), {"a": asset_id}).one()
