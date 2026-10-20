@@ -154,6 +154,49 @@ def test_a_quoted_phrase_must_match_in_order(env):
     assert set(_search(env, lib, "negative space")) == {phrase, apart}
 
 
+def test_accents_are_set_aside_both_ways_and_shown_as_written(env):
+    # Robert, 2026-10-20: a landmark named with macrons couldn't be found by its own name.
+    lib = _library(env)
+    zurich = _clip(env, lib, "a.jpg")
+    chateau = _clip(env, lib, "b.jpg")
+    pasha = _clip(env, lib, "c.jpg")
+    _describe(env, zurich, "The old town of Zürich at dusk")
+    _describe(env, chateau, "Château Frontenac above the river")
+    _read(env, pasha, "Kānī Pāshā")
+
+    for typed, found in (("Zürich", [zurich]), ("zurich", [zurich]), ("ZÜRICH", [zurich]), ("château", [chateau]),
+                         ("chateau", [chateau]), ("chât", [chateau]), ('"Kānī Pāshā"', [pasha]),
+                         ("kani pasha", [pasha])):
+        assert _search(env, lib, typed) == found, typed
+    result = _search(env, lib, "zurich", raw=True)
+    assert result["items"][0]["search_context"]["snippet"] == "The old town of Zürich at dusk", "shown as written"
+
+
+def test_any_languages_letters_are_searched(env):
+    lib = _library(env)
+    moscow = _clip(env, lib, "a.jpg")
+    athens = _clip(env, lib, "b.jpg")
+    _describe(env, moscow, "Красная площадь, Москва")
+    _note(env, athens, "Ακρόπολη της Αθήνας")
+
+    assert _search(env, lib, "Москва") == [moscow]
+    assert _search(env, lib, "Ακρόπολη") == [athens]
+
+
+def test_a_hyphenated_word_is_its_parts_in_a_phrase_and_as_typed(env):
+    lib = _library(env)
+    airport = _clip(env, lib, "a.jpg")
+    raleigh = _clip(env, lib, "b.jpg")
+    _describe(env, airport, "John Wayne Airport-Orange County terminal")
+    _describe(env, raleigh, "Raleigh-Durham International at night")
+
+    assert _search(env, lib, '"John Wayne Airport"') == [airport], "a phrase ending at the hyphen"
+    assert _search(env, lib, '"Airport-Orange County"') == [airport]
+    assert _search(env, lib, '"Orange County"') == [airport]
+    assert _search(env, lib, "Raleigh-Durham") == [raleigh]
+    assert _search(env, lib, "durham") == [raleigh]
+
+
 def test_a_word_matches_as_a_prefix_too_ranked_below_whole_words(env):
     lib = _library(env)
     exact = _clip(env, lib, "a.jpg")

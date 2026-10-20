@@ -1,8 +1,8 @@
 """What a person typed into search, as words and phrases (src/server/search/text_search.py makes the query).
 
 Quoted text is a phrase (its words in order); everything else is single
-words. Each is lowercased and kept to letters, digits and hyphens: what
-the search's own parsing reads as words, never as its syntax.
+words. Each is lowercased and kept to letters (any language's), digits and
+hyphens: what the search's own parsing reads as words, never as its syntax.
 """
 
 from __future__ import annotations
@@ -10,9 +10,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# The characters a word keeps: letters, digits and hyphens (what's typed
-# can't carry a query's own syntax).
-_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+# The characters a word keeps: letters (any language's), digits and hyphens
+# (what's typed can't carry a query's own syntax).
+_TOKEN_RE = re.compile(r"[^\W_](?:[^\W_]|-)*")
 
 # A quoted span. Only matches balanced `"..."` pairs; an unmatched
 # trailing `"` is left to the free-token pass which strips it.
