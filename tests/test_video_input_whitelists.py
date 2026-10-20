@@ -10,7 +10,6 @@ that same real clip beside it."""
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -92,11 +91,6 @@ READERS: dict[str, Callable[[Path, Path], object]] = {
     "scan: preview": lambda p, t: ingest._generate_video_preview(p),
     "scan: poster": lambda p, t: ingest._extract_video_poster(p),
     "extract_video_frame": lambda p, t: clip_extractor.extract_video_frame_detailed(p, t / "frame.jpg", 0.5).ok,
-    "probe_video_duration": lambda p, t: clip_extractor.probe_video_duration(p),
-    "transcode_to_720p_h264": lambda p, t: clip_extractor.transcode_to_720p_h264_detailed(p, t / "720.mp4")[-1].ok,
-    "extract_head_clip_copy": lambda p, t: clip_extractor.extract_head_clip_copy_detailed(p, t / "head.mp4").ok,
-    "extract_video_clip": lambda p, t: clip_extractor.extract_video_clip(p, t / "clip.mp4", 0.0, 1.0),
-    "extract_clip": lambda p, t: asyncio.run(clip_extractor.extract_clip(p, t / "clip.mp4", 0.0, 1.0)),
     "scenes: VideoScanner": lambda p, t: list(VideoScanner(p).scan(0.0, 10.0)),
     "playback: duration": _playback_duration,
     "playback: cut": _playback_cut,
