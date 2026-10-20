@@ -24,7 +24,7 @@ from src.server.repository.control_plane import (
     TenantRepository,
     UserRepository,
 )
-from src.server.api.rate_limit import login_limiter, forgot_password_limiter, reset_password_limiter
+from src.server.api.rate_limit import demo_limiter, login_limiter, forgot_password_limiter, reset_password_limiter
 from ulid import ULID
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -74,11 +74,11 @@ class ResetPasswordRequest(BaseModel):
     password: str
 
 
-def _issue_jwt(user, jwt_secret: str, *, refresh_exp: int | None = None) -> str:
+def _issue_jwt(user, jwt_secret: str, *, refresh_exp: int | None = None, demo: bool = False) -> str:
     """A signed JWT for the user as the database has them now: their role and
     token version ("tv"), with a unique jti for revocation. refresh_exp, the
     outer bound after which even refresh is denied, is set at login and kept
-    by every refresh (no sliding)."""
+    by every refresh (no sliding). A demo session's says so (src/server/demo.py)."""
     now = utcnow()
     jti = str(ULID())
     payload = {
@@ -92,6 +92,8 @@ def _issue_jwt(user, jwt_secret: str, *, refresh_exp: int | None = None) -> str:
         "exp": int(now.timestamp()) + JWT_EXPIRY_SECONDS,
         "refresh_exp": refresh_exp if refresh_exp is not None else int(now.timestamp()) + REFRESH_WINDOW_SECONDS,
     }
+    if demo:
+        payload["demo"] = True
     return jwt.encode(payload, jwt_secret, algorithm=JWT_ALGORITHM)
 
 
@@ -147,6 +149,38 @@ def login(
     return LoginResponse(access_token=token)
 
 
+class DemoResponse(BaseModel):
+    on: bool = True
+
+
+def _demo_viewer(session: Session):
+    from src.server.api.errors import ApiError
+    from src.server.demo import demo_viewer
+
+    viewer = demo_viewer(session)
+    if viewer is None:
+        raise ApiError(404, "not_found", "Not Found")  # as a server with no demo answers
+    return viewer
+
+
+@router.get("/demo", response_model=DemoResponse)
+def demo_on(session: Annotated[Session, Depends(_get_db)]) -> DemoResponse:
+    """Whether this server lets anyone try it as a viewer (src/server/demo.py): the sign-in page offers it."""
+    _demo_viewer(session)
+    return DemoResponse()
+
+
+@router.post("/demo", response_model=LoginResponse)
+def demo_sign_in(request: Request, session: Annotated[Session, Depends(_get_db)]) -> LoginResponse:
+    """Try it as a viewer: signed in as the demo's viewer, with no password,
+    for a session that reads only (src/server/demo.py)."""
+    demo_limiter.check(request)
+    settings = get_settings()
+    if not settings.jwt_secret:
+        raise HTTPException(status_code=500, detail="JWT_SECRET not configured")
+    return LoginResponse(access_token=_issue_jwt(_demo_viewer(session), settings.jwt_secret, demo=True))
+
+
 @router.post("/refresh", response_model=RefreshResponse)
 def refresh_token(request: Request, session: Annotated[Session, Depends(_get_db)]) -> RefreshResponse:
     """Issue a fresh JWT if the current token is valid and within its refresh window.
@@ -195,11 +229,17 @@ def refresh_token(request: Request, session: Annotated[Session, Depends(_get_db)
     if not token_user_is_current(user, claims):
         raise HTTPException(status_code=401, detail="Token has been revoked")
     _account_live(session, user)
+    demo = claims.get("demo") is True
+    if demo:
+        from src.server.demo import is_demo_viewer
+
+        if not is_demo_viewer(session, user):
+            raise HTTPException(status_code=401, detail="The demo is over")
 
     # Revoke the old token so it can't be refreshed again (only one refresh wins).
     if not revoked_repo.revoke(old_jti):
         raise HTTPException(status_code=401, detail="Token has been revoked")
-    new_token = _issue_jwt(user, settings.jwt_secret, refresh_exp=refresh_exp)
+    new_token = _issue_jwt(user, settings.jwt_secret, refresh_exp=refresh_exp, demo=demo)
     return RefreshResponse(access_token=new_token)
 
 

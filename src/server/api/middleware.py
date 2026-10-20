@@ -10,6 +10,7 @@ from starlette.responses import JSONResponse
 
 from src.server.api.dependencies import is_install_key
 from src.server.config import get_settings
+from src.server.demo import READS as DEMO_READS, is_demo_viewer
 from src.server.database import get_control_session
 from src.server.repository.control_plane import ApiKeyRepository, PublicProjectRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository, TenantRepository, UserRepository, SCHEDULER_KEY_LABEL
 from src.server.repository.library_roles import MakerGoneError, person_of_key, person_of_user
@@ -136,8 +137,14 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                         role = user.role
                         if TenantRepository(session).gone(tenant_id):
                             return _error_response(401, "account_deleted", "This account was deleted")
+                        # Try it as a viewer (src/server/demo.py): over once the demo is.
+                        demo = claims.get("demo") is True
+                        if demo and not is_demo_viewer(session, user):
+                            return _error_response(401, "token_revoked", "The demo is over")
                         routing_repo = TenantDbRoutingRepository(session)
                         routing = routing_repo.get_by_tenant_id(tenant_id)
+                    if demo and request.method not in DEMO_READS:
+                        return _error_response(403, "demo_reads_only", "This is a demo: it doesn't change anything.")
                     if routing is None:
                         return _error_response(500, "tenant_routing_missing", "Tenant database routing not found")
                     request.state.tenant_id = tenant_id
@@ -152,6 +159,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     request.state.person = person_of_user(user)
                     request.state.token_version = user.token_version  # a playback link made now is theirs as now
                     request.state.is_public_request = False
+                    request.state.demo = demo
                     return await call_next(request)
 
             with get_control_session() as session:
