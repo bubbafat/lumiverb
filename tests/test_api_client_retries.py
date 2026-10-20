@@ -152,7 +152,7 @@ def test_raw_tries_a_get_again_and_another_method_only_when_said(slept):
 
 def test_a_stream_is_tried_again_until_it_starts(slept):
     script = Script(502, _reset())
-    with _client(script).stream("/v1/assets/a/artifacts/analysis_proxy") as resp:
+    with _client(script).stream("/v1/assets/a/artifacts/lumiverb.video.analysis_proxy") as resp:
         assert resp.status_code == 200 and resp.read() == b'{"ok":true}'
     assert script.tries == 3
     script = Script(403)

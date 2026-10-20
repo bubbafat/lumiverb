@@ -15,6 +15,7 @@ import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { Modal } from "../components/Modal";
 import { SkeletonRow } from "../components/SkeletonRow";
 import type { ProjectItem } from "../api/types";
+import { THUMBNAIL } from "../lib/names";
 
 type Tab = Exclude<ProjectView, "all">;
 const TABS: { id: Tab; label: string }[] = [
@@ -32,7 +33,7 @@ const actionClass = "rounded-sm px-2 py-1 text-xs text-gray-500 hover:text-gray-
 function CoverImage({ project }: { project: ProjectItem }) {
   const { url: coverUrl } = useAuthenticatedImage(
     project.cover_asset_id ?? "",
-    "thumbnail",
+    THUMBNAIL,
     { enabled: !!project.cover_asset_id },
   );
   return (

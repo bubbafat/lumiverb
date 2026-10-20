@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
+import { ANALYSIS_PROXY, VIDEO_PREVIEW } from "../lib/names";
 
 /**
  * The lightbox's video, framed by how much of it plays: amber while it's the
@@ -32,7 +33,7 @@ export default function VideoPlayer({
   src: string;
   /** The clip's still, shown before it plays. */
   poster?: string;
-  source: "analysis_proxy" | "preview" | null;
+  source: typeof ANALYSIS_PROXY | typeof VIDEO_PREVIEW | null;
   /** What plays is the whole clip (the server says: a short clip's preview is). */
   whole?: boolean;
   maxSeconds: number | null;
@@ -67,7 +68,7 @@ export default function VideoPlayer({
     }
   }, [src]);
 
-  const full = whole || source === "analysis_proxy";
+  const full = whole || source === ANALYSIS_PROXY;
   const previewSeconds = Math.min(10, maxSeconds ?? 10, duration ? Math.round(duration) : 10);
   const ring = full ? "ring-emerald-500/60" : "ring-amber-500/60";
 

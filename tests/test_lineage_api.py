@@ -98,7 +98,7 @@ def _ingest_post(env, rel_path: str, sha: str, lineage: dict | None | object = N
         lineage = {"lumiverb.preview": _want(env, "lumiverb.preview", sha)}
     if lineage is not SAYS_NOTHING:
         data["lineage"] = json.dumps(lineage)
-    return client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
+    return client.post("/v1/ingest", data=data, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, headers=headers)
 
 
 def _ingest_with(env, rel_path: str, sha: str, lineage: dict | None = None, media_type: str = "image") -> str:
@@ -292,11 +292,11 @@ def test_each_kind_of_write_records_its_artifact(env):
         ("lumiverb.video.format", vid, lambda: client.put(f"/v1/assets/{vid}/video-facet", json={
             "duration_sec": 12.0, "lineage": _want(env, "lumiverb.video.format", sha)}, headers=headers)),
         ("lumiverb.video.analysis_proxy", vid, lambda: client.post(
-            f"/v1/assets/{vid}/artifacts/analysis_proxy",
+            f"/v1/assets/{vid}/artifacts/lumiverb.video.analysis_proxy",
             files={"file": ("a.mp4", io.BytesIO(playable()), "video/mp4")},
             data={"lineage": json.dumps(_want(env, "lumiverb.video.analysis_proxy", sha))}, headers=headers)),
         ("lumiverb.video.preview", vid, lambda: client.post(
-            f"/v1/assets/{vid}/artifacts/video_preview",
+            f"/v1/assets/{vid}/artifacts/lumiverb.video.preview",
             files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
             data={"lineage": json.dumps(_want(env, "lumiverb.video.preview", sha))}, headers=headers)),
     ]
@@ -443,12 +443,12 @@ def test_a_form_fields_lineage_is_checked(env):
                       # A source that's no content hash the server takes says so.
                       ({**source, "source_hash": 12}, "content_hash_not_valid"),
                       ({**source, "source_hash": sha.removeprefix("sha256:")}, "content_hash_not_valid")):
-        r = client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
+        r = client.post(f"/v1/assets/{vid}/artifacts/lumiverb.video.analysis_proxy",
                         files={"file": ("a.mp4", io.BytesIO(playable()), "video/mp4")},
                         data={"lineage": json.dumps(bad)}, headers=headers)
         _refused(r, code)
         assert _everything(env, vid) == before and _row(env, vid, "lumiverb.video.analysis_proxy") is None
-    r = client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
+    r = client.post(f"/v1/assets/{vid}/artifacts/lumiverb.video.analysis_proxy",
                     files={"file": ("a.mp4", io.BytesIO(playable()), "video/mp4")},
                     data={"lineage": "not json"}, headers=headers)
     _refused(r)
@@ -470,7 +470,7 @@ def test_an_ingest_records_only_what_it_stored(env):
         "vision": json.dumps({"model_id": "", "description": "dropped"}), "embeddings": json.dumps([]),
         "lineage": json.dumps({"lumiverb.preview": _want(env, "lumiverb.preview", sha), "lumiverb.image.description": _want(env, "lumiverb.image.description", sha),
                                "lumiverb.image.likeness": _want(env, "lumiverb.image.likeness", sha)}),
-    }, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
+    }, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
     clip = r.json()["asset_id"]
     assert _row(env, clip, "lumiverb.image.description") is None and _row(env, clip, "lumiverb.image.likeness") is None
@@ -529,23 +529,23 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
             "items": [{"asset_id": img, "faces": [face]}]}, headers=headers)),
         ("lumiverb.video.transcript", vid, lambda: client.post(f"/v1/assets/{vid}/transcript", json={
             "srt": "1\n00:00:00,000 --> 00:00:01,000\nhello\n", "source": "whisper"}, headers=headers)),
-        ("lumiverb.preview", img, lambda: client.post(f"/v1/assets/{img}/artifacts/proxy", files={"file": jpeg()},
+        ("lumiverb.preview", img, lambda: client.post(f"/v1/assets/{img}/artifacts/lumiverb.preview", files={"file": jpeg()},
                                            headers=headers)),
-        ("lumiverb.video.preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts/video_preview",
+        ("lumiverb.video.preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts/lumiverb.video.preview",
                                                    files={"file": mp4()}, headers=headers)),
-        ("lumiverb.video.analysis_proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
+        ("lumiverb.video.analysis_proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts/lumiverb.video.analysis_proxy",
                                                     files={"file": mp4()}, headers=headers)),
         ("lumiverb.preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={
-            "proxy": jpeg(), "video_preview": mp4()}, headers=headers)),
+            "lumiverb.preview": jpeg(), "lumiverb.video.preview": mp4()}, headers=headers)),
         # Saying how the preview was made isn't saying how the proxy was.
         ("lumiverb.preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={
-            "proxy": jpeg(), "video_preview": mp4()},
+            "lumiverb.preview": jpeg(), "lumiverb.video.preview": mp4()},
             data={"lineage": json.dumps({"lumiverb.video.preview": _want(env, "lumiverb.video.preview", sha)})}, headers=headers)),
         # Scanned again with new content, and ingested again.
         ("lumiverb.preview", img, lambda: _ingest_post(env, "lin/refused.jpg", _sha(), SAYS_NOTHING)),
-        ("lumiverb.preview", img, lambda: client.post(f"/v1/assets/{img}/ingest", files={"proxy": jpeg()}, headers=headers)),
+        ("lumiverb.preview", img, lambda: client.post(f"/v1/assets/{img}/ingest", files={"lumiverb.preview": jpeg()}, headers=headers)),
         # An ingest says how it made each thing it stores, not just the proxy.
-        ("lumiverb.image.description", img, lambda: client.post(f"/v1/assets/{img}/ingest", files={"proxy": jpeg()}, data={
+        ("lumiverb.image.description", img, lambda: client.post(f"/v1/assets/{img}/ingest", files={"lumiverb.preview": jpeg()}, data={
             "vision": json.dumps({"model_id": "m", "description": "d"}),
             "lineage": json.dumps({"lumiverb.preview": _want(env, "lumiverb.preview", sha)})}, headers=headers)),
         ("lumiverb.image.likeness", img, lambda: _ingest_post(env, "lin/refused.jpg", sha, {"lumiverb.preview": _want(env, "lumiverb.preview", sha)},
@@ -559,9 +559,9 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
         ("lumiverb.video.scene_descriptions", vid, lambda: client.patch(f"/v1/video/scenes/scn_{vid}_0", json={
             "model_id": "m", "model_version": "1", "description": "a beach", "tags": []}, headers=headers)),
         # Review: a thumbnail is the proxy producer's, however it arrives.
-        ("lumiverb.preview", img, lambda: client.post(f"/v1/assets/{img}/artifacts/thumbnail", files={"file": jpeg()},
+        ("lumiverb.preview", img, lambda: client.post(f"/v1/assets/{img}/artifacts/lumiverb.preview.thumbnail", files={"file": jpeg()},
                                            headers=headers)),
-        ("lumiverb.preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={"thumbnail": jpeg()},
+        ("lumiverb.preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={"lumiverb.preview.thumbnail": jpeg()},
                                            headers=headers)),
         # Lineage that can't be read is no lineage, in the same envelope on every route.
         ("lumiverb.image.description", img, lambda: saved(client, "vision", img, json={

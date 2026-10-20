@@ -18,7 +18,7 @@ function frame() {
 
 describe("VideoPlayer", () => {
   it("frames the short preview in amber and says so", () => {
-    render(<VideoPlayer src="/v1/stream/a" source="preview" maxSeconds={null} />);
+    render(<VideoPlayer src="/v1/stream/a" source="lumiverb.video.preview" maxSeconds={null} />);
     expect(frame().dataset.playback).toBe("preview");
     expect(frame().className).toMatch(/amber/);
     const note = screen.getByText(/Short preview: first 10 seconds/);
@@ -26,7 +26,7 @@ describe("VideoPlayer", () => {
   });
 
   it("frames the whole video in green and labels it", () => {
-    render(<VideoPlayer src="/v1/stream/b" source="analysis_proxy" maxSeconds={null} />);
+    render(<VideoPlayer src="/v1/stream/b" source="lumiverb.video.analysis_proxy" maxSeconds={null} />);
     expect(frame().dataset.playback).toBe("full");
     expect(frame().className).toMatch(/emerald/);
     expect(screen.getByText("Full video").className).toMatch(/emerald/);
@@ -34,7 +34,7 @@ describe("VideoPlayer", () => {
 
   it("a short clip's preview is the whole clip: green, not a short preview", () => {
     // The server says so (whole): a 1-second clip's 10-second preview is all of it.
-    render(<VideoPlayer src="/v1/stream/w" source="preview" whole maxSeconds={null} />);
+    render(<VideoPlayer src="/v1/stream/w" source="lumiverb.video.preview" whole maxSeconds={null} />);
     expect(frame().dataset.playback).toBe("full");
     expect(frame().className).toMatch(/emerald/);
     expect(screen.getByText("Full video").className).toMatch(/emerald/);
@@ -42,36 +42,36 @@ describe("VideoPlayer", () => {
   });
 
   it("says one second, not one seconds", () => {
-    const { container } = render(<VideoPlayer src="/v1/stream/o" source="preview" maxSeconds={1} />);
+    const { container } = render(<VideoPlayer src="/v1/stream/o" source="lumiverb.video.preview" maxSeconds={1} />);
     const video = container.querySelector("video") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { value: 1.0, configurable: true });
     fireEvent.loadedMetadata(video);
     screen.getByText("Short preview: first 1 second.");
     cleanup();
-    render(<VideoPlayer src="/v1/stream/p" source="analysis_proxy" maxSeconds={1} />);
+    render(<VideoPlayer src="/v1/stream/p" source="lumiverb.video.analysis_proxy" maxSeconds={1} />);
     screen.getByText("Plays the first 1 second");
   });
 
   it("names the cap when the account has one", () => {
-    render(<VideoPlayer src="/v1/stream/c" source="analysis_proxy" maxSeconds={30} />);
+    render(<VideoPlayer src="/v1/stream/c" source="lumiverb.video.analysis_proxy" maxSeconds={30} />);
     expect(frame().className).toMatch(/emerald/);
     screen.getByText("Plays the first 30 seconds");
   });
 
   it("a cap under 10 seconds shortens the preview's note", () => {
-    render(<VideoPlayer src="/v1/stream/d" source="preview" maxSeconds={5} />);
+    render(<VideoPlayer src="/v1/stream/d" source="lumiverb.video.preview" maxSeconds={5} />);
     screen.getByText(/first 5 seconds/);
     expect(screen.queryByText(/once it's processed/)).toBeNull();
   });
 
   it("carries on from the same moment when the whole video arrives", () => {
-    const { rerender, container } = render(<VideoPlayer src="/v1/stream/short" source="preview" maxSeconds={null} />);
+    const { rerender, container } = render(<VideoPlayer src="/v1/stream/short" source="lumiverb.video.preview" maxSeconds={null} />);
     const video = container.querySelector("video") as HTMLVideoElement;
     Object.defineProperty(video, "currentTime", { value: 6.5, writable: true, configurable: true });
     fireEvent.play(video);
     fireEvent.timeUpdate(video);
 
-    rerender(<VideoPlayer src="/v1/stream/full" source="analysis_proxy" maxSeconds={null} />);
+    rerender(<VideoPlayer src="/v1/stream/full" source="lumiverb.video.analysis_proxy" maxSeconds={null} />);
     expect(video.getAttribute("src")).toBe("/v1/stream/full#t=0.001");
     // Loading a new source resets the position to 0 and says so.
     Object.defineProperty(video, "currentTime", { value: 0, writable: true, configurable: true });
@@ -86,14 +86,14 @@ describe("VideoPlayer", () => {
   it("asks for a new link when this one fails, and carries on from the same moment", () => {
     const onRenew = vi.fn();
     const { rerender, container } = render(
-      <VideoPlayer src="/v1/stream/old" source="analysis_proxy" maxSeconds={null} onRenew={onRenew} />,
+      <VideoPlayer src="/v1/stream/old" source="lumiverb.video.analysis_proxy" maxSeconds={null} onRenew={onRenew} />,
     );
     const video = container.querySelector("video") as HTMLVideoElement;
     Object.defineProperty(video, "currentTime", { value: 42, writable: true, configurable: true });
     fireEvent.timeUpdate(video);
     fireEvent.error(video);
     expect(onRenew).toHaveBeenCalledTimes(1);
-    rerender(<VideoPlayer src="/v1/stream/new" source="analysis_proxy" maxSeconds={null} onRenew={onRenew} />);
+    rerender(<VideoPlayer src="/v1/stream/new" source="lumiverb.video.analysis_proxy" maxSeconds={null} onRenew={onRenew} />);
     Object.defineProperty(video, "duration", { value: 100, configurable: true });
     fireEvent.loadedMetadata(video);
     expect(video.currentTime).toBe(42);
@@ -103,10 +103,10 @@ describe("VideoPlayer", () => {
   it("says so when a fresh link fails too", () => {
     const onRenew = vi.fn();
     const { rerender, container } = render(
-      <VideoPlayer src="/v1/stream/old" source="analysis_proxy" maxSeconds={null} onRenew={onRenew} />,
+      <VideoPlayer src="/v1/stream/old" source="lumiverb.video.analysis_proxy" maxSeconds={null} onRenew={onRenew} />,
     );
     fireEvent.error(container.querySelector("video") as HTMLVideoElement);
-    rerender(<VideoPlayer src="/v1/stream/new" source="analysis_proxy" maxSeconds={null} onRenew={onRenew} />);
+    rerender(<VideoPlayer src="/v1/stream/new" source="lumiverb.video.analysis_proxy" maxSeconds={null} onRenew={onRenew} />);
     fireEvent.error(container.querySelector("video") as HTMLVideoElement);
     expect(onRenew).toHaveBeenCalledTimes(1);
     screen.getByText(/This video can't play right now/);
@@ -115,21 +115,21 @@ describe("VideoPlayer", () => {
   it("a switch to the whole video that fails asks for a fresh link before giving up", () => {
     const onRenew = vi.fn();
     const { rerender, container } = render(
-      <VideoPlayer src="/v1/stream/short" source="preview" maxSeconds={null} onRenew={onRenew} />,
+      <VideoPlayer src="/v1/stream/short" source="lumiverb.video.preview" maxSeconds={null} onRenew={onRenew} />,
     );
-    rerender(<VideoPlayer src="/v1/stream/full" source="analysis_proxy" maxSeconds={null} onRenew={onRenew} />);
+    rerender(<VideoPlayer src="/v1/stream/full" source="lumiverb.video.analysis_proxy" maxSeconds={null} onRenew={onRenew} />);
     fireEvent.error(container.querySelector("video") as HTMLVideoElement);
     expect(onRenew).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/can't play/)).toBeNull();
   });
 
   it("says so when no fresh link could be had", () => {
-    render(<VideoPlayer src="/v1/stream/x" source="analysis_proxy" maxSeconds={null} failed />);
+    render(<VideoPlayer src="/v1/stream/x" source="lumiverb.video.analysis_proxy" maxSeconds={null} failed />);
     screen.getByText(/This video can't play right now/);
   });
 
   it("names a short clip's real length", () => {
-    const { container } = render(<VideoPlayer src="/v1/stream/s" source="preview" maxSeconds={null} />);
+    const { container } = render(<VideoPlayer src="/v1/stream/s" source="lumiverb.video.preview" maxSeconds={null} />);
     const video = container.querySelector("video") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { value: 6.2, configurable: true });
     fireEvent.loadedMetadata(video);
@@ -138,7 +138,7 @@ describe("VideoPlayer", () => {
 
   it("shows the clip's still before it plays", () => {
     const { container } = render(
-      <VideoPlayer src="/v1/stream/p" poster="blob:still" source="analysis_proxy" maxSeconds={null} />,
+      <VideoPlayer src="/v1/stream/p" poster="blob:still" source="lumiverb.video.analysis_proxy" maxSeconds={null} />,
     );
     const video = container.querySelector("video") as HTMLVideoElement;
     expect(video.getAttribute("poster")).toBe("blob:still");
@@ -146,7 +146,7 @@ describe("VideoPlayer", () => {
   });
 
   it("without a still, asks for the first frame", () => {
-    const { container } = render(<VideoPlayer src="/v1/stream/q" source="preview" maxSeconds={null} />);
+    const { container } = render(<VideoPlayer src="/v1/stream/q" source="lumiverb.video.preview" maxSeconds={null} />);
     const video = container.querySelector("video") as HTMLVideoElement;
     expect(video.hasAttribute("poster")).toBe(false);
     expect(video.getAttribute("src")).toBe("/v1/stream/q#t=0.001");
@@ -154,12 +154,12 @@ describe("VideoPlayer", () => {
 
   it("with a still, carries on from the same moment when the whole video arrives", () => {
     const { rerender, container } = render(
-      <VideoPlayer src="/v1/stream/short" poster="blob:still" source="preview" maxSeconds={null} />,
+      <VideoPlayer src="/v1/stream/short" poster="blob:still" source="lumiverb.video.preview" maxSeconds={null} />,
     );
     const video = container.querySelector("video") as HTMLVideoElement;
     Object.defineProperty(video, "currentTime", { value: 4, writable: true, configurable: true });
     fireEvent.timeUpdate(video);
-    rerender(<VideoPlayer src="/v1/stream/full" poster="blob:still" source="analysis_proxy" maxSeconds={null} />);
+    rerender(<VideoPlayer src="/v1/stream/full" poster="blob:still" source="lumiverb.video.analysis_proxy" maxSeconds={null} />);
     expect(video.getAttribute("src")).toBe("/v1/stream/full");
     Object.defineProperty(video, "duration", { value: 25, configurable: true });
     fireEvent.loadedMetadata(video);
@@ -167,7 +167,7 @@ describe("VideoPlayer", () => {
   });
 
   it("opens at a person's moment", () => {
-    const { container } = render(<VideoPlayer src="/v1/stream/m" source="analysis_proxy" maxSeconds={null} startAt={12} />);
+    const { container } = render(<VideoPlayer src="/v1/stream/m" source="lumiverb.video.analysis_proxy" maxSeconds={null} startAt={12} />);
     const video = container.querySelector("video") as HTMLVideoElement;
     Object.defineProperty(video, "currentTime", { value: 0, writable: true, configurable: true });
     Object.defineProperty(video, "duration", { value: 60, configurable: true });
@@ -178,25 +178,25 @@ describe("VideoPlayer", () => {
 
   it("a moment past the short preview waits for the whole video", () => {
     const { rerender, container } = render(
-      <VideoPlayer src="/v1/stream/short" source="preview" maxSeconds={null} startAt={30} />,
+      <VideoPlayer src="/v1/stream/short" source="lumiverb.video.preview" maxSeconds={null} startAt={30} />,
     );
     const video = container.querySelector("video") as HTMLVideoElement;
     Object.defineProperty(video, "currentTime", { value: 0, writable: true, configurable: true });
     Object.defineProperty(video, "duration", { value: 10, configurable: true });
     fireEvent.loadedMetadata(video);
     expect(video.currentTime).toBe(0);
-    rerender(<VideoPlayer src="/v1/stream/full" source="analysis_proxy" maxSeconds={null} startAt={30} />);
+    rerender(<VideoPlayer src="/v1/stream/full" source="lumiverb.video.analysis_proxy" maxSeconds={null} startAt={30} />);
     Object.defineProperty(video, "duration", { value: 60, configurable: true });
     fireEvent.loadedMetadata(video);
     expect(video.currentTime).toBe(30);
   });
 
   it("doesn't start playing a paused video when it switches", () => {
-    const { rerender, container } = render(<VideoPlayer src="/v1/stream/short" source="preview" maxSeconds={null} />);
+    const { rerender, container } = render(<VideoPlayer src="/v1/stream/short" source="lumiverb.video.preview" maxSeconds={null} />);
     const video = container.querySelector("video") as HTMLVideoElement;
     Object.defineProperty(video, "currentTime", { value: 3, writable: true, configurable: true });
     fireEvent.timeUpdate(video);
-    rerender(<VideoPlayer src="/v1/stream/full" source="analysis_proxy" maxSeconds={null} />);
+    rerender(<VideoPlayer src="/v1/stream/full" source="lumiverb.video.analysis_proxy" maxSeconds={null} />);
     Object.defineProperty(video, "duration", { value: 25, configurable: true });
     fireEvent.loadedMetadata(video);
     expect(video.currentTime).toBe(3);

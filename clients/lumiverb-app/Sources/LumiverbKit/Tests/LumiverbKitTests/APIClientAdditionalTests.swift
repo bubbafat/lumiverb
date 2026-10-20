@@ -164,7 +164,7 @@ final class APIClientAdditionalTests: XCTestCase {
 
         let client = makeClient()
         do {
-            _ = try await client.getData("/v1/assets/ast_1/artifacts/proxy")
+            _ = try await client.getData("/v1/assets/ast_1/artifacts/lumiverb.preview")
             XCTFail("Expected server error")
         } catch let error as APIError {
             if case .serverError(let status, _) = error {

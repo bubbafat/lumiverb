@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { authFetch, publicQuery } from "./client";
+import { PREVIEW, THUMBNAIL, VIDEO_PREVIEW } from "../lib/names";
 
-type MediaType = "thumbnail" | "proxy" | "video-preview";
+type MediaType = typeof THUMBNAIL | typeof PREVIEW | typeof VIDEO_PREVIEW;
 
-/** The one route for each picture: /assets/{id}/artifacts/{type}. */
+/** The one route for each picture: /assets/{id}/artifacts/{name} (ADR-024: by the file's name). */
 function mediaPath(assetId: string, type: MediaType): string {
-  return `/assets/${assetId}/artifacts/${type === "video-preview" ? "video_preview" : type}`;
+  return `/assets/${assetId}/artifacts/${type}`;
 }
 
 /** A 503 that says when to ask again (a capped preview being made); null otherwise. */
@@ -27,7 +28,7 @@ const PREPARING_TRIES = 15;
  */
 export function useAuthenticatedImage(
   assetId: string,
-  type: MediaType = "thumbnail",
+  type: MediaType = THUMBNAIL,
   {
     enabled = true,
     isPublic = false,

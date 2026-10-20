@@ -23,6 +23,16 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
             'tests/test_search_sync_real.py', 'tests/test_unified_query.py', 'tests/test_vision_submit.py',
         ),
     },
+    "a call's name (Resolve's plug-in, its own)": {
+        'thumbnail': ('clients/resolve/plugin/renderer.js',),
+    },
+    "a command's name": {
+        'video-preview': ('src/client/cli/commands/settings.py', 'tests/test_cli_settings.py',),
+    },
+    "a downloaded file's name, as before (scripts look for it)": {
+        'proxy': ('src/client/cli/main.py',),
+        'thumbnail': ('src/client/cli/main.py',),
+    },
     "a field's name": {
         'clip': (
             'src/producers/location/work.py', 'src/server/repository/locations.py', 'tests/test_location_producer.py',
@@ -51,69 +61,15 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
             'src/client/cli/main.py', 'src/server/search/sync.py', 'tests/derived.py',
             'tests/test_search_sync_races_slow.py',
         ),
+        'preview': ('src/producers/proxy/__init__.py',),
         'scenes': (
             'src/producers/scene_vision/work.py', 'src/producers/scenes/work.py', 'tests/scenes.py',
             'tests/test_lineage_api.py', 'tests/test_scene_detail.py', 'tests/test_scene_redo_api.py',
             'tests/test_scheduler_runners.py', 'tests/test_video_api.py', 'tests/test_video_faces.py',
             'tests/test_video_index.py',
         ),
+        'thumbnail': ('src/producers/proxy/__init__.py',),
         'transcript': ('tests/test_follow_moves.py',),
-    },
-    "a file's kind (part 4)": {
-        'analysis_proxy': (
-            'clients/lumiverb-app/Sources/LumiverbKit/Sources/LumiverbKit/Models/ClipFile.swift',
-            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/ClipFileTests.swift',
-            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/FaceMomentsTests.swift',
-            'src/processing/proxy/analysis_cache.py', 'src/producers/analysis_proxy/work.py',
-            'src/server/api/routers/artifacts.py', 'src/server/api/routers/playback.py',
-            'src/server/api/routers/uploads.py', 'src/server/missing_artifacts.py', 'src/server/uploads.py',
-            'src/ui/web/src/api/client.ts', 'src/ui/web/src/api/usePlayback.test.tsx',
-            'src/ui/web/src/api/usePlayback.ts', 'src/ui/web/src/components/Lightbox.public.test.tsx',
-            'src/ui/web/src/components/Lightbox.videoFaces.test.tsx', 'src/ui/web/src/components/VideoPlayer.test.tsx',
-            'src/ui/web/src/components/VideoPlayer.tsx', 'tests/test_analysis_proxy_api.py', 'tests/test_artifacts.py',
-            'tests/test_client_contract_doc.py', 'tests/test_scheduler_runners.py', 'tests/test_uploads.py',
-            'tests/test_video_input_whitelists.py', 'tests/test_video_playback_api.py',
-            'tests/test_video_playback_whole.py',
-        ),
-        'preview': (
-            'clients/lumiverb-app/Sources/LumiverbKit/Sources/LumiverbKit/Models/ClipFile.swift',
-            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/ClipFileTests.swift',
-            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/FaceMomentsTests.swift',
-            'src/producers/proxy/__init__.py', 'src/server/api/routers/artifacts.py',
-            'src/server/api/routers/playback.py', 'src/ui/web/src/api/client.ts',
-            'src/ui/web/src/api/usePlayback.test.tsx', 'src/ui/web/src/api/usePlayback.ts',
-            'src/ui/web/src/components/VideoPlayer.test.tsx', 'src/ui/web/src/components/VideoPlayer.tsx',
-            'tests/test_artifacts.py', 'tests/test_video_playback_api.py', 'tests/test_video_playback_whole.py',
-        ),
-        'proxy': (
-            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/BoundedDiskCacheTests.swift',
-            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/ModelDecodingTests.swift',
-            'src/processing/proxy/proxy_cache.py', 'src/processing/scan.py', 'src/producers/vision/work.py',
-            'src/server/api/routers/artifacts.py', 'src/server/missing_artifacts.py',
-            'src/server/upgrade/steps/backfill_artifact_sha256.py', 'src/ui/web/src/api/useAuthenticatedImage.ts',
-            'src/ui/web/src/components/Lightbox.tsx', 'tests/test_analysis_proxy_api.py',
-            'tests/test_archive_restore.py', 'tests/test_artifacts.py', 'tests/test_audit_fixes.py',
-            'tests/test_browse_api.py', 'tests/test_browse_filters.py', 'tests/test_capture.py',
-            'tests/test_changed_file_new_clip.py', 'tests/test_cli.py', 'tests/test_client_contract_doc.py',
-            'tests/test_device_keys.py', 'tests/test_facets_filtered.py', 'tests/test_ingest.py',
-            'tests/test_library_access.py', 'tests/test_lineage_api.py', 'tests/test_location.py',
-            'tests/test_location_producer.py', 'tests/test_path_filters_api.py',
-            'tests/test_preserve_human_data_slow.py', 'tests/test_project_export_slow.py',
-            'tests/test_project_search_filter.py', 'tests/test_project_sharing.py', 'tests/test_projects_api.py',
-            'tests/test_public_library_middleware.py', 'tests/test_public_no_emails.py',
-            'tests/test_quality_notches.py', 'tests/test_ratings_api.py', 'tests/test_restore_reindex_slow.py',
-            'tests/test_saved_search_as_project.py', 'tests/test_scan_content_hash.py', 'tests/test_scan_outcomes.py',
-            'tests/test_scan_protocol.py', 'tests/test_scan_timezone_slow.py', 'tests/test_scans_api.py',
-            'tests/test_search_cross_library.py', 'tests/test_search_filters.py', 'tests/test_unified_query.py',
-            'tests/test_video_facets_api_slow.py', 'tests/test_video_playback_api.py',
-        ),
-        'video_preview': (
-            'clients/lumiverb-app/Sources/LumiverbKit/Sources/LumiverbKit/Models/ClipFile.swift',
-            'src/processing/scan.py', 'src/server/api/routers/artifacts.py', 'src/server/api/routers/uploads.py',
-            'src/server/missing_artifacts.py', 'src/server/uploads.py', 'src/ui/web/src/api/useAuthenticatedImage.ts',
-            'tests/test_artifacts.py', 'tests/test_client_contract_doc.py', 'tests/test_lineage_api.py',
-            'tests/test_video_playback_api.py',
-        ),
     },
     "a filter's type": {
         'location': ('src/server/models/query_filter.py', 'src/ui/web/src/lib/queryFilter.ts',),
@@ -195,11 +151,16 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
     "a query's key": {
         'faces': ('src/ui/web/src/components/Lightbox.tsx',),
     },
+    'a reserved plug-in id (one installed before part 1, left out: section 8)': {
+        'faces': ('tests/test_plugin_install.py',),
+    },
     'a retired filter (410)': {
         'missing_faces': ('tests/test_retired_endpoints.py',),
     },
-    "a reserved plug-in id (one installed before part 1, left out: section 8)": {
-        'faces': ('tests/test_plugin_install.py',),
+    "a retired route's word (410)": {
+        'preview': ('tests/test_artifacts.py',),
+        'proxy': ('tests/test_artifacts.py',),
+        'thumbnail': ('tests/test_artifacts.py',),
     },
     'a route': {
         'faces': ('tests/test_producer_settings_api.py',),
@@ -216,13 +177,17 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     'a short name (lumiverb. left off)': {
-        'preview': ('src/client/cli/main.py',),
+        'preview': ('src/client/cli/main.py', 'tests/test_artifacts.py', 'tests/test_cli.py',),
     },
     'a table': {
         'faces': (
             'src/producers/faces/__init__.py', 'src/producers/video_faces/__init__.py', 'src/server/models/tenant.py',
             'src/server/upgrade/steps/cleanup_orphan_asset_children.py', 'tests/test_trashed_asset_face_filter_slow.py',
         ),
+    },
+    "a test's own words": {
+        'preview': ('tests/test_video_playback_api.py',),
+        'proxy': ('tests/test_video_playback_api.py',),
     },
     "a transcript's source": {
         'whisper': (
@@ -243,13 +208,19 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
             'tests/test_device_keys.py', 'tests/test_video_faces.py',
         ),
         'location': ('tests/test_geonames_program.py', 'tests/test_ingest_dimensions.py',),
+        'preview': ('src/ui/web/src/components/VideoPlayer.test.tsx', 'src/ui/web/src/components/VideoPlayer.tsx',),
         'probe': ('tests/test_geonames_plugin_acceptance.py',),
-        'proxy': ('tests/test_scheduler_service.py',),
+        'proxy': (
+            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/BoundedDiskCacheTests.swift',
+            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/ModelDecodingTests.swift',
+            'tests/test_scheduler_service.py',
+        ),
         'render': ('tests/test_upgrade_backfill_sha256.py',),
         'scenes': ('src/producers/location/infer.py',),
         'transcript': (
             'src/ui/web/src/components/Lightbox.tsx', 'src/ui/web/src/pages/settings/ProcessingSection.tsx',
         ),
+        'video_preview': ('tests/test_artifacts.py',),
     },
     'an AI job': {
         'clip': (
@@ -278,6 +249,10 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
             'tests/test_scheduler_status_api.py', 'tests/test_system_health.py', 'tests/test_vision_guard.py',
         ),
     },
+    "an old upgrade step's label": {
+        'proxy': ('src/server/upgrade/steps/backfill_artifact_sha256.py',),
+        'thumbnail': ('src/server/upgrade/steps/backfill_artifact_sha256.py',),
+    },
     'an old word taken until part 5': {
         '/producers/faces': ('tests/test_names_taken.py',),
         '/producers/transcript': ('tests/test_names_taken.py',),
@@ -297,7 +272,9 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         'redo_ocr': ('tests/test_data_names.py',),
         'redo_vision': ('tests/test_data_names.py',),
         'render': ('tests/test_data_names.py',),
+        'scene_rep': ('tests/test_data_names.py',),
         'scenes': ('tests/test_data_names.py',),
+        'thumbnail': ('tests/test_cli.py', 'tests/test_data_names.py',),
         'vision': ('tests/test_names_taken.py',),
     },
     "an older revision's (a migration's test)": {
@@ -346,6 +323,19 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         'whisper': ('tests/test_migration_lineage.py', 'tests/test_migration_machine_transcripts.py',),
     },
+    "an older server's answer (the apps read either spelling)": {
+        'analysis_proxy': (
+            'clients/lumiverb-app/Sources/LumiverbKit/Sources/LumiverbKit/Models/ClipFile.swift',
+            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/ClipFileTests.swift',
+            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/FaceMomentsTests.swift',
+        ),
+        'preview': (
+            'clients/lumiverb-app/Sources/LumiverbKit/Sources/LumiverbKit/Models/ClipFile.swift',
+            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/ClipFileTests.swift',
+            'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/FaceMomentsTests.swift',
+        ),
+        'video_preview': ('clients/lumiverb-app/Sources/LumiverbKit/Sources/LumiverbKit/Models/ClipFile.swift',),
+    },
     "an older server's answer or an old word typed (the CLIs read either)": {
         '/producers/transcript': ('tests/test_cli_producers.py',),
         '/producers/vision': ('tests/test_cli_pause.py', 'tests/test_cli_producers.py',),
@@ -381,8 +371,8 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
     "the rename's own (RENAMED, the migration's mapping, their tests)": {
         'analysis-proxy': ('src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_names_stored.py',),
         'analysis_proxy': (
-            'src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_names_stored.py',
-            'tests/test_named_data_acceptance.py',
+            'src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_files_named.py',
+            'tests/test_migration_names_stored.py', 'tests/test_named_data_acceptance.py',
         ),
         'capture': (
             'src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_names_stored.py',
@@ -434,6 +424,7 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         'scene-detect': ('src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_names_stored.py',),
         'scene-vision': ('src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_names_stored.py',),
+        'scene_rep': ('src/producers/names.py', 'tests/old_ids.py',),
         'scene_vision': (
             'src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_names_stored.py',
             'tests/test_named_data_acceptance.py',
@@ -442,17 +433,19 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
             'src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_names_stored.py',
             'tests/test_named_data_acceptance.py',
         ),
+        'thumbnail': ('src/producers/names.py', 'tests/old_ids.py',),
         'transcript': (
             'src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_names_stored.py',
             'tests/test_named_data_acceptance.py',
         ),
+        'video-preview': ('tests/old_ids.py',),
         'video_faces': (
             'src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_names_stored.py',
             'tests/test_named_data_acceptance.py',
         ),
         'video_preview': (
-            'src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_names_stored.py',
-            'tests/test_named_data_acceptance.py',
+            'src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_files_named.py',
+            'tests/test_migration_names_stored.py', 'tests/test_named_data_acceptance.py',
         ),
         'vision': (
             'src/producers/names.py', 'tests/old_ids.py', 'tests/test_migration_names_stored.py',

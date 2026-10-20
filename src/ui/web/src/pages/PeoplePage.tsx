@@ -21,6 +21,7 @@ import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { useFaceCrop } from "../api/useFaceCrop";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useCanEdit } from "../lib/useCanEdit";
+import { THUMBNAIL } from "../lib/names";
 
 const SORT_LABELS: Record<ClusterSort, string> = {
   size_desc: "Largest first",
@@ -73,7 +74,7 @@ function PersonCard({ person }: { person: PersonItem }) {
   const hasCrop = !!crop.url;
   const still = useAuthenticatedImage(
     person.representative_asset_id ?? "",
-    "thumbnail",
+    THUMBNAIL,
     { enabled: !!person.representative_asset_id && !hasCrop && !crop.isLoading },
   );
   const url = crop.url ?? still.url;
@@ -113,7 +114,7 @@ function ClusterFaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick
   // Prefer server-generated face crop; fall back to full asset thumbnail with bounding box overlay
   const crop = useFaceCrop(face.face_id);
   const hasCrop = !!crop.url;
-  const fallback = useAuthenticatedImage(face.asset_id, "thumbnail", { enabled: !hasCrop && !crop.isLoading });
+  const fallback = useAuthenticatedImage(face.asset_id, THUMBNAIL, { enabled: !hasCrop && !crop.isLoading });
 
   const url = crop.url ?? fallback.url;
   const isLoading = crop.isLoading || (!hasCrop && fallback.isLoading);

@@ -135,7 +135,7 @@ def _ingest(env, rel_path: str, exif: dict, *, says_capture: bool = True, librar
     kinds = {"lumiverb.preview": made("lumiverb.preview")}
     if says_capture:
         kinds["lumiverb.capture_time"] = made("lumiverb.capture_time")
-    r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data={
+    r = client.post("/v1/ingest", headers=headers, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, data={
         "library_id": library_id or lib, "rel_path": rel_path, "file_size": "10", "media_type": "image",
         "lineage": json.dumps(kinds), "exif": json.dumps({"content_hash": sha or "sha256:" + os.urandom(32).hex(), **exif})})
     assert r.status_code == 200, r.text

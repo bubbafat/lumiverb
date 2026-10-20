@@ -148,7 +148,7 @@ def _needs(route: APIRoute) -> set:
 
 
 def _url(path: str, things: dict[str, str]) -> str:
-    return re.sub(r"\{(\w+)(:\w+)?\}", lambda m: things.get(m.group(1), "proxy" if m.group(1) == "artifact_type"
+    return re.sub(r"\{(\w+)(:\w+)?\}", lambda m: things.get(m.group(1), "lumiverb.preview" if m.group(1) == "artifact_type"
                                                             else "nope"), path)
 
 
@@ -199,7 +199,7 @@ def _body(fields, things: dict[str, str]) -> dict:
         {"body": json_body, "form": form, "query": query}[where][name] = value
     out = {"params": query}
     if form:
-        out.update(data=form, files={"proxy": ("p.jpg", b"jpeg", "image/jpeg")})
+        out.update(data=form, files={"lumiverb.preview": ("p.jpg", b"jpeg", "image/jpeg")})
     elif json_body:
         out["json"] = json_body
     return out

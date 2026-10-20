@@ -10,10 +10,11 @@ import { Lightbox } from "../components/Lightbox";
 import { clipCount } from "../components/ProjectUsageList";
 import { clipOfFace, isVideoFace, momentLabel, personClips, type PersonClip } from "../lib/faceMoments";
 import { useCanEdit } from "../lib/useCanEdit";
+import { THUMBNAIL } from "../lib/names";
 
 /** One of the person's clips: a photo, or a video with the moments they're seen at (each opens it there). */
 function ClipThumbnail({ clip, onOpen }: { clip: PersonClip; onOpen: (atMs?: number) => void }) {
-  const { url, isLoading } = useAuthenticatedImage(clip.face.asset_id, "thumbnail");
+  const { url, isLoading } = useAuthenticatedImage(clip.face.asset_id, THUMBNAIL);
   const video = isVideoFace(clip.face);
   const name = clip.face.rel_path ?? "";
 

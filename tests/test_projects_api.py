@@ -40,7 +40,7 @@ def _ingest_asset(client, api_key, library_id, rel_path, media_type="image") -> 
             "width": "100",
             "height": "100",
         },
-        files={"proxy": ("proxy.jpg", buf, "image/jpeg")},
+        files={"lumiverb.preview": ("proxy.jpg", buf, "image/jpeg")},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert r.status_code == 200, (r.status_code, r.text)
@@ -740,7 +740,7 @@ def _ingest_taken(client, api_key, library_id, rel_path, taken_at) -> str:
     if taken_at:
         data["exif"] = json.dumps({"taken_at": taken_at})
     r = client.post(
-        "/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")},
+        "/v1/ingest", data=data, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")},
         headers=_headers(api_key),
     )
     assert r.status_code == 200, r.text
@@ -1536,7 +1536,7 @@ def test_a_scan_cant_bring_back_clips_of_a_trashed_library(projects_env):
             "/v1/ingest",
             data={"library_id": lib, "rel_path": rel_path, "file_size": "1000", "media_type": "image",
                   "lineage": ingest_made()},
-            files={"proxy": ("proxy.jpg", buf, "image/jpeg")},
+            files={"lumiverb.preview": ("proxy.jpg", buf, "image/jpeg")},
             headers=_headers(api_key),
         )
         assert r.status_code == 409, (rel_path, r.text)
@@ -1560,7 +1560,7 @@ def test_a_trashed_public_projects_thumbnails_are_gone_until_restored(projects_e
     client, api_key, library_id = projects_env
     clip = _ingest_asset(client, api_key, library_id, "public/thumb.jpg")
     project_id = _project(client, api_key, "Public thumbs", [clip], visibility="public")
-    url = f"/v1/assets/{clip}/artifacts/thumbnail?public_project_id={project_id}"
+    url = f"/v1/assets/{clip}/artifacts/lumiverb.preview.thumbnail?public_project_id={project_id}"
     assert client.get(url).status_code == 200
     client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
     assert client.get(url).status_code == 404
@@ -1639,7 +1639,7 @@ def test_writes_refuse_a_name_with_a_control_character(projects_env, bad):
     buf.seek(0)
     r = client.post("/v1/ingest", data={"lineage": ingest_made(), "library_id": library_id, "rel_path": bad,
                                         "file_size": "1000", "media_type": "image"},
-                    files={"proxy": ("proxy.jpg", buf, "image/jpeg")}, headers=h)
+                    files={"lumiverb.preview": ("proxy.jpg", buf, "image/jpeg")}, headers=h)
     assert refused(r), r.text
     r = client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": bad}, headers=h)
     assert r.status_code == 404

@@ -12,7 +12,15 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.producers.names import file_in, made_by_file
+from src.producers.names import (
+    ANALYSIS_PROXY,
+    PREVIEW,
+    SCENE_PICTURE,
+    THUMBNAIL,
+    VIDEO_PREVIEW,
+    file_in,
+    made_by_file,
+)
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.devices import may_call
 from src.server.api.errors import ApiError
@@ -26,15 +34,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/assets", tags=["artifacts"])
 
-ALLOWED_ARTIFACT_TYPES = {"proxy", "thumbnail", "video_preview", "scene_rep", "analysis_proxy"}
+ALLOWED_ARTIFACT_TYPES = {PREVIEW, THUMBNAIL, VIDEO_PREVIEW, SCENE_PICTURE, ANALYSIS_PROXY}
 # What a library's reader makes from the originals and sends: a device sends only these.
-READER_ARTIFACTS = ("proxy", "thumbnail", "video_preview", "analysis_proxy")
+READER_ARTIFACTS = (PREVIEW, THUMBNAIL, VIDEO_PREVIEW, ANALYSIS_PROXY)
 
 # Target limits (not yet enforced per type): proxy ≈ 1 MB, video_preview ≈ 20 MB.
 # TODO: enforce per-type limits once remote worker uploads are in place.
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB absolute ceiling
 # A full-length analysis proxy of a long recording runs to gigabytes.
-MAX_UPLOAD_BYTES_BY_TYPE: dict[str, int] = {"analysis_proxy": 64 * 1024**3}
+MAX_UPLOAD_BYTES_BY_TYPE: dict[str, int] = {ANALYSIS_PROXY: 64 * 1024**3}
 UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB read buffer
 
 
@@ -42,23 +50,23 @@ def _max_upload_bytes(artifact_type: str) -> int:
     return MAX_UPLOAD_BYTES_BY_TYPE.get(artifact_type, MAX_UPLOAD_BYTES)
 
 CONTENT_TYPES: dict[str, str] = {
-    "proxy": "image/webp",
-    "thumbnail": "image/webp",
-    "video_preview": "video/mp4",
-    "scene_rep": "image/jpeg",
-    "analysis_proxy": "video/mp4",
+    PREVIEW: "image/webp",
+    THUMBNAIL: "image/webp",
+    VIDEO_PREVIEW: "video/mp4",
+    SCENE_PICTURE: "image/jpeg",
+    ANALYSIS_PROXY: "video/mp4",
 }
 
 
 # Videos are kept checked and rewritten (src/server/uploaded_video.py): what a browser plays, without metadata.
-VIDEO_ARTIFACTS = frozenset({"video_preview", "analysis_proxy"})
+VIDEO_ARTIFACTS = frozenset({VIDEO_PREVIEW, ANALYSIS_PROXY})
 
 # Image artifacts are stored re-encoded, without the original's metadata
 # (src/server/preview_image.py): (format, quality). A preview's and a
 # thumbnail's quality is the account's (preview_image.quality), this its default.
-IMAGE_ARTIFACTS: dict[str, tuple[str, int]] = {"proxy": ("WEBP", 80), "thumbnail": ("WEBP", 80),
-                                                "scene_rep": ("JPEG", 90)}
-PREVIEW_IMAGES = ("proxy", "thumbnail")
+IMAGE_ARTIFACTS: dict[str, tuple[str, int]] = {PREVIEW: ("WEBP", 80), THUMBNAIL: ("WEBP", 80),
+                                                SCENE_PICTURE: ("JPEG", 90)}
+PREVIEW_IMAGES = (PREVIEW, THUMBNAIL)
 
 
 def _reencode_image_file(path: Path, fmt: str, quality: int) -> str:
@@ -119,13 +127,13 @@ async def _save_upload(store: Store, key: str, upload: UploadFile, artifact_type
 
 def artifact_key(tenant_id: str, asset, artifact_type: str) -> str:
     """Where a clip's proxy, thumbnail, video preview or analysis proxy is kept (scene frames go by their time)."""
-    if artifact_type == "proxy":
+    if artifact_type == PREVIEW:
         return keys.proxy_key(tenant_id, asset.library_id, asset.asset_id, asset.rel_path)
-    if artifact_type == "thumbnail":
+    if artifact_type == THUMBNAIL:
         return keys.thumbnail_key(tenant_id, asset.library_id, asset.asset_id, asset.rel_path)
-    if artifact_type == "video_preview":
+    if artifact_type == VIDEO_PREVIEW:
         return keys.video_preview_key(tenant_id, asset.library_id, asset.asset_id, asset.rel_path)
-    if artifact_type == "analysis_proxy":
+    if artifact_type == ANALYSIS_PROXY:
         return keys.analysis_proxy_key(tenant_id, asset.library_id, asset.asset_id, asset.rel_path)
     raise ValueError(artifact_type)
 
@@ -134,15 +142,15 @@ def record_kept(session: Session, asset_id: str, artifact_type: str, key: str, s
                 width: int | None = None, height: int | None = None) -> None:
     """A kept artifact on its clip, with how it was made (a proxy, video preview or analysis proxy)."""
     asset_repo = AssetRepository(session)
-    if artifact_type == "proxy":
+    if artifact_type == PREVIEW:
         asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)
-    elif artifact_type == "thumbnail":
+    elif artifact_type == THUMBNAIL:
         asset_repo.set_thumbnail_artifact(asset_id, key, sha256)
-    elif artifact_type == "video_preview":
+    elif artifact_type == VIDEO_PREVIEW:
         asset_repo.set_video_preview(asset_id, video_preview_key=key)
-    elif artifact_type == "analysis_proxy":
+    elif artifact_type == ANALYSIS_PROXY:
         asset_repo.set_analysis_proxy(asset_id, key, sha256)
-    if artifact_type in ("proxy", "video_preview", "analysis_proxy"):
+    if artifact_type in (PREVIEW, VIDEO_PREVIEW, ANALYSIS_PROXY):
         record_lineage(session, asset_id, made_by_file(artifact_type), made)
 
 
@@ -177,8 +185,8 @@ async def upload_artifact(
     # Proxies, previews and analysis copies say how they were made, before
     # anything is saved; a thumbnail as the proxy's (one producer makes both).
     made = (require_lineage(lineage, made_by_file(artifact_type))
-            if artifact_type in ("proxy", "video_preview", "analysis_proxy") else None)
-    if artifact_type == "thumbnail":
+            if artifact_type in (PREVIEW, VIDEO_PREVIEW, ANALYSIS_PROXY) else None)
+    if artifact_type == THUMBNAIL:
         require_lineage(lineage, made_by_file(artifact_type))  # the preview's
     if artifact_type not in ALLOWED_ARTIFACT_TYPES:
         raise HTTPException(
@@ -189,20 +197,20 @@ async def upload_artifact(
         raise HTTPException(status_code=400, detail="width out of range")
     if height is not None and (height < 1 or height > 100_000):
         raise HTTPException(status_code=400, detail="height out of range")
-    if file.content_type and artifact_type in ("video_preview", "analysis_proxy") and not file.content_type.startswith("video/"):
+    if file.content_type and artifact_type in (VIDEO_PREVIEW, ANALYSIS_PROXY) and not file.content_type.startswith("video/"):
         raise HTTPException(status_code=400, detail=f"{artifact_type} must be a video file")
-    if file.content_type and artifact_type in ("proxy", "thumbnail", "scene_rep") and not file.content_type.startswith("image/"):
+    if file.content_type and artifact_type in (PREVIEW, THUMBNAIL, SCENE_PICTURE) and not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail=f"{artifact_type} must be an image file")
 
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="Asset not found")
-    if artifact_type == "analysis_proxy" and asset.media_type != "video":
+    if artifact_type == ANALYSIS_PROXY and asset.media_type != "video":
         raise HTTPException(status_code=400, detail="Analysis proxies are for videos only")
 
     tenant_id: str = request.state.tenant_id
-    if artifact_type != "scene_rep":
+    if artifact_type != SCENE_PICTURE:
         key = artifact_key(tenant_id, asset, artifact_type)
     else:
         if rep_frame_ms is None:
@@ -266,16 +274,16 @@ async def upload_artifacts_batch(
     # Each proxy or preview sent says how it was made, before anything is saved.
     by_name = _per_kind(lineage)  # by the name each file is of (its old id too, until ADR-024's part 5)
     made = {kind: require_lineage(by_name.get(made_by_file(kind)), made_by_file(kind))
-            for kind, sent in (("proxy", proxy), ("video_preview", video_preview)) if sent is not None}
+            for kind, sent in ((PREVIEW, proxy), (VIDEO_PREVIEW, video_preview)) if sent is not None}
     if thumbnail is not None:  # a thumbnail is the preview's too
-        require_lineage(by_name.get(made_by_file("thumbnail")), made_by_file("thumbnail"))
+        require_lineage(by_name.get(made_by_file(THUMBNAIL)), made_by_file(THUMBNAIL))
     files: dict[str, UploadFile] = {}
     if proxy is not None:
-        files["proxy"] = proxy
+        files[PREVIEW] = proxy
     if thumbnail is not None:
-        files["thumbnail"] = thumbnail
+        files[THUMBNAIL] = thumbnail
     if video_preview is not None:
-        files["video_preview"] = video_preview
+        files[VIDEO_PREVIEW] = video_preview
 
     if not files:
         raise HTTPException(status_code=400, detail="No artifact files provided")
@@ -290,24 +298,24 @@ async def upload_artifacts_batch(
     items: list[BatchArtifactItem] = []
 
     for artifact_type, upload_file in files.items():
-        if artifact_type == "proxy":
+        if artifact_type == PREVIEW:
             key = keys.proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
-        elif artifact_type == "thumbnail":
+        elif artifact_type == THUMBNAIL:
             key = keys.thumbnail_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
-        elif artifact_type == "video_preview":
+        elif artifact_type == VIDEO_PREVIEW:
             key = keys.video_preview_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported artifact_type in batch: {artifact_type}")
 
         sha256, duration_sec = await _save_upload(store, key, upload_file, artifact_type, session)
 
-        if artifact_type == "proxy":
+        if artifact_type == PREVIEW:
             asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)
-        elif artifact_type == "thumbnail":
+        elif artifact_type == THUMBNAIL:
             asset_repo.set_thumbnail_artifact(asset_id, key, sha256)
-        elif artifact_type == "video_preview":
+        elif artifact_type == VIDEO_PREVIEW:
             asset_repo.set_video_preview(asset_id, video_preview_key=key)
-        if artifact_type in ("proxy", "video_preview"):
+        if artifact_type in (PREVIEW, VIDEO_PREVIEW):
             record_lineage(session, asset_id, made_by_file(artifact_type), made[artifact_type])
 
         items.append(BatchArtifactItem(artifact_type=artifact_type, key=key, sha256=sha256, duration_sec=duration_sec))
@@ -358,13 +366,13 @@ def download_artifact(
             raise HTTPException(status_code=400, detail="Give a public library or a public project, not both")
         _check_public(session, asset, public_library_id, public_project_id)
 
-    if artifact_type == "proxy":
+    if artifact_type == PREVIEW:
         key = asset.proxy_key
-    elif artifact_type == "thumbnail":
+    elif artifact_type == THUMBNAIL:
         key = asset.thumbnail_key
-    elif artifact_type == "video_preview":
+    elif artifact_type == VIDEO_PREVIEW:
         key = asset.video_preview_key
-    elif artifact_type == "analysis_proxy":
+    elif artifact_type == ANALYSIS_PROXY:
         # The whole video. Public pages and, while the account caps playback,
         # viewers play it through /playback; editors and the server's tools need it whole.
         if public:
@@ -395,13 +403,13 @@ def download_artifact(
 
     store = get_store()
     media_type = CONTENT_TYPES[artifact_type]
-    if artifact_type in ("proxy", "thumbnail"):
+    if artifact_type in (PREVIEW, THUMBNAIL):
         media_type = _IMAGE_TYPES.get(Path(key).suffix.lower(), media_type)
     etag = None
     try:
-        if artifact_type == "analysis_proxy" and asset.analysis_proxy_sha256:
+        if artifact_type == ANALYSIS_PROXY and asset.analysis_proxy_sha256:
             etag = f'"{asset.analysis_proxy_sha256}"'
-        if artifact_type == "video_preview":
+        if artifact_type == VIDEO_PREVIEW:
             # Within the playback cap for whoever is asking, like /playback.
             from src.server.api.routers.playback import capped
             from src.server.tenant_settings import playback_cap
@@ -409,7 +417,7 @@ def download_artifact(
             st = store.stat(key)
             store, key = capped(
                 store, key, playback_cap(session, public=public),
-                tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
+                tenant_id=request.state.tenant_id, asset_id=asset_id, source=VIDEO_PREVIEW,
                 version=f"{int(st.modified)}-{st.size}", strip=public,
             )
         return stream_stored(store, key, request, media_type=media_type, etag=etag)

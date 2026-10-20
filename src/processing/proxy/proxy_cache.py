@@ -156,11 +156,11 @@ class ProxyCache:
                 os.utime(p)  # used now: the last to go
             return self._ensure_size(p.read_bytes())
         if self._client is not None:
-            from src.producers.names import file_named
+            from src.producers.names import PREVIEW
 
             try:
                 resp = self._client._client.get(
-                    self._client._url(f"/v1/assets/{asset_id}/artifacts/{file_named('proxy')}"))
+                    self._client._url(f"/v1/assets/{asset_id}/artifacts/{PREVIEW}"))
                 if resp.status_code == 200:
                     image_bytes = self._ensure_size(resp.content)
                     self._atomic_write(p, image_bytes)

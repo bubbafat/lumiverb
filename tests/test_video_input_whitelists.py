@@ -67,7 +67,7 @@ def _playback_cut(path: Path, tmp: Path) -> bool:
     store = FileStore(LocalStorage(str(path.parent)))
     cuts = playback_cuts("ten_1", root=tmp / "data")
     ask = playback._Ask(store, path.name, 1, cuts, "ast_01M4CWVZ2MPTAV6FSGG6B6VXVP",
-                        "analysis_proxy", path.stem, strip=False)
+                        "lumiverb.video.analysis_proxy", path.stem, strip=False)
     playback.start_cuts()
     playback._make_cut(ask)
     return cuts.exists(playback._cut_for(ask)[0])

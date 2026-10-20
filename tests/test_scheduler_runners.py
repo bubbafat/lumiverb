@@ -324,7 +324,7 @@ def test_rendering_uses_the_servers_settings_and_this_machines_decoder(acct, mon
     assert settings.max_edge == acct.producers.settings("lumiverb.video.analysis_proxy")["max_edge"]
     # Sent in chunks (ADR-018 decision 9), the render as a path from the job's scratch.
     [(asset_id, artifact, body, lineage)] = sent
-    assert (asset_id, artifact, body) == ("ast_1", "analysis_proxy", b"mp4")
+    assert (asset_id, artifact, body) == ("ast_1", "lumiverb.video.analysis_proxy", b"mp4")
     assert lineage["producer"] == "lumiverb.video.analysis_proxy"
     acct.analysis_cache.put.assert_called_once()
 

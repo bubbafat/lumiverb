@@ -69,7 +69,7 @@ def _video(env, rel_path: str, *, capture: bool = True) -> tuple[str, str]:
 
 def _preview_sent(env, clip: str, sha: str) -> None:
     client, headers, *_ = env
-    r = client.post(f"/v1/assets/{clip}/artifacts/video_preview", headers=headers,
+    r = client.post(f"/v1/assets/{clip}/artifacts/lumiverb.video.preview", headers=headers,
                     files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
                     data={"lineage": json.dumps(_want(env, "lumiverb.video.preview", sha))})
     assert r.status_code == 200, r.text

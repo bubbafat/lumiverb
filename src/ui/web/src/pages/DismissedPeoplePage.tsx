@@ -9,6 +9,7 @@ import { useFaceCrop } from "../api/useFaceCrop";
 import { Lightbox } from "../components/Lightbox";
 import { clipCount } from "../components/ProjectUsageList";
 import { useCanEdit } from "../lib/useCanEdit";
+import { THUMBNAIL } from "../lib/names";
 
 function DismissedPersonCard({
   person,
@@ -27,7 +28,7 @@ function DismissedPersonCard({
   const hasCrop = !!crop.url;
   const fallback = useAuthenticatedImage(
     person.representative_asset_id ?? "",
-    "thumbnail",
+    THUMBNAIL,
     { enabled: !hasCrop && !crop.isLoading && !!person.representative_asset_id },
   );
   const imgUrl = crop.url ?? fallback.url;

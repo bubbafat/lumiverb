@@ -115,12 +115,12 @@ class SceneVision(Work):
 
     def save(self, client, made: list[tuple[dict, Scene]]) -> None:
         from src.processing.api import LumiverbAPIError
-        from src.producers.names import file_named
+        from src.producers.names import SCENE_PICTURE
 
         for clip, s in made:
             scene_id, asset_id = s.scene["scene_id"], clip["asset_id"]
             try:
-                client.post(f"/v1/assets/{asset_id}/artifacts/{file_named('scene_rep')}",
+                client.post(f"/v1/assets/{asset_id}/artifacts/{SCENE_PICTURE}",
                             files={"file": ("rep.jpg", s.frame, "image/jpeg")},
                             data={"rep_frame_ms": str(s.scene["rep_frame_ms"])})
                 client.patch(f"/v1/video/scenes/{scene_id}", json={

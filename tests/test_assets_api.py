@@ -224,7 +224,7 @@ def test_stream_thumbnail_happy_path(
     payload = b"\xff\xd8\xff" + b"\x00" * 10
     thumb_path.write_bytes(payload)
 
-    r = client.get(f"/v1/assets/{asset_id}/artifacts/thumbnail", headers=auth)
+    r = client.get(f"/v1/assets/{asset_id}/artifacts/lumiverb.preview.thumbnail", headers=auth)
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/jpeg"
     assert r.content == payload

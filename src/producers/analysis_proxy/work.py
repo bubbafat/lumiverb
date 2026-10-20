@@ -48,7 +48,7 @@ class Render(Work):
     def save(self, client, made: list[tuple[dict, Path]]) -> None:
         for clip, work in made:
             # In chunks: an hour's proxy is hundreds of MB (ADR-018 decision 9).
-            client.upload(clip["asset_id"], "analysis_proxy", work, self.lineage(clip, used=self.settings.output()))
+            client.upload(clip["asset_id"], ANALYSIS_PROXY, work, self.lineage(clip, used=self.settings.output()))
             self.inputs.rendered(clip, work)
 
     def done(self, clip: dict, work: Path) -> None:

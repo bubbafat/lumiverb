@@ -56,7 +56,7 @@ def _ingest_asset_with_vision(client, api_key, library_id, rel_path, description
             "height": "100",
             "vision": vision,
         },
-        files={"proxy": ("proxy.jpg", buf, "image/jpeg")},
+        files={"lumiverb.preview": ("proxy.jpg", buf, "image/jpeg")},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert r.status_code == 200, (r.status_code, r.text)

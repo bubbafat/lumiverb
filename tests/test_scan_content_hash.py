@@ -300,7 +300,7 @@ def test_a_whole_file_hash_comes_only_beside_an_fp1(env, lib):
         data = {"library_id": lib.id, "rel_path": "x.jpg", "file_size": str(size), "media_type": "image",
                 "exif": json.dumps(exif), "lineage": ingest_made(exif["content_hash"])}
         buf.seek(0)
-        r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
+        r = client.post("/v1/ingest", data=data, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, headers=headers)
         assert r.status_code == 400, (exif, r.text)
     assert _rows(env, lib) == []
 

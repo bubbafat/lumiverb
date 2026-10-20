@@ -55,7 +55,7 @@ def _ingest(env, root: Path, f: dict) -> None:
     client, headers, library_id, _ = env
     sha = "sha256:" + hashlib.sha256((root / f["rel_path"]).read_bytes()).hexdigest()
     r = client.post(
-        "/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_image()), "image/jpeg")},
+        "/v1/ingest", headers=headers, files={"lumiverb.preview": ("p.jpg", io.BytesIO(_image()), "image/jpeg")},
         data={"library_id": library_id, "rel_path": f["rel_path"], "file_size": str(f["file_size"]),
               "file_mtime": f["file_mtime"].isoformat(), "media_type": "image", "lineage": ingest_made(sha),
               "exif": json.dumps({"content_hash": sha})},

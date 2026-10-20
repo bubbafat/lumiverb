@@ -338,9 +338,9 @@ def test_a_public_page_never_shows_a_hidden_clips_picture(env):
     clip = _ingest(env, "pub/hidden.jpg", media_type="image", sha=_sha())
     assert client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=headers).status_code == 200
     try:
-        assert client.get(f"/v1/assets/{clip}/artifacts/thumbnail", params={"public_library_id": library_id}).status_code == 200
+        assert client.get(f"/v1/assets/{clip}/artifacts/lumiverb.preview.thumbnail", params={"public_library_id": library_id}).status_code == 200
         client.post("/v1/assets/archive", json={"asset_ids": [clip]}, headers=headers)
-        r = client.get(f"/v1/assets/{clip}/artifacts/thumbnail", params={"public_library_id": library_id})
+        r = client.get(f"/v1/assets/{clip}/artifacts/lumiverb.preview.thumbnail", params={"public_library_id": library_id})
         assert r.status_code == 404
     finally:
         client.patch(f"/v1/libraries/{library_id}", json={"is_public": False}, headers=headers)

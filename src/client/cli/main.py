@@ -970,6 +970,10 @@ def admin_vision_test(
 # ---------------------------------------------------------------------------
 
 
+# A file downloaded into a folder is named as before ADR-024 (`<stem>_proxy.jpg`): scripts look for it.
+_SAVED_AS = {"lumiverb.preview": "proxy", "lumiverb.preview.thumbnail": "thumbnail"}
+
+
 def _resolve_library_id(client: object, library_name: str) -> str:
     """Resolve library name to library_id. Exits with 1 if not found."""
     libraries = client.get("/v1/libraries").json()
@@ -1080,15 +1084,15 @@ def download(
     import os
     import sys
 
-    from src.producers.names import PREFIX, file_in, file_named, short
+    from src.producers.names import PREFIX, PREVIEW, THUMBNAIL, file_in, short
 
     # A file by its name, with or without lumiverb. (ADR-024), or its old word, warned of.
-    files = ("lumiverb.preview", "lumiverb.preview.thumbnail")
-    name = next((n for n in (size, PREFIX + size, file_named(size)) if n in files), None)
+    files = (PREVIEW, THUMBNAIL)
+    name = next((n for n in (size, PREFIX + size, file_in(size)) if n in files), None)
     if name is None:
         console.print("[red]--size must be one of: preview, preview.thumbnail[/red]")
         raise typer.Exit(1)
-    if name == file_named(size) != size:
+    if name == file_in(size) != size:
         Console(stderr=True).print(f"[yellow]{size} is called {short(name)} now: type that (the old word goes "
                                    "in a later release)[/yellow]")
 
@@ -1128,7 +1132,7 @@ def download(
                 # derive filename from asset rel_path
                 asset_resp = client.get(f"/v1/assets/{resolved_asset_id}").json()
                 stem = Path(asset_resp["rel_path"]).stem
-                out_path = out_dir / f"{stem}_{file_in(name)}.jpg"  # named as before: scripts look for it
+                out_path = out_dir / f"{stem}_{_SAVED_AS[name]}.jpg"  # named as before: scripts look for it
             else:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1431,6 +1435,7 @@ def _similar_by_image(
 ) -> None:
     import base64
     import io
+
     from PIL import Image as PILImage
 
     pil_img = PILImage.open(image_path).convert("RGB")

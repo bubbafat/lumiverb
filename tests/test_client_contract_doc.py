@@ -55,17 +55,18 @@ def test_the_pictures_it_describes_are_the_ones_the_server_reads_and_keeps():
 
 def test_the_videos_it_describes_are_the_ones_lumiverb_makes():
     from src.processing.video.analysis_proxy import KEYFRAME_SEC
+    from src.producers.names import ANALYSIS_PROXY
     from src.server.api.routers import artifacts
     from src.shared.producers import PRODUCERS
 
     said = _section()
-    preview, proxy = PRODUCERS["lumiverb.video.preview"].defaults, PRODUCERS["lumiverb.video.analysis_proxy"].defaults
+    preview, proxy = PRODUCERS["lumiverb.video.preview"].defaults, PRODUCERS[ANALYSIS_PROXY].defaults
     assert f"by default its first {preview['seconds']} seconds, at most {preview['max_height']} px high" in said
     assert (f"by default at most {proxy['max_edge']} px on its long edge and {proxy['fps_max']} frames a second"
             in said)
     assert f"Its keyframes are at 0 and every {KEYFRAME_SEC} seconds after, and nowhere else" in said
     assert f"Up to {artifacts.MAX_UPLOAD_BYTES // 2**20} MB an upload" in said
-    assert f"an analysis proxy up to {artifacts.MAX_UPLOAD_BYTES_BY_TYPE['analysis_proxy'] // 2**30} GiB" in said
+    assert f"an analysis proxy up to {artifacts.MAX_UPLOAD_BYTES_BY_TYPE[ANALYSIS_PROXY] // 2**30} GiB" in said
 
 
 def test_the_scan_it_describes_waits_for_files_as_lumiverb_s_does():
@@ -78,15 +79,15 @@ def test_the_scan_it_describes_waits_for_files_as_lumiverb_s_does():
 
 def test_what_it_sends_by_name_is_what_lumiverb_s_scan_sends():
     # ADR-024 phase 1 part 2: the preview, each lineage and the video preview by their names, at protocol 2.
-    from src.producers.names import CAPTURE_TIME, PREVIEW, VIDEO_FORMAT, file_named
+    from src.producers.names import CAPTURE_TIME, PREVIEW, VIDEO_FORMAT, VIDEO_PREVIEW
     from src.shared.readers import PROTOCOL
 
     said = _section()
     assert f"Speak `protocol` {PROTOCOL}" in said
-    assert f"   - `{file_named('proxy')}`: its preview" in said
+    assert f"   - `{PREVIEW}`: its preview" in said
     for name in (PREVIEW, CAPTURE_TIME, VIDEO_FORMAT):
         assert f"`{name}`" in said, name
-    assert f"`POST /v1/assets/{{id}}/artifacts/{file_named('video_preview')}`" in said
+    assert f"`POST /v1/assets/{{id}}/artifacts/{VIDEO_PREVIEW}`" in said
 
 
 def test_a_change_to_the_code_would_fail_it(monkeypatch):

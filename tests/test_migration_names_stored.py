@@ -269,9 +269,10 @@ def test_an_account_from_before_part_3_upgraded_straight_to_head() -> None:
         assert after["scenes"] == ["lumiverb.video.scene_descriptions", "person"]
         assert after["runs"] == [{"producer": "lumiverb.video.scenes", "version": "4", "settings_hash": "h",
                                   "level": 1}]
-        assert after["uploads"] == [("upl_a", "analysis_proxy", "lumiverb.video.analysis_proxy"),
-                                    ("upl_o", "analysis_proxy", "analysis-proxy-0"),  # not the producer now: kept
-                                    ("upl_p", "video_preview", "lumiverb.video.preview")]  # files keep their kinds
+        assert after["uploads"] == [  # the files by their names too, from part 4 (a3c9e5f1b7d2)
+            ("upl_a", "lumiverb.video.analysis_proxy", "lumiverb.video.analysis_proxy"),
+            ("upl_o", "lumiverb.video.analysis_proxy", "analysis-proxy-0"),  # not the producer now: kept
+            ("upl_p", "lumiverb.video.preview", "lumiverb.video.preview")]
         _net(url)
 
         _alembic(url, "downgrade", BEFORE)
@@ -285,7 +286,7 @@ RENAMED_COLUMNS = {
     ("artifact_lineage", "artifact"), ("artifact_lineage", "producer"), ("producer_crashes", "artifact"),
     ("producer_pauses", "target"), ("video_scenes", "lineage"), ("video_index_chunks", "run"), ("uploads", "lineage"),
 }
-KEPT_FILE_KINDS = {("uploads", "artifact")}  # files keep their kinds until part 4
+KEPT_FILE_KINDS = {("uploads", "artifact")}  # renamed by part 4's migration, a3c9e5f1b7d2
 
 
 @pytest.mark.slow
@@ -312,7 +313,6 @@ def test_every_column_holding_a_producer_s_word_is_one_it_renames() -> None:
 
 # Where an old word stays, by its family (section 6 of the plan): (table, column) -> the words.
 KEPT_COLUMNS = {
-    ("uploads", "artifact"): {"video_preview", "analysis_proxy"},  # files keep their kinds until part 4
     ("asset_embeddings", "model_id"): {"clip"},  # a model's id
     ("faces", "detection_model"): {"insightface"},  # a model's id
     ("assets", "transcript_source"): {"whisper"},  # who made a transcript: a person, or a provider

@@ -76,7 +76,6 @@ from src.producers.names import (
     VIDEO_FORMAT,
     VIDEO_PREVIEW,
     artifact_in,
-    file_named,
     producer_in,
 )
 from src.shared.content_hash import content_hash, sampled, whole_file_sha256
@@ -285,7 +284,7 @@ def _scan_one(
             webp_bytes = _jpeg_to_webp(jpeg_bytes, previews.proxy["webp_quality"])
 
             # 4. POST /v1/ingest — create or update asset (the preview, and each lineage, by its name: ADR-024)
-            upload = {file_named("proxy"): ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
+            upload = {PREVIEW: ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
             del webp_bytes
             data: dict[str, str] = {
                 "library_id": library_id,
@@ -365,7 +364,7 @@ def _scan_one_video(
             webp_bytes = _jpeg_to_webp(jpeg_bytes, previews.proxy["webp_quality"])
 
             # 5. POST /v1/ingest — create asset with poster frame as its preview
-            upload = {file_named("proxy"): ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
+            upload = {PREVIEW: ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
             del webp_bytes
             data: dict[str, str] = {
                 "library_id": library_id,
@@ -395,7 +394,7 @@ def _scan_one_video(
             # 6. Upload video preview
             if asset_id and preview_bytes:
                 client.post(
-                    f"/v1/assets/{asset_id}/artifacts/{file_named('video_preview')}",
+                    f"/v1/assets/{asset_id}/artifacts/{VIDEO_PREVIEW}",
                     files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
                     data={"lineage": json.dumps(previews.lineage(VIDEO_PREVIEW, f.get("content_hash")))},
                 )
@@ -454,7 +453,7 @@ def _populate_cache_for_unchanged(
             asset_id = f["asset_id"]
             try:
                 resp = client._client.get(
-                    client._url(f"/v1/assets/{asset_id}/artifacts/{file_named('proxy')}"),
+                    client._url(f"/v1/assets/{asset_id}/artifacts/{PREVIEW}"),
                 )
                 if resp.status_code == 200:
                     proxy_cache.put_scan(asset_id, resp.content, f.get("content_hash") or "")

@@ -13,8 +13,10 @@ sent as its name (the tenant migration f2a6c8e4b0d7 renamed what was stored,
 with a mapping of its own), and the old spellings are still taken on input,
 mapped to the names (`artifact_in`, `producer_in`, `kind_in`), each family's
 mapping only where that family is taken (one old word can be several things:
-`clip` is an artifact, an AI job and a model's id). Files keep their kinds
-until part 4 (`file_in`, `file_named`). Part 5 deletes RENAMED.
+`clip` is an artifact, an AI job and a model's id). From part 4 a file is
+kept and sent by its name too (the tenant migration a3c9e5f1b7d2: uploads and
+the missing-file reports), its old kind taken until part 5 (`file_in`). Part 5
+deletes RENAMED.
 
 A person types a name, with or without `lumiverb.`, or an old word, which is
 warned of (`typed`).
@@ -86,13 +88,16 @@ LUMIVERB: tuple[Data, ...] = (
 )
 
 # Each file a name has: the name itself for its main file, a part under it for another. What it was called.
+THUMBNAIL = "lumiverb.preview.thumbnail"
+SCENE_PICTURE = "lumiverb.video.scenes.picture"
 FILES: Mapping[str, str] = {
     PREVIEW: "proxy",
-    "lumiverb.preview.thumbnail": "thumbnail",
+    THUMBNAIL: "thumbnail",
     VIDEO_PREVIEW: "video_preview",
     ANALYSIS_PROXY: "analysis_proxy",
-    "lumiverb.video.scenes.picture": "scene_rep",
+    SCENE_PICTURE: "scene_rep",
 }
+_FILE_NAMES: Mapping[str, str] = {old: new for new, old in FILES.items()}
 
 # What each name was called, by family: old to new. Held to the registry by tests/test_data_names.py.
 ARTIFACTS: Mapping[str, str] = {
@@ -151,9 +156,9 @@ def artifact_in(value: str) -> str:
 
 
 def file_in(value: str) -> str:
-    """A file's kind as a client sent it or a server answered it, by today's kind or its name: today's kind
-    (until part 4)."""
-    return FILES.get(value, value)
+    """A file as a client sent it or an older server answered it: its name. Its old kind (`proxy`) is taken
+    until part 5; anything else is as it is."""
+    return _FILE_NAMES.get(value, value)
 
 
 def producer_in(artifact: str, producer: str) -> str:
@@ -184,18 +189,10 @@ def kind_in(value: str) -> str:
     return KINDS.get(value) or _plugin_id(value) or value
 
 
-_FILE_NAMES: Mapping[str, str] = {old: new for new, old in FILES.items()}
-
-
-def file_named(kind: str) -> str:
-    """A file by its name, as a client asks for or sends it (`proxy` to `lumiverb.preview`)."""
-    return _FILE_NAMES.get(kind, kind)
-
-
-def made_by_file(kind: str) -> str:
-    """The name whose file this is (its kind until part 4): the name itself for its main file, the name it's
-    under for another (`thumbnail`, the preview's: lumiverb.preview)."""
-    name = file_named(kind)
+def made_by_file(file: str) -> str:
+    """The name whose file this is: the name itself for its main file, the name it's under for another (the
+    thumbnail, the preview's: lumiverb.preview)."""
+    name = file_in(file)
     return name if name in ARTIFACTS.values() else name.rpartition(".")[0]
 
 

@@ -170,7 +170,7 @@ def test_a_path_the_user_emptied_from_the_trash_refuses_only_that_file(env):
     import json
 
     def post(content: str):
-        return client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
+        return client.post("/v1/ingest", headers=headers, files={"lumiverb.preview": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
                            data={"library_id": env[2], "rel_path": "ignored/O001.mov", "file_size": "1000",
                                  "media_type": "video", "exif": json.dumps({"content_hash": content}),
                                  "lineage": ingest_made(content)})
@@ -444,7 +444,7 @@ def test_a_trashed_library_s_archived_clips_arent_restored_by_content(env):
     import io
     import json
 
-    r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
+    r = client.post("/v1/ingest", headers=headers, files={"lumiverb.preview": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
                     data={"library_id": library_id, "rel_path": "back.mov", "file_size": "1000",
                           "media_type": "video", "exif": json.dumps({"content_hash": sha}), "lineage": ingest_made()})
     assert r.status_code == 409

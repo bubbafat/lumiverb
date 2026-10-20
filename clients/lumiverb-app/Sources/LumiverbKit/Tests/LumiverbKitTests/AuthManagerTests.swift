@@ -375,7 +375,7 @@ final class AuthManagerTests: XCTestCase {
             }
         }
 
-        let data = try await client.getData("/v1/assets/ast_1/artifacts/proxy")
+        let data = try await client.getData("/v1/assets/ast_1/artifacts/lumiverb.preview")
         XCTAssertEqual(data, imageData)
 
         let requests = recorder.requests

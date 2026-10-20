@@ -2,6 +2,7 @@ import { memo, useState, useRef } from "react";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { AssetPageItem, AssetRating } from "../api/types";
 import { RatingBadges } from "./RatingControls";
+import { THUMBNAIL, VIDEO_PREVIEW } from "../lib/names";
 
 interface AssetCellProps {
   asset: AssetPageItem;
@@ -48,7 +49,7 @@ function AssetCellInner({
 }: AssetCellProps) {
   const { url, isLoading, error } = useAuthenticatedImage(
     asset.asset_id,
-    "thumbnail",
+    THUMBNAIL,
     { isPublic, publicLibraryId, publicProjectId },
   );
   const [hovered, setHovered] = useState(false);
@@ -60,7 +61,7 @@ function AssetCellInner({
 
   const { url: videoUrl } = useAuthenticatedImage(
     asset.asset_id,
-    "video-preview",
+    VIDEO_PREVIEW,
     { enabled: isVideo && hovered, isPublic, publicLibraryId, publicProjectId },
   );
 

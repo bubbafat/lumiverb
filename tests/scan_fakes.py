@@ -137,9 +137,9 @@ class FakeScans:
             return answer(204)
         if method == "POST" and path == "/v1/ingest":
             return answer(200, {"asset_id": f"ast_{len(self.sent('POST', '/v1/ingest'))}"})
-        if method == "POST" and re.fullmatch(r"/v1/assets/[^/]+/artifacts/video_preview", path):
+        if method == "POST" and re.fullmatch(r"/v1/assets/[^/]+/artifacts/lumiverb.video.preview", path):
             return answer(200, {})
-        if method == "GET" and re.fullmatch(r"/v1/assets/[^/]+/artifacts/proxy", path):
+        if method == "GET" and re.fullmatch(r"/v1/assets/[^/]+/artifacts/lumiverb.preview", path):
             return answer(404, {"error": {"code": "not_found", "message": "no proxy", "details": {}}})
         return answer(500, {"error": {"code": "unexpected", "message": f"{method} {path}", "details": {}}})
 

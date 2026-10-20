@@ -1,12 +1,12 @@
-"""Where an old id of ADR-024 phase 1's first family (artifacts, lineage's
-producers, job kinds) is still written in the code: src, the web's and the
-apps' code, and their tests. tests/test_no_old_ids.py holds every match to
-its allow-list.
+"""Where an old id of ADR-024 phase 1 (artifacts, lineage's producers, job
+kinds, and from part 4 the files' kinds) is still written in the code: src,
+the web's and the apps' code, and their tests. tests/test_no_old_ids.py holds
+every match to its allow-list.
 
 A match is an old id as a whole string literal ("capture", 'scene-detect',
 in SQL too), `producer.<old>`, `missing_<old>`, `redo_<old>`, an installed
 plug-in's work id (`plugin_<id>`, `f"plugin_{...}"`) and an old id in a
-path (`/producers/vision/`). The old ids are written out here, never read
+path (`/producers/vision/`, `/artifacts/proxy`). The old ids are written out here, never read
 from RENAMED, so the test stays when part 5 removes it.
 """
 
@@ -25,12 +25,15 @@ ARTIFACTS = ("probe", "capture", "proxy", "video_preview", "analysis_proxy", "sc
 PRODUCERS = ("ffprobe", "exiftool", "preview", "analysis-proxy", "scene-detect", "scene-vision", "insightface",
              "insightface-video", "whisper")
 KINDS = ("render",)
-OLD = frozenset(ARTIFACTS + PRODUCERS + KINDS + ("previews",))
+# A file's kind before part 4 (proxy, video_preview and analysis_proxy are artifacts' too), and the web's word.
+FILES = ("thumbnail", "scene_rep", "video-preview")
+OLD = frozenset(ARTIFACTS + PRODUCERS + KINDS + FILES + ("previews",))
+_FILE = "|".join(map(re.escape, ("proxy", "video_preview", "analysis_proxy", *FILES)))
 _WORD = "|".join(map(re.escape, sorted(OLD, key=len, reverse=True)))
 _ART = "|".join(map(re.escape, sorted(ARTIFACTS + KINDS, key=len, reverse=True)))
 # Inside a string: what's built from an old id.
 _BUILT = re.compile(rf"\b(producer\.(?:{_ART})\b|missing_(?:{_ART})\b|redo_(?:{_ART})\b"
-                    rf"|(?<!src)/producers/(?:{_WORD})(?=[/?\"'`]|$))")  # a route, not a module's path
+                    rf"|(?<!src)/producers/(?:{_WORD})(?=[/?\"'`]|$)|/artifacts/(?:{_FILE})(?=[/?\"'`]|$))")  # a route
 _SQL = re.compile(rf"'({_WORD})'")
 _QUOTED = re.compile(rf"""(["'`])({_WORD})\1""")
 _FILES = {".py": "python", ".ts": "script", ".tsx": "script", ".js": "script", ".swift": "script"}

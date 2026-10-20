@@ -158,7 +158,7 @@ def _ingest_video(client, auth, library_id, rel_path) -> str:
         "/v1/ingest",
         data={"library_id": library_id, "rel_path": rel_path, "file_size": "1000", "media_type": "video",
               "width": "64", "height": "64", "lineage": ingest_made()},
-        files={"proxy": ("proxy.jpg", buf, "image/jpeg")},
+        files={"lumiverb.preview": ("proxy.jpg", buf, "image/jpeg")},
         headers=auth,
     )
     assert r.status_code == 200, r.text

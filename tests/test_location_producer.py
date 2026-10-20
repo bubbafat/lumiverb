@@ -52,7 +52,7 @@ def _clip(env, lib: str, rel_path: str, when: str, *, offset: int | None = None,
             "taken_at_offset_min": offset, "exif": {"SerialNumber": serial} if serial else {}}
     if gps:
         exif |= {"gps_lat": gps[0], "gps_lon": gps[1]}
-    r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data={
+    r = client.post("/v1/ingest", headers=headers, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, data={
         "library_id": lib, "rel_path": rel_path, "file_size": "10", "media_type": "image",
         "lineage": json.dumps({"lumiverb.preview": made("lumiverb.preview"),
                                  "lumiverb.capture_time": made("lumiverb.capture_time")}), "exif": json.dumps(exif)})

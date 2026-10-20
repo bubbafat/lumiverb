@@ -236,7 +236,7 @@ def _seed(env, lib: Lib, rel: str, *, media_type: str = "image") -> str:
     data = {"library_id": lib.id, "rel_path": rel, "file_size": str(path.stat().st_size),
             "file_mtime": _mtime(path).isoformat(), "media_type": media_type, "width": "16", "height": "16",
             "exif": json.dumps({"content_hash": sha}), "lineage": ingest_made(sha)}
-    r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
+    r = client.post("/v1/ingest", data=data, files={"lumiverb.preview": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]
 

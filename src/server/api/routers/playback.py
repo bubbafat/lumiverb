@@ -36,7 +36,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.processing.video import ffmpeg_run
-from src.producers.names import VIDEO_PREVIEW
+from src.producers.names import ANALYSIS_PROXY, VIDEO_PREVIEW
 from src.server.api.dependencies import get_tenant_session
 from src.server.api.errors import ApiError
 from src.server.config import get_settings
@@ -59,7 +59,7 @@ STREAM_TTL_SECONDS = 3600
 # A cut within this of the whole video isn't worth making.
 _CAP_SLACK_SEC = 0.5
 
-Source = Literal["analysis_proxy", "preview"]
+Source = Literal[ANALYSIS_PROXY, VIDEO_PREVIEW]
 
 
 class PlaybackResponse(BaseModel):
@@ -83,7 +83,7 @@ def whole_clip(source: str, duration_sec: float | None) -> bool:
     so a clip no longer than that is whole in it."""
     from src.shared.producers import PRODUCERS
 
-    if source == "analysis_proxy":
+    if source == ANALYSIS_PROXY:
         return True
     preview_seconds = PRODUCERS[VIDEO_PREVIEW].defaults["seconds"]
     return duration_sec is not None and duration_sec <= preview_seconds + WHOLE_SLACK_SEC
@@ -190,14 +190,14 @@ def _check_public(session: Session, asset: Asset, library_id: str | None, projec
 def _playable(asset: Asset, store: Store) -> tuple[Source, str, str] | None:
     """(source, key, version) of what plays: the analysis proxy, else the
     preview. Unavailable when where they're kept can't be reached."""
-    for source, key in (("analysis_proxy", asset.analysis_proxy_key), ("preview", asset.video_preview_key)):
+    for source, key in ((ANALYSIS_PROXY, asset.analysis_proxy_key), (VIDEO_PREVIEW, asset.video_preview_key)):
         if not key:
             continue
         try:
             st = store.stat(key)
         except NotFound:
             continue
-        sha = (asset.analysis_proxy_sha256 or "")[:12] if source == "analysis_proxy" else ""
+        sha = (asset.analysis_proxy_sha256 or "")[:12] if source == ANALYSIS_PROXY else ""
         return source, key, sha or f"{int(st.modified)}-{st.size}"
     return None
 
@@ -263,7 +263,7 @@ def _cut_for(ask: _Ask) -> tuple[str, int | None, str] | None:
 
     A file known to be no longer than the cap needs no cut; one not probed
     yet is planned as cut (the job probes before it cuts)."""
-    strip = ask.strip and ask.source == "preview"
+    strip = ask.strip and ask.source == VIDEO_PREVIEW
     max_seconds = ask.max_seconds
     if max_seconds is not None:
         probed, duration = _known_duration(ask)

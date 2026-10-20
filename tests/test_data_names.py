@@ -155,7 +155,7 @@ def test_renamed_is_the_registry():
     assert all(name == ARTIFACTS[a] for (a, _), name in PRODUCERS.items())
     assert set(KINDS) == {p["kind"] for p in before["producers"].values() if p["kind"]}
     assert {KINDS[k] for k in KINDS} == {k for k in SCHEDULER_KINDS if k != "scan" and not k.startswith("redo:")}
-    assert set(FILES.values()) == ALLOWED_ARTIFACT_TYPES
+    assert set(FILES) == ALLOWED_ARTIFACT_TYPES  # by their names from part 4
     assert all(f in makers() or f.rpartition(".")[0] in makers() for f in FILES)
     assert set(RENAMED) == {"artifact", "producer", "kind", "file"}
     assert RENAMED["file"] == {old: new for new, old in FILES.items()}
@@ -168,9 +168,10 @@ def test_either_spelling_comes_in_as_its_name():
     assert artifact_in("plugin_facts") == artifact_in("facts") == "facts"  # a plug-in's work, its id
     assert artifact_in("plugin_my_tool") == "my-tool"  # each underscore was a dash
     assert artifact_in("upkeep") == "upkeep" and artifact_in("all") == "all"
-    assert file_in("lumiverb.preview") == file_in("proxy") == "proxy"  # files keep their kinds until part 4
-    assert file_in("lumiverb.preview.thumbnail") == "thumbnail"
-    assert file_in("lumiverb.video.scenes.picture") == "scene_rep"
+    assert file_in("lumiverb.preview") == file_in("proxy") == "lumiverb.preview"  # by their names from part 4
+    assert file_in("thumbnail") == "lumiverb.preview.thumbnail"
+    assert file_in("scene_rep") == "lumiverb.video.scenes.picture"
+    assert file_in("lumiverb.video.analysis_proxy") == file_in("analysis_proxy") == "lumiverb.video.analysis_proxy"
     assert producer_in("lumiverb.image.faces", "insightface") == producer_in("faces", "insightface") \
         == producer_in("faces", "lumiverb.image.faces") == "lumiverb.image.faces"
     assert producer_in("facts", "plugin_facts") == "facts"
@@ -263,13 +264,14 @@ def test_the_ids_a_plug_in_cant_have():
         assert not is_reserved(json.loads(f.read_text())["id"]), f
 
 
-def test_the_names_add_one_account_migration_and_none_of_the_control_plane_s():
-    # Part 3's renames what's stored (its rollback, migrate --to f8c4a2e6d0b5); parts 1, 2 and 3 touch no control
-    # database.
+def test_the_names_add_two_account_migrations_and_none_of_the_control_plane_s():
+    # Part 3's renames what's stored (its rollback, migrate --to f8c4a2e6d0b5), part 4's the files (its rollback,
+    # migrate --to f2a6c8e4b0d7); parts 1 to 4 touch no control database.
     from alembic.script import ScriptDirectory
 
     tenant = ScriptDirectory(str(REPO / "migrations" / "tenant"))
-    assert tenant.get_heads() == ["f2a6c8e4b0d7"]
+    assert tenant.get_heads() == ["a3c9e5f1b7d2"]
+    assert tenant.get_revision("a3c9e5f1b7d2").down_revision == "f2a6c8e4b0d7"
     assert tenant.get_revision("f2a6c8e4b0d7").down_revision == "f8c4a2e6d0b5"
     assert ScriptDirectory(str(REPO / "migrations" / "control")).get_heads() == ["d7f3b9e1c5a2"]
 

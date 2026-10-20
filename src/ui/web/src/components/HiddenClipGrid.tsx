@@ -1,5 +1,6 @@
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { HiddenClip } from "../api/client";
+import { THUMBNAIL } from "../lib/names";
 
 function basename(relPath: string): string {
   const i = relPath.lastIndexOf("/");
@@ -24,7 +25,7 @@ function Card<T extends HiddenClip>({
   onToggle: () => void;
   meta: React.ReactNode;
 }) {
-  const { url } = useAuthenticatedImage(clip.asset_id, "thumbnail");
+  const { url } = useAuthenticatedImage(clip.asset_id, THUMBNAIL);
   const name = basename(clip.rel_path);
   const where = [clip.library_name, folderOf(clip.rel_path)].filter(Boolean).join(" · ");
   const inner = (

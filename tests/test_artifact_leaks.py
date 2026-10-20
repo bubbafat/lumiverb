@@ -60,7 +60,7 @@ def _scene_frames(env, asset_id: str, scene_starts: list[int]) -> list[str]:
     client, headers, library_id, storage, tenant_id, _ = env
     keys = []
     for ms in scene_starts:
-        r = client.post(f"/v1/assets/{asset_id}/artifacts/scene_rep", data={"rep_frame_ms": str(ms)},
+        r = client.post(f"/v1/assets/{asset_id}/artifacts/lumiverb.video.scenes.picture", data={"rep_frame_ms": str(ms)},
                         files={"file": ("frame.jpg", io.BytesIO(_jpeg()), "image/jpeg")}, headers=headers)
         assert r.status_code == 200, r.text
         keys.append(storage.scene_rep_key(tenant_id, library_id, asset_id, ms))
