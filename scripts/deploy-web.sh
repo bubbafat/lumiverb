@@ -277,7 +277,25 @@ systemctl reload nginx
 ok "nginx configured: ${DOMAIN} -> API at ${API_UPSTREAM}"
 
 # ---------------------------------------------------------------------------
-# 6. TLS certificate
+# 6. Firewall (before the certificate: Let's Encrypt checks the domain on port 80)
+# ---------------------------------------------------------------------------
+if [[ "$NO_FIREWALL" == "true" ]]; then
+  step "Firewall"
+  ok "Left alone (--no-firewall)"
+else
+  step "Configuring firewall (ufw)"
+
+  ufw default deny incoming
+  ufw default allow outgoing
+  ufw allow 22/tcp   # SSH
+  ufw allow 80/tcp   # HTTP (certbot + redirect)
+  ufw allow 443/tcp  # HTTPS
+  ufw --force enable
+  ok "Firewall active — inbound limited to SSH, HTTP, HTTPS"
+fi
+
+# ---------------------------------------------------------------------------
+# 7. TLS certificate
 # ---------------------------------------------------------------------------
 TLS_ACTIVE=false
 
@@ -327,7 +345,7 @@ elif [[ "$SKIP_CERTBOT" == "false" ]]; then
     ok "TLS certificate obtained"
     TLS_ACTIVE=true
   else
-    warn "Certbot failed — site will serve HTTP only until DNS is pointed and certbot re-run"
+    warn "Certbot failed — site will serve HTTP only until the domain points here and port 80 is reachable; then run this again"
   fi
 else
   warn "Skipping certbot (--skip-certbot)"
@@ -338,24 +356,6 @@ if [[ "$TLS_ACTIVE" == "true" ]]; then
   nginx -t
   systemctl reload nginx
   ok "HSTS on"
-fi
-
-# ---------------------------------------------------------------------------
-# 7. Firewall
-# ---------------------------------------------------------------------------
-if [[ "$NO_FIREWALL" == "true" ]]; then
-  step "Firewall"
-  ok "Left alone (--no-firewall)"
-else
-  step "Configuring firewall (ufw)"
-
-  ufw default deny incoming
-  ufw default allow outgoing
-  ufw allow 22/tcp   # SSH
-  ufw allow 80/tcp   # HTTP (certbot + redirect)
-  ufw allow 443/tcp  # HTTPS
-  ufw --force enable
-  ok "Firewall active — inbound limited to SSH, HTTP, HTTPS"
 fi
 
 # ---------------------------------------------------------------------------

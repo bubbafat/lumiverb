@@ -1473,3 +1473,23 @@ def test_an_update_no_longer_makes_restarts_or_shows_quickwit(tmp_path):
     data = tmp_path / "data"
     _update_data_dir(tmp_path, f"DATA_DIR={data}\n")
     assert sorted(path.name for path in data.iterdir()) == ["tmp", "worker-tmp"]
+
+
+def test_a_fresh_web_install_opens_port_80_before_asking_for_its_certificate():
+    # Let's Encrypt checks the domain on port 80: deploy-api.sh turns ufw on with SSH alone, so a certificate asked
+    # for before deploy-web.sh opened 80 always failed on a fresh machine (the demo server's first install).
+    text = (REPO / "scripts" / "deploy-web.sh").read_text()
+    assert text.index("ufw allow 80/tcp") < text.index('certbot "${certbot_args[@]}"')
+    assert text.index("ufw allow 80/tcp") < text.index("certbot install --nginx")
+
+
+def test_upkeep_waits_for_an_api_still_starting_and_an_update_writes_the_same():
+    # A timer enabled on a machine up longer than OnBootSec fires at once, before the API listens: its curl failed
+    # (connection refused) and left the unit failed after a clean install.
+    def calls(text: str) -> list[str]:
+        return [line for line in text.splitlines() if line.startswith("ExecStart=/usr/bin/curl")]
+
+    deploy, update = calls(DEPLOY_API.read_text()), calls(UPDATE_API.read_text())
+    assert len(deploy) == 2 and deploy == update
+    assert all("--retry 12 --retry-delay 5 --retry-connrefused" in call for call in deploy)
+

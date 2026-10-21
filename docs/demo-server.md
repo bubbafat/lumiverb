@@ -99,8 +99,11 @@ sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env --ema
 Copy the clips onto the Volume from your own computer:
 
 ```bash
-rsync -av --progress ~/Demo/ try:/mnt/demo/library/
+rsync -rltv --chmod=D755,F644 --progress --exclude='.DS_Store' ~/Demo/ try:/mnt/demo/library/
 ```
+
+(`-rlt` and `--chmod` rather than `-a`: a Mac's own owner and modes would come along, and a file only its
+owner may read is one the scheduler, the `lumiverb` user, can't open.)
 
 then, through the tunnel, **Add library** with the folder
 `/mnt/demo/library`. The scheduler scans it within 15 minutes, makes the
