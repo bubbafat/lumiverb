@@ -203,6 +203,19 @@ Then, as an admin, in Lumiverb:
 2. Under **Does**, tick **Descriptions & text**, then **Add**.
 3. **Settings › AI › Models**, Descriptions & text: `qwen3-vl:8b-instruct`.
 
+Or on the command line, on a server with no screen:
+
+```bash
+lumiverb ai machines add Ollama --url http://localhost:11434/v1 --jobs vision
+```
+
+```bash
+lumiverb ai model vision qwen3-vl:8b-instruct
+```
+
+(`--key` asks for a machine's key, for one that needs it; `lumiverb ai list`
+shows what's set.)
+
 The URL is `http://localhost:11434/v1` when Ollama runs on the same computer
 as Lumiverb. On another computer it's that computer's address, such as
 `http://192.168.1.20:11434/v1`, and Ollama there must listen on the network.

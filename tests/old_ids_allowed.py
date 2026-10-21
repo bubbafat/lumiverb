@@ -259,7 +259,7 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
             'src/ui/web/src/lib/waits.test.ts', 'src/ui/web/src/pages/settings/AiSection.test.tsx',
             'src/ui/web/src/pages/settings/AiSection.tsx', 'src/ui/web/src/pages/settings/ProcessingSection.test.tsx',
             'tests/ai_machine_fakes.py', 'tests/test_ai_machines.py', 'tests/test_ai_pool.py',
-            'tests/test_corrections.py', 'tests/test_crashes_and_new_versions.py', 'tests/test_no_silent_waits.py',
+            'tests/test_cli_ai.py', 'tests/test_corrections.py', 'tests/test_crashes_and_new_versions.py', 'tests/test_no_silent_waits.py',
             'tests/test_processing_eta.py', 'tests/test_processing_pause_api.py', 'tests/test_producer_contract.py',
             'tests/test_producers_registry.py', 'tests/test_redo_on_change.py', 'tests/test_scheduler_account.py',
             'tests/test_scheduler_e2e.py', 'tests/test_scheduler_runners.py', 'tests/test_scheduler_service.py',
