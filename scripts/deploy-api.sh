@@ -57,6 +57,7 @@ PG_PORT=""
 PG_VERSION=""
 API_PORT=""
 NO_FIREWALL=""
+EXPOSURE=""
 WITH_WORKER=false
 DRY_RUN=false
 ROOT_MAPS=()
@@ -80,19 +81,23 @@ while [[ $# -gt 0 ]]; do
     --no-firewall)      NO_FIREWALL=true; shift ;;
     --firewall)         NO_FIREWALL=false; shift ;;
     --worker)           WITH_WORKER=true; shift ;;
+    --exposure)         EXPOSURE="${2:?Missing value for --exposure}"; shift 2 ;;
     --root-map)         ROOT_MAPS+=("${2:?Missing value for --root-map}"); shift 2 ;;
     --dry-run)          DRY_RUN=true; shift ;;
     -h|--help)
       echo "Usage: $0 (--domain <FQDN> | --app-host <URL>) [--email <email>] [--tenant <name>] [--data-dir <path>]"
       echo "          [--api-listen-host <ip>] [--api-allow-from <cidr>] [--vision-api-url <url>] [--vision-api-key <key>]"
       echo "          [--pg-port <port>] [--pg-version <major>] [--api-port <port>]"
-      echo "          [--no-firewall | --firewall] [--worker] [--root-map <server-prefix>=<local-prefix>]... [--repo <url>] [--branch <ref>] [--dry-run]"
+      echo "          [--no-firewall | --firewall] [--worker] [--root-map <server-prefix>=<local-prefix>]... [--exposure demo]"
+      echo "          [--repo <url>] [--branch <ref>] [--dry-run]"
       echo ""
       echo "  --app-host       Base URL people reach Lumiverb at, instead of https://<domain> (e.g. http://192.168.86.166)"
       echo "  --no-firewall    Leave ufw alone (the host runs other services); remembered"
       echo "  --firewall       Turn ufw on again after --no-firewall"
       echo "  --worker         Install and start lumiverb-scheduler: all processing on this machine (ffmpeg, Whisper, ...)"
       echo "  --root-map       Where a library root prefix is on this machine, e.g. /Volumes/media-01=/mnt/media-01"
+      echo "  --exposure demo  From the start, answer from anywhere but this machine only what a demo's visitors"
+      echo "                   call (docs/demo-server.md); remembered"
       echo "  --dry-run        Print the settings this run would use (flags, else values remembered from"
       echo "                   an earlier run, else defaults) and stop. Changes nothing."
       exit 0
@@ -146,6 +151,12 @@ DATA_DIR="${DATA_DIR_OVERRIDE:-$(_existing_val DATA_DIR)}"; DATA_DIR="${DATA_DIR
 BRANCH="${BRANCH:-$(_existing_val BRANCH)}";             BRANCH="${BRANCH:-main}"
 NO_FIREWALL="${NO_FIREWALL:-$(_existing_val NO_FIREWALL)}"
 [[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL=false
+EXPOSURE="${EXPOSURE:-$(_existing_val LUMIVERB_EXPOSURE)}"
+# The exposures there are (src/server/api/exposure.py EXPOSURES).
+case "$EXPOSURE" in
+  ""|demo) ;;
+  *) fail "--exposure (LUMIVERB_EXPOSURE) takes demo: $EXPOSURE" ;;
+esac
 # Postgres: the version an earlier install uses; new installs get 18, which
 # Ubuntu 26.04 ships with pgvector (tests run against it too). Installs from
 # before the version was remembered use the cluster on their port.
@@ -171,6 +182,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
   echo "API_PORT=${API_PORT}"
   echo "API_LISTEN_HOST=${API_LISTEN_HOST}"
   echo "WORKER=${WITH_WORKER}"
+  echo "EXPOSURE=${EXPOSURE}"
   echo "ROOT_MAPS=${ROOT_MAPS[*]-}"
   exit 0
 fi
@@ -444,7 +456,10 @@ NO_FIREWALL=${NO_FIREWALL}
 APP_ENV=production
 APP_HOST=${APP_HOST}
 LOG_LEVEL=INFO
-
+${EXPOSURE:+
+# From anywhere but this machine, only the routes this names answer (src/server/api/exposure.py)
+LUMIVERB_EXPOSURE=${EXPOSURE}
+}
 # Password reset SMTP (uncomment and fill in to enable forgot-password)
 # SMTP_HOST=smtp.example.com
 # SMTP_PORT=587
@@ -831,9 +846,13 @@ echo ""
 [[ -z "$LOW_MEMORY" ]] || { warn "$LOW_MEMORY"; echo ""; }
 echo "Next steps:"
 echo ""
-echo "  1. Create the first admin (while nobody can log in):"
+echo "  1. Create the first admin (while nobody can log in), here in this session: no screen needed"
 EXAMPLE_EMAIL="${CERTBOT_EMAIL:-you@example.com}"
 echo "     sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env ${ENV_FILE} --email ${EXAMPLE_EMAIL}"
+if [[ -n "$EXPOSURE" ]]; then
+  echo "     From anywhere but this machine, only what LUMIVERB_EXPOSURE=${EXPOSURE} lists answers, signing in"
+  echo "     with a password included: sign in through an SSH tunnel (docs/demo-server.md)."
+fi
 echo ""
 echo "  2. Deploy the web UI (same or different machine):"
 echo "     bash scripts/deploy-web.sh --domain app.lumiverb.io --api-upstream http://${API_LISTEN_HOST}:${API_PORT}"

@@ -133,8 +133,8 @@ def test_env_file_remembers_the_rerun_settings():
         assert f"\n{key}=${{" in env_block, f"{key} isn't written to /etc/lumiverb/env"
 
 
-def _write_env(env: Path) -> None:
-    """Run deploy-api.sh's env-file writing against `env`."""
+def _write_env(env: Path, settings: str = "") -> None:
+    """Run deploy-api.sh's env-file writing against `env` (settings: more of the script's variables)."""
     text = DEPLOY_API.read_text()
     start = text.index("# Settings added by hand")
     block = text[start:text.index('chmod 600 "$ENV_FILE"', start)]
@@ -143,6 +143,7 @@ def _write_env(env: Path) -> None:
         "ADMIN_KEY=a; API_SECRET_KEY=b; JWT_SECRET=c; DATA_DIR=/mnt/ssd2/lumiverb\n"
         "API_LISTEN_HOST=127.0.0.1; API_PORT=8100; PG_PORT=5434; PG_VERSION=18; BRANCH=feat/other\n"
         "NO_FIREWALL=true; APP_HOST=http://192.168.86.166; DOMAIN=\n"
+        + settings + "\n"
         + block
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
@@ -1595,3 +1596,24 @@ def test_the_domain_is_checked_before_lets_encrypt_is_asked(tmp_path):
     text = DEPLOY_WEB.read_text()
     assert text.index('if ! domain_points_here "$DOMAIN"; then\n    warn "Not asked for yet') < text.index(
         'certbot "${certbot_args[@]}"')
+
+
+def test_a_demo_is_exposed_only_as_a_demo_from_its_install(tmp_path):
+    # From deploy until the runbook's step 8, every route answered from the internet, signing in included.
+    assert _settings(tmp_path, "--app-host", "http://x")["EXPOSURE"] == ""
+    assert _settings(tmp_path, "--app-host", "http://x", "--exposure", "demo")["EXPOSURE"] == "demo"
+    assert _settings(tmp_path, env_file=REMEMBERED + "LUMIVERB_EXPOSURE=demo\n")["EXPOSURE"] == "demo", "remembered"
+    refused = subprocess.run(["bash", str(DEPLOY_API), "--app-host", "http://x", "--exposure", "public", "--dry-run"],
+                             capture_output=True, text=True, timeout=30,
+                             env={**os.environ, "LUMIVERB_CONF_DIR": str(tmp_path)})
+    assert refused.returncode == 1 and "--exposure (LUMIVERB_EXPOSURE) takes demo: public" in refused.stderr
+
+    env = tmp_path / "env"
+    _write_env(env, "EXPOSURE=demo")
+    written = env.read_text()
+    assert "\nLUMIVERB_EXPOSURE=demo\n" in written and "Added by hand" not in written
+    _write_env(env, "EXPOSURE=demo")
+    assert env.read_text().count("LUMIVERB_EXPOSURE=") == 1, "a rerun writes it once, as its own"
+    _write_env(other := tmp_path / "other")
+    assert "LUMIVERB_EXPOSURE" not in other.read_text()
+    assert "only what LUMIVERB_EXPOSURE=${EXPOSURE} lists answers" in DEPLOY_API.read_text(), "said in what's next"

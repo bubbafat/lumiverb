@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.responses import JSONResponse
 
-from src.server.api.exposure import DEMO, ExposureGate, route_of
+from src.server.api.exposure import DEMO, EXPOSURES, ExposureGate, route_of
 from src.server.api.main import app
 from src.server.config import Settings, get_settings
 from tests.app_routes import api_routes
@@ -134,3 +135,10 @@ def test_unset_every_route_is_reached_from_anywhere(exposure):
 def test_an_exposure_there_isnt_stops_the_server(exposure):
     with pytest.raises(ValidationError, match="LUMIVERB_EXPOSURE='dmeo' isn't one"):
         Settings(control_plane_database_url="x", tenant_database_url_template="x", lumiverb_exposure="dmeo")
+
+
+def test_the_install_takes_the_exposures_there_are():
+    # deploy-api.sh --exposure checks its name before writing it: the same names the API starts with.
+    script = (Path(__file__).resolve().parents[1] / "scripts" / "deploy-api.sh").read_text()
+    names = script.split('case "$EXPOSURE" in\n', 1)[1].split(")", 1)[0].strip()
+    assert set(names.split("|")) - {'""'} == set(EXPOSURES)
