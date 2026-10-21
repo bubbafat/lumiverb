@@ -216,6 +216,18 @@ def test_the_command_line_makes_the_same_admin(control, tmp_path, monkeypatch, c
     assert capsys.readouterr().err.strip() == "✗ This Lumiverb is set up already. Log in instead."
 
 
+def test_on_a_demo_the_command_line_says_to_log_in_on_the_machine_itself(control, tmp_path, monkeypatch, capsys):
+    # A demo answers signing in with a password only on the machine itself: its address would answer 404.
+    typed = iter([PASSWORD, PASSWORD])
+    monkeypatch.setattr(cli, "getpass", lambda _prompt: next(typed))
+    env_file = _env_file(tmp_path, control)
+    env_file.write_text(env_file.read_text() + "LUMIVERB_EXPOSURE=demo\n")
+    assert cli.main(["setup", "--env", str(env_file), "--email", "robert@example.com"]) == 0
+    assert capsys.readouterr().out.strip() == (
+        "✓ robert@example.com is this Lumiverb's admin. Log in on this machine itself, or through an SSH tunnel to "
+        "it: from elsewhere, only what LUMIVERB_EXPOSURE=demo lists answers")
+
+
 def test_the_command_line_says_the_rule_first_and_asks_again(control, tmp_path, monkeypatch, capsys):
     typed = iter(["too short", PASSWORD, PASSWORD + "!", PASSWORD, PASSWORD])
     asked = []

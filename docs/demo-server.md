@@ -14,8 +14,10 @@ with two settings that make it a demo:
   the routes are in `docs/cursor-api.md`, "What a server answers from
   elsewhere"). Public libraries' and projects' pages work as anywhere.
 
-Everything an admin does, they do on the machine itself, through an SSH
-tunnel: from there every route answers, as on any install. The content is
+Everything an admin does, they do on the machine itself: a command in an
+SSH session there, or the web app through an SSH tunnel. No screen is
+needed: "the machine itself" is any connection from it, and from there
+every route answers, as on any install. The content is
 copied onto the server's own storage and scanned there; nothing is uploaded
 through the API.
 
@@ -35,11 +37,15 @@ through the API.
 On the droplet, from a checkout of this repository:
 
 ```bash
-sudo bash scripts/deploy-api.sh --domain try.lumiverb.io --worker --data-dir /mnt/demo/lumiverb --root-map /mnt/demo/library=/mnt/demo/library
+sudo bash scripts/deploy-api.sh --domain try.lumiverb.io --worker --exposure demo --data-dir /mnt/demo/lumiverb --root-map /mnt/demo/library=/mnt/demo/library
 ```
 
 The API listens on 127.0.0.1:8000 only, and ufw lets in SSH alone until the
-web step.
+web step. `--exposure demo` writes `LUMIVERB_EXPOSURE=demo` in
+`/etc/lumiverb/env` (remembered by reruns): from the first start, only what
+a visitor's pages call answers from the internet. Signing in with a
+password isn't one of them, so nothing an admin does is open to anyone else
+while the demo is set up.
 
 ### 3. The web app and its certificate
 
@@ -90,11 +96,15 @@ it come from the machine itself, so every route answers them.
 
 ### 5. The first admin
 
-On the droplet (it asks for a password):
+In your SSH session on the droplet (it asks for a password of 12 characters
+or more):
 
 ```bash
 sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env --email you@example.com
 ```
+
+Then sign in through the tunnel, at http://localhost:8080: from
+`https://try.lumiverb.io`, signing in with a password answers 404.
 
 ### 6. The content
 
@@ -133,20 +143,26 @@ supported).
   `http://localhost:8080`: visitors open it at `https://try.lumiverb.io`.
 - **A public project**: the project's Edit, visibility **Public (anyone
   with link)**: `https://try.lumiverb.io/public/projects/<project id>`.
-- **Try it as a viewer**: through the tunnel, **Admin › Users**, Invite
-  someone: an address of yours (`demo@lumiverb.io`), role Viewer, **Make
-  invite link**. Don't open the link: the viewer's password stays one
-  nobody knows. Then, on the droplet,
-  in `/etc/lumiverb/env`:
+- **Try it as a viewer**: one viewer, made once, whom every visitor is
+  signed in as (not someone invited per visitor). On the droplet, as the
+  service user, whose command line the install set up for the account:
+
+  ```bash
+  sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb user create --email demo@lumiverb.io --role viewer > /dev/null
+  ```
+
+  Its invite link is thrown away unseen, so the viewer's password stays one
+  nobody knows. Then, in `/etc/lumiverb/env`:
 
   ```
   LUMIVERB_DEMO_VIEWER=demo@lumiverb.io
-  LUMIVERB_EXPOSURE=demo
   ```
 
   and `sudo systemctl restart lumiverb-api`. A viewer sees every library
   unless it's private (Library settings › People); projects aren't a
   viewer's (an editor's and up), so show those as public projects.
+  (`LUMIVERB_EXPOSURE=demo` is there already, from the install; for an
+  install without `--exposure demo`, add it here by hand.)
 
 ### 9. Checks, from anywhere else
 

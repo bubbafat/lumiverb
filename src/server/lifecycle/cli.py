@@ -637,8 +637,12 @@ def _setup(args: argparse.Namespace) -> int:
         first = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
         print(f"✗ Can't reach the control database: {first}", file=sys.stderr)
         return 1
-    where = env.get("APP_HOST")
-    print(f"✓ {user.email} is this Lumiverb's admin" + (f". Log in at {where}" if where else ""))
+    where, exposure = env.get("APP_HOST"), env.get("LUMIVERB_EXPOSURE")
+    if exposure:  # signing in with a password answers only on the machine itself (src/server/api/exposure.py)
+        print(f"✓ {user.email} is this Lumiverb's admin. Log in on this machine itself, or through an SSH tunnel to "
+              f"it: from elsewhere, only what LUMIVERB_EXPOSURE={exposure} lists answers")
+    else:
+        print(f"✓ {user.email} is this Lumiverb's admin" + (f". Log in at {where}" if where else ""))
     return 0
 
 
