@@ -104,3 +104,40 @@ def test_anthropics_models_are_asked_for_with_its_api_version_and_the_key_it_rea
         list_models("http://10.0.0.7:11434/v1", "k")
     assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer k"} and get.call_args.kwargs["params"] == {}
 
+
+
+def test_the_error_keeps_what_went_wrong_there_for_the_installs_operator():
+    # The demo server's Connect said only "Couldn't reach the AI machine.": Anthropic's 400, then a 404 from a
+    # stray dot, were in the API's log alone.
+    resp = MagicMock(status_code=400, text="")
+    resp.json.return_value = {"type": "error", "error": {"type": "invalid_request_error",
+                                                         "message": "anthropic-version: header is required"}}
+    with _resolves_to("160.79.104.10"), patch("src.shared.vision_endpoint.requests.get", return_value=resp), \
+            pytest.raises(VisionEndpointError) as e:
+        list_models("https://api.anthropic.com/v1")
+    assert str(e.value) == UNREACHABLE
+    assert e.value.detail == ("https://api.anthropic.com/v1: /models answered HTTP 400 "
+                              "(anthropic-version: header is required)")
+
+    refused = requests.ConnectionError(
+        "HTTPConnectionPool(host='10.0.0.9', port=22): Max retries exceeded with url: /v1/models (Caused by "
+        "NewConnectionError('<urllib3.connection.HTTPConnection object>: Failed to establish a new connection: "
+        "[Errno 111] Connection refused'))")
+    with patch("src.shared.vision_endpoint.requests.get", side_effect=refused), \
+            pytest.raises(VisionEndpointError) as e:
+        list_models("http://10.0.0.9:22/v1")
+    assert e.value.detail == "http://10.0.0.9:22/v1: ConnectionError: Connection refused"
+
+    long = MagicMock(status_code=502, text="<html>" + "x" * 500)
+    long.json.side_effect = ValueError("not json")
+    with patch("src.shared.vision_endpoint.requests.get", return_value=long), \
+            pytest.raises(VisionEndpointError) as e:
+        list_models("http://10.0.0.9:22/v1")
+    assert e.value.detail.endswith("…)") and len(e.value.detail) < 260, "a line, not a page"
+
+
+def test_a_stray_dot_at_the_end_is_trimmed():
+    assert check_url("https://api.anthropic.com/v1.") == "https://api.anthropic.com/v1"
+    with _resolves_to("160.79.104.10"), _answers("claude-haiku-4-5") as get:
+        list_models("https://api.anthropic.com/v1. ")
+    assert get.call_args.args[0] == "https://api.anthropic.com/v1/models"

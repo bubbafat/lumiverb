@@ -254,12 +254,13 @@ def _settings(ctrl: Session, tenant_id: str) -> AiSettings:
     )
 
 
-def _ask(api_url: str, api_key: str | None) -> tuple[list[str], str]:
-    """(models by their one names, "") when the machine answers; ([], why not) when it can't."""
+def _ask(api_url: str, api_key: str | None, *, said_in_full: bool = False) -> tuple[list[str], str]:
+    """(models by their one names, "") when the machine answers; ([], why not) when it can't. said_in_full:
+    what went wrong there too (its address, what it answered), which is the log's."""
     try:
         return canonical_models(list_models(api_url, api_key or None)), ""
     except VisionEndpointError as e:
-        return [], str(e)
+        return [], f"{e} {e.detail}" if said_in_full and e.detail else str(e)
 
 
 def _record(machine: AiMachine, models: list[str], error: str) -> None:
@@ -269,8 +270,10 @@ def _record(machine: AiMachine, models: list[str], error: str) -> None:
     machine.checked_at = utcnow()
 
 
-def _models_or_502(api_url: str, api_key: str | None) -> list[str]:
-    models, error = _ask(api_url, api_key)
+def _models_or_502(api_url: str, api_key: str | None, request: Request) -> list[str]:
+    """The machine's models, or 502 machine_unreachable. Why, in full, only to a server admin: it's the log's,
+    which is theirs (Admin › Logs), and said to anyone else it would map the network around the server."""
+    models, error = _ask(api_url, api_key, said_in_full=getattr(request.state, "server_admin", False) is True)
     if error:
         raise UpstreamError("machine_unreachable", error, {"api_url": api_url})
     return models
@@ -307,15 +310,15 @@ def get_ai(request: Request) -> AiSettings:
 @router.post("/connect", response_model=Models, dependencies=[Depends(require_tenant_admin)])
 def connect(body: ConnectIn, request: Request) -> Models:
     """Ask a machine which models it offers. 502 machine_unreachable when it
-    can't say (why is only logged); 422 invalid_url for a URL that isn't
-    plain http(s)."""
+    can't say (why is logged, and said to a server admin); 422 invalid_url for
+    a URL that isn't plain http(s)."""
     api_url = _url(body.api_url)
     key = body.api_key
     if key is None and body.machine_id:
         with _control() as ctrl:
             machine = _machine(ctrl, request, body.machine_id)
             key = key_of(machine) if machine.api_url == api_url else None
-    return Models(models=_models_or_502(api_url, key))
+    return Models(models=_models_or_502(api_url, key, request))
 
 
 @router.post("/machines", response_model=AiSettings, status_code=201, dependencies=[Depends(require_tenant_admin)])
@@ -329,7 +332,7 @@ def add_machine(body: MachineIn, request: Request) -> AiSettings:
     api_url = _url(body.api_url)
     with _control() as ctrl:
         _name_free(ctrl, tenant_id, body.name)
-        models = _models_or_502(api_url, body.api_key)
+        models = _models_or_502(api_url, body.api_key, request)
         _check_jobs(ctrl.get(Tenant, tenant_id), body.jobs, models)
         machine = AiMachine(machine_id=f"aim_{ULID()}", tenant_id=tenant_id, name=body.name, api_url=api_url,
                             jobs=body.jobs, at_once=body.at_once, enabled=body.enabled, shares_gpu=body.shares_gpu)
@@ -390,7 +393,7 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiS
             for added in sorted(set(machine.jobs) - was[2]):
                 _check_jobs(ctrl.get(Tenant, tenant_id), [added], list(AI_JOBS[added].built_in_models))
         elif machine.enabled and (moved or set(machine.jobs) - was[2] or not was[3]):
-            models = _models_or_502(machine.api_url, key_of(machine))
+            models = _models_or_502(machine.api_url, key_of(machine), request)
             _check_jobs(ctrl.get(Tenant, tenant_id), machine.jobs, models)
             _record(machine, models, "")
         ctrl.add(machine)
