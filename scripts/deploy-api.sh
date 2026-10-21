@@ -293,10 +293,28 @@ apt-get install -y -qq \
   git build-essential python3-dev
 [[ "$NO_FIREWALL" == "true" ]] || apt-get install -y -qq ufw
 
+# HEIC, an iPhone's photos: libvips reads them with libheif, whose HEVC decoder is a package of its own from
+# Ubuntu 24.04 on (before, libheif has it built in). Installed where the distribution has it; a failure is said,
+# never fatal (every other photo is read as before). Held to the same text in deploy-api.sh and update-api.sh.
+heic_decoder() {
+  local pkg=libheif-plugin-libde265
+  if dpkg -s "$pkg" >/dev/null 2>&1; then
+    ok "HEIC photos: ${pkg} is installed"
+  elif ! apt-cache show "$pkg" >/dev/null 2>&1; then
+    ok "HEIC photos: libheif decodes them itself here"
+  elif apt-get install -y -qq "$pkg" >/dev/null 2>&1 \
+      || { apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq "$pkg" >/dev/null 2>&1; }; then
+    ok "HEIC photos: installed ${pkg}"
+  else
+    warn "HEIC photos can't be read until ${pkg} is installed: sudo apt-get install ${pkg}"
+  fi
+}
+
 if [[ "$WITH_WORKER" == "true" ]]; then
   # Scan and enrich: video, EXIF, image decoding.
   apt-get install -y -qq ffmpeg libimage-exiftool-perl
   apt-get install -y -qq libvips42t64 2>/dev/null || apt-get install -y -qq libvips42
+  heic_decoder
 fi
 
 ok "System packages installed (PostgreSQL ${PG_VERSION})"

@@ -1109,3 +1109,27 @@ def test_what_the_walk_takes(env, api, lib):
 
     assert set(_in_sight(env, lib)) == {".hidden.png", "real.png", unicodedata.normalize("NFC", "café.png")}
     _settled(env, api, lib)
+
+
+def test_an_iphones_heic_photos_are_taken_in_as_photos(env, api, lib):
+    # An iPhone saves HEIC by default; .heif is the same container. tests/fixtures/drawn.heic: 96 x 64, taken
+    # 2024-07-04 18:30 at UTC-4, with GPS (tests/test_libvips_open.py, tests/test_capture.py).
+    heic = (Path(__file__).parent / "fixtures" / "drawn.heic").read_bytes()
+    for rel in ("2024/IMG_0001.HEIC", "2024/photo.heif"):
+        path = lib.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(heic)
+        _set_mtime(path, _ago(HOUR))
+    _scan(api, lib)
+
+    with _db(env) as session:
+        rows = session.execute(text(
+            "SELECT rel_path, media_type, width, height, proxy_key, thumbnail_key, taken_at, taken_at_offset_min,"
+            "       gps_lat, gps_lon FROM assets WHERE library_id = :lib ORDER BY rel_path"), {"lib": lib.id}).mappings().all()
+    assert [r["rel_path"] for r in rows] == ["2024/IMG_0001.HEIC", "2024/photo.heif"]
+    for r in rows:
+        assert (r["media_type"], r["width"], r["height"]) == ("image", 96, 64), dict(r)
+        assert r["proxy_key"] and r["thumbnail_key"], "its preview and thumbnail were made and sent"
+        assert r["taken_at"] == datetime(2024, 7, 4, 18, 30, tzinfo=UTC) and r["taken_at_offset_min"] == -240
+        assert (round(r["gps_lat"], 4), round(r["gps_lon"], 4)) == (40.6892, -74.0445)
+    _settled(env, api, lib)

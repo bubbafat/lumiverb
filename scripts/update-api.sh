@@ -363,6 +363,30 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+step "Photo decoders"
+# HEIC, an iPhone's photos: libvips reads them with libheif, whose HEVC decoder is a package of its own from
+# Ubuntu 24.04 on (before, libheif has it built in). Installed where the distribution has it; a failure is said,
+# never fatal (every other photo is read as before). Held to the same text in deploy-api.sh and update-api.sh.
+heic_decoder() {
+  local pkg=libheif-plugin-libde265
+  if dpkg -s "$pkg" >/dev/null 2>&1; then
+    ok "HEIC photos: ${pkg} is installed"
+  elif ! apt-cache show "$pkg" >/dev/null 2>&1; then
+    ok "HEIC photos: libheif decodes them itself here"
+  elif apt-get install -y -qq "$pkg" >/dev/null 2>&1 \
+      || { apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq "$pkg" >/dev/null 2>&1; }; then
+    ok "HEIC photos: installed ${pkg}"
+  else
+    warn "HEIC photos can't be read until ${pkg} is installed: sudo apt-get install ${pkg}"
+  fi
+}
+if [[ "$PROCESSING" == "true" ]]; then
+  heic_decoder
+else
+  ok "No processing here: nothing to decode"
+fi
+
+# ---------------------------------------------------------------------------
 step "Installing the plug-in runner"
 DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
 if [[ -n "$DATA_DIR" ]]; then

@@ -5,9 +5,9 @@ libvips reads a name ending in [...] as load options, and picks a loader by
 a file's content, not its name. A proxy is made from the file the name
 names, read as it is, and a file only an untrusted loader reads (ImageMagick,
 PDF, SVG, PPM: those libvips itself marks untrusted) makes none. Every
-format a library holds still makes its proxy: JPEG, PNG, WebP and TIFF
-through libvips, BMP through Pillow, RAW through rawpy (a DNG rawpy can't
-read through libvips, as a TIFF).
+format a library holds still makes its proxy: JPEG, PNG, WebP, TIFF and
+HEIF (an iPhone's HEIC) through libvips, BMP through Pillow, RAW through
+rawpy (a DNG rawpy can't read through libvips, as a TIFF).
 """
 
 from __future__ import annotations
@@ -128,12 +128,45 @@ def test_a_photo_is_opened_by_its_exact_name_whatever_brackets_it_has(tmp_path, 
 
 RASTER = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP", ".tif": "TIFF", ".tiff": "TIFF",
           ".bmp": "BMP"}
+# Pillow writes no HEIF: an iPhone-style HEIC made by macOS's own encoder (sips), a drawn picture, 96 x 64: its
+# left half red, its right half blue, a green band along its top (its date, zone and GPS written by exiftool,
+# for tests/test_capture.py).
+HEIC = Path(__file__).parent / "fixtures" / "drawn.heic"
+HEIF = {".heic", ".heif"}
 
 
 def test_every_format_a_library_holds_is_tested_here():
     from src.shared.file_extensions import IMAGE_EXTENSIONS, RAW_EXTENSIONS
 
-    assert set(RASTER) == IMAGE_EXTENSIONS - RAW_EXTENSIONS, "a new format needs its proxy tested below"
+    assert set(RASTER) | HEIF == IMAGE_EXTENSIONS - RAW_EXTENSIONS, "a new format needs its proxy tested below"
+
+
+@pytest.mark.parametrize("name", ["IMG_0001.HEIC", "IMG_0002.heic", "photo.heif"])
+def test_an_iphones_heic_makes_its_proxy_the_right_way_round(tmp_path, name):
+    from src.processing.proxy import proxy_gen
+
+    source = tmp_path / name
+    source.write_bytes(HEIC.read_bytes())
+
+    proxy, w, h = proxy_gen.generate_proxy_bytes(source)
+
+    assert (w, h) == (96, 64) and proxy_size(proxy) == (96, 64)
+    img = Image.open(io.BytesIO(proxy)).convert("RGB")
+
+    def near(xy, want):
+        return all(abs(a - b) < 40 for a, b in zip(img.getpixel(xy), want, strict=True))
+
+    assert near((12, 40), (255, 0, 0)) and near((84, 40), (0, 0, 255)), "red left, blue right: not mirrored"
+    assert near((48, 2), (0, 200, 0)), "the green band on top: not upside down"
+
+
+def test_libvips_reads_heif_with_a_trusted_loader():
+    # Were it ever marked untrusted, blocking those (src/processing/libvips.py) would stop every HEIC photo.
+    from src.processing.proxy import proxy_gen
+
+    pyvips = proxy_gen.pyvips
+    assert pyvips.type_find("VipsOperation", "heifload_source"), "this libvips reads no HEIF: libheif is missing"
+    assert not pyvips.Introspect.get("heifload_source").flags & _UNTRUSTED
 
 
 @pytest.mark.parametrize("ext", sorted(RASTER))

@@ -110,6 +110,21 @@ def test_capture_facts_keep_accuracy_only_with_a_real_fix() -> None:
 
 
 @pytest.mark.fast
+def test_an_iphones_heic_says_when_and_where(tmp_path) -> None:
+    # tests/fixtures/drawn.heic: made by macOS's own encoder, its details written by exiftool as an iPhone writes them.
+    from src.processing.workers.exif_extract import parse_gps
+
+    heic = tmp_path / "IMG_0001.HEIC"
+    heic.write_bytes((Path(__file__).parent / "fixtures" / "drawn.heic").read_bytes())
+    tags = extract_exif_many([heic])[str(heic)]
+    assert tags["Model"] == "iPhone 15"
+    assert capture_facts(tags)["taken_at"] == "2024-07-04T18:30:00+00:00"
+    assert capture_facts(tags)["taken_at_offset_min"] == -240
+    lat, lon = parse_gps(tags)
+    assert (round(lat, 4), round(lon, 4)) == (40.6892, -74.0445)
+
+
+@pytest.mark.fast
 def test_one_exiftool_reads_many_files_and_leaves_out_what_it_cant(tmp_path) -> None:
     a = _jpeg(tmp_path / "a.jpg", taken="2024:06:15 14:30:00", offset="+02:00")
     b = _jpeg(tmp_path / "b.jpg", taken="2024:06:16 09:00:00")

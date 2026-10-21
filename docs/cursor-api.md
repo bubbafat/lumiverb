@@ -362,7 +362,7 @@ This reference is a client's whole contract with the server (ADR-020 decision 9)
 
 1. **Its key.** A device's key (Devices API), sent as `Authorization: Bearer <key>`: it does all of this for the libraries the device reads, and nothing else (Roles). Or a person's (API Keys): scans, ingest and uploads are editors' writes; checking in as this server's reader is an admin's.
 2. **What it reads.** The libraries naming it as their reader (`PUT /v1/libraries/{id}/reader`), as its check-in answers with them (Readers API; a person's key: `GET /v1/libraries`, those whose `reader` is `server`; another reader's scans are refused, 409 `not_the_reader`): a library's `root_path` is the folder as the server keeps it, and where that is on the client's machine is the client's own business. Then its filters, the account's and the library's: `GET /v1/libraries/{id}/reader-changes` (Readers API), merged as Merged filter evaluation says (ingest refuses a path they leave out). A library's media are its files with one of these extensions, compared lowercase:
-   - Images: `.arw` `.bmp` `.cr2` `.cr3` `.crw` `.dng` `.jpeg` `.jpg` `.nef` `.nrw` `.orf` `.png` `.raf` `.raw` `.rw2` `.rwl` `.sr2` `.srf` `.tif` `.tiff` `.webp`
+   - Images: `.arw` `.bmp` `.cr2` `.cr3` `.crw` `.dng` `.heic` `.heif` `.jpeg` `.jpg` `.nef` `.nrw` `.orf` `.png` `.raf` `.raw` `.rw2` `.rwl` `.sr2` `.srf` `.tif` `.tiff` `.webp`
    - Videos: `.mkv` `.mov` `.mp4`
 
    Hidden files count. Links aren't followed. A name with a control character, or a path that breaks the `rel_path` rule (Assets API), is never sent: the server refuses it.

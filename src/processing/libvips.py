@@ -6,7 +6,8 @@ blocks the untrusted loaders in a process (the scheduler and its producers,
 a scan), the ones libvips itself marks untrusted (ImageMagick, PDF, SVG,
 libraw, JPEG XL, PPM and others). libvips picks a loader by a file's
 content, not its name. A library's images are read with trusted ones:
-JPEG, PNG, WebP and TIFF (a DNG rawpy can't read is a TIFF too). RAW is
+JPEG, PNG, WebP, TIFF (a DNG rawpy can't read is a TIFF too) and HEIF
+(an iPhone's HEIC photos, through libheif). RAW is
 read by rawpy, and BMP by Pillow (proxy_gen), as libvips reads BMP only
 with ImageMagick.
 """

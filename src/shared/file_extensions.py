@@ -13,6 +13,10 @@ _OLYMPUS_RAW = {".orf"}
 _PANASONIC_RAW = {".rw2", ".raw"}
 _LEICA_RAW = {".rwl"}
 _UNIVERSAL_IMAGE = {".dng", ".tif", ".tiff"}
+# HEIF: an iPhone's photos (its camera's High Efficiency, the default), read by libvips through libheif (a
+# trusted loader). A Linux install brings libheif's HEVC decoder where it's a package of its own (deploy-api.sh,
+# update-api.sh heic_decoder).
+_HEIF_IMAGE = {".heic", ".heif"}
 
 # RAW-only extensions (camera RAW + DNG); exclude .tif/.tiff so large raster TIFFs
 # stay on Pillow/pyvips. Used by storage to never pass these to Pillow.
@@ -37,6 +41,7 @@ IMAGE_EXTENSIONS = (
     | _PANASONIC_RAW
     | _LEICA_RAW
     | _UNIVERSAL_IMAGE
+    | _HEIF_IMAGE
 )
 
 SUPPORTED_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
