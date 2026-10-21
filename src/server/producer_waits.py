@@ -133,7 +133,8 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
                 device_name=lib["device_name"] or "", checked_in_at=lib["checked_in_at"],
                 remakes_held=lib["remakes_held"])
     if redoable and artifact in paused.redo:
-        # A new version stops its redo by no one (lineage.hold_new_version); an admin, by name.
+        # A new version or new defaults stop its redo by no one (lineage.hold_new_version, hold_new_defaults); an
+        # admin, by name.
         add(NEW_VERSION if paused.redo[artifact]["paused_by"] is None else REDO_STOPPED, c["due_redo"])
     if live and asset_ids is None:
         held: dict[str, int] = {}

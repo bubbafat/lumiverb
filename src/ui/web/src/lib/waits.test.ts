@@ -80,7 +80,7 @@ describe("Why work waits", () => {
 
   it("says a new version is ready and waits for an admin, apart from an admin's stop", () => {
     expect(waitSentence({ reason: "new_version", clips: 40 }, say)).toBe(
-      "A new version of Analysis proxies is ready: 40 videos made by an older one are made again once an admin"
+      "A new version of Analysis proxies is ready: 40 videos made before it are made again once an admin"
       + " resumes it.");
     expect(waitSentence({ reason: "redo_stopped", clips: 3 }, say)).toBe(
       "3 videos made another way than now stay as they are: an admin chose to keep them.");

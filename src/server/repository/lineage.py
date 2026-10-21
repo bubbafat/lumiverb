@@ -19,7 +19,9 @@ approval (Robert, Oct 9). An admin can stop a producer's redo and resume it
 (`pause` and `resume` with scope REDO); a new setting for it resumes it. A
 new producer version (a deploy, which nobody approved) stops its redo the
 first time the scheduler sees clips made by an older one
-(`hold_new_version`): an admin resumes it.
+(`hold_new_version`), and so do new defaults a release brings, a prompt say,
+that change what the account makes it with (`hold_new_defaults`: remaking
+through a paid AI machine costs money): an admin resumes it.
 
 Pausing (Robert, Oct 9): one switch per processing action, Scans, Upkeep
 and each producer the scheduler makes, each paused and resumed on its own
@@ -628,6 +630,66 @@ def _made_by_older_version(session: Session, artifact: str) -> bool:
     return session.execute(text(
         "SELECT 1 FROM artifact_lineage WHERE artifact = :a AND producer = :p AND producer_version <> :v LIMIT 1"
     ), {"a": artifact, "p": p.artifact, "v": p.version}).first() is not None
+
+
+_DEFAULTS_SEEN = "producer.{}.defaults_seen"
+
+
+def _defaults_seen(session: Session, artifact: str) -> dict[str, str] | None:
+    """What the scheduler last saw of the producer's settings: the hash of its own defaults (a prompt, what a
+    notch stands for, its job's default model: what a release changes), and of what the account made it with
+    then (desired: what a person changes). None before the first look."""
+    try:
+        seen = json.loads(_meta(session, _DEFAULTS_SEEN.format(artifact)) or "null")
+    except ValueError:
+        return None
+    return seen if isinstance(seen, dict) else None
+
+
+def _made_another_way(session: Session, artifact: str, settings_hash_now: str) -> bool:
+    """This version of the producer made some of it with other settings than now."""
+    p = PRODUCERS[artifact]
+    return session.execute(text(
+        "SELECT 1 FROM artifact_lineage WHERE artifact = :a AND producer = :p AND producer_version = :v"
+        " AND settings_hash <> :h LIMIT 1"), {"a": artifact, "p": p.artifact, "v": p.version, "h": settings_hash_now}
+    ).first() is not None
+
+
+def hold_new_defaults(session: Session, artifact: str, job_models: Mapping[str, str] | None = None, *,
+                      want: dict[str, Any] | None = None) -> bool:
+    """A release that changes a producer's defaults (its prompt, say) is like its new version: nobody approved
+    remaking what was made the old way, which an AI machine may charge for. A person's change is approved where
+    it's made (409 redo_on_change); this is a release's. The first time it's seen (per account) changing what the
+    account makes it with, while this version made some of it the old way, its redo is stopped (paused_by None)
+    until an admin resumes it, or its settings change, as hold_new_version does. A default the account doesn't
+    use (it chose its own), or a person's change alone, holds nothing; nor does the first look, which only sees.
+    want: lineage.desired, when the caller has it. True when it stopped the redo just now. Commits when what was
+    seen changed."""
+    want = want or desired(session, artifact, job_models)
+    now = {"defaults": settings_hash(effective_settings(artifact)), "desired": want["settings_hash"]}
+    seen = _defaults_seen(session, artifact)
+    if seen == now:
+        return False
+    held = (seen is not None and seen.get("defaults") != now["defaults"] and seen.get("desired") != now["desired"]
+            and _made_another_way(session, artifact, now["desired"]))
+    if held:
+        pause(session, artifact, REDO, by=None)
+    session.execute(text(
+        "INSERT INTO system_metadata (key, value, updated_at) VALUES (:k, :v, now())"
+        " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
+        {"k": _DEFAULTS_SEEN.format(artifact), "v": json.dumps(now, sort_keys=True)})
+    session.commit()
+    return held
+
+
+def new_defaults_unseen(session: Session, artifact: str, job_models: Mapping[str, str] | None = None) -> bool:
+    """hold_new_defaults would stop the producer's redo now. Only reads (a GET's own, a scan's plan): one, while
+    the producer's defaults are those seen."""
+    seen = _defaults_seen(session, artifact)
+    if seen is None or seen.get("defaults") == settings_hash(effective_settings(artifact)):
+        return False
+    want = desired(session, artifact, job_models)
+    return seen.get("desired") != want["settings_hash"] and _made_another_way(session, artifact, want["settings_hash"])
 
 
 def upkeep_paused(session: Session) -> bool:

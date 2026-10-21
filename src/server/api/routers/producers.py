@@ -369,7 +369,7 @@ def _with_state(item: ProducerItem, paused: lineage.Pauses, admin: bool) -> Prod
     if (redo := paused.redo.get(item.artifact)) is not None:
         item.redo_stopped, item.redo_stopped_at = True, redo["paused_at"]
         item.redo_stopped_by = redo["paused_by"] if admin else None
-        item.new_version = redo["paused_by"] is None  # lineage.hold_new_version
+        item.new_version = redo["paused_by"] is None  # lineage.hold_new_version, hold_new_defaults
     if (pause := paused.work.get(item.artifact)) is not None:
         item.paused, item.paused_at = True, pause["paused_at"]
         item.paused_by = pause["paused_by"] if admin else None

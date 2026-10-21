@@ -1047,7 +1047,7 @@ describe("Why work waits (no silent waits)", () => {
     renderSection();
     const li = await row("Analysis proxies");
     expect(within(li).getByText(
-      "A new version of Analysis proxies is ready: 7 videos made by an older one are made again once an admin resumes it.",
+      "A new version of Analysis proxies is ready: 7 videos made before it are made again once an admin resumes it.",
     )).toBeTruthy();
     expect(within(li).queryByText(/an admin chose to keep/)).toBeNull();  // not an admin's choice
     expect(within(li).getByRole("button", { name: "Remake Analysis proxies" })).toBeTruthy();
