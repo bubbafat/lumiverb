@@ -94,7 +94,9 @@ export default function AppShell() {
           <Outlet />
         </main>
       </ScrollContainerContext.Provider>
-      <BottomNav adminAlert={adminAlert} showAdmin={isAdmin} showProjects={!me?.demo} />
+      {/* Projects are an editor's (the API's require_editor): never a viewer's, the demo's included. */}
+      <BottomNav adminAlert={adminAlert} showAdmin={isAdmin}
+                 showProjects={(me?.role === "admin" || me?.role === "editor") && !me?.demo} />
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <KeyboardShortcuts

@@ -1013,7 +1013,7 @@ export default function BrowsePage() {
             setParam("path", path);
           }}
           onDateClick={handleLightboxDateClick}
-          onAddToProject={demo ? undefined : (assetId) => setPickerAssetIds([assetId])}
+          onAddToProject={canEdit && !demo ? (assetId) => setPickerAssetIds([assetId]) : undefined}
           onArchive={canEdit ? (assetId) => {
             setLightboxAsset(null);
             void clipActions.archive([assetId]);
@@ -1077,6 +1077,11 @@ export default function BrowsePage() {
               onChange={(color) => handleBatchRating({ color })}
               size="sm"
             />
+          </>
+        )}
+        {/* Projects are an editor's (the API's require_editor): a viewer rates, and that's all. */}
+        {canEdit && (
+          <>
             <div className="h-4 w-px bg-gray-700" />
             <button
               type="button"
@@ -1085,10 +1090,6 @@ export default function BrowsePage() {
             >
               Add to project
             </button>
-          </>
-        )}
-        {canEdit && (
-          <>
             <button
               type="button"
               onClick={() => setLocationAssetIds(selection.toArray())}

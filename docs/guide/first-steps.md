@@ -27,8 +27,8 @@ another time.
 4. **AI machines.** Most of Lumiverb needs nothing more. Descriptions, tags and the text in photos need an AI
    machine: a computer running Ollama with a vision model, or a provider you have a key for. Skipped, those wait,
    and catch up on everything once a machine is added. More in [AI machines](ai-machines.md).
-5. **People.** Invite the people you share with: each gets a link and chooses their own password. Viewers browse;
-   editors can also rate, name and organize; admins can change everything. More in
+5. **People.** Invite the people you share with: each gets a link and chooses their own password. Viewers browse and
+   rate; editors can also name and organize; admins can change everything. More in
    [Users and roles](users-and-roles.md).
 6. **Your first library.** A name, and the folder its photos and videos are in. Lumiverb reads it and never
    changes it. **Guess places** places the photos and videos that have no location from those taken around the

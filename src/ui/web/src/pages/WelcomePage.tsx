@@ -70,7 +70,7 @@ const STEPS: Step[] = [
   {
     id: "ai",
     title: "AI machines",
-    why: "Most of Lumiverb needs nothing more: previews, search by what's in a photo, similar photos, faces, video "
+    why: "Most of Lumiverb needs nothing more: previews, similar photos, faces, video "
       + "scenes and transcripts all run here. Descriptions, tags and text in photos need an AI machine: a computer "
       + "running Ollama with a vision model.",
     skip: "No descriptions, tags or text in photos. They wait, and once a machine is added they catch up on everything.",
@@ -79,8 +79,8 @@ const STEPS: Step[] = [
   {
     id: "people",
     title: "People",
-    why: "Invite the people you share with: each gets a link and chooses their own password. Viewers browse; editors "
-      + "can also rate, name and organize; admins can change everything.",
+    why: "Invite the people you share with: each gets a link and chooses their own password. Viewers browse and rate; "
+      + "editors can also name and organize; admins can change everything.",
     skip: "Only you can sign in. Invite people later from Admin › Manage users.",
     body: () => <PeopleStep />,
   },

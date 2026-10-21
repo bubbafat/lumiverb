@@ -269,6 +269,28 @@ describe("saving a search as a project", () => {
   });
 });
 
+describe("projects, an editor's (the API's require_editor)", () => {
+  async function selectingAClip(role: string) {
+    api.getCurrentUser.mockResolvedValue({ role });
+    const view = renderPage();
+    await advance(100);
+    fireEvent.click(view.getAllByRole("checkbox", { name: "Select" })[0]);
+    await advance(10);
+    return view;
+  }
+
+  it("a viewer who selects clips rates them, and isn't offered a project", async () => {
+    const { queryByRole, getAllByRole } = await selectingAClip("viewer");
+    expect(getAllByRole("button", { name: "Add to favorites" }).length).toBeGreaterThan(0);
+    expect(queryByRole("button", { name: "Add to project" })).toBeNull();
+  });
+
+  it("an editor who selects clips is offered one", async () => {
+    const { getByRole } = await selectingAClip("editor");
+    expect(getByRole("button", { name: "Add to project" })).toBeTruthy();
+  });
+});
+
 describe("trying it as a viewer (a demo session, which reads only)", () => {
   it("offers no rating, saved search or project, and asks for no ratings", async () => {
     api.getCurrentUser.mockResolvedValue({ role: "viewer", demo: true });
