@@ -368,6 +368,8 @@ export interface AssetDetail {
   gps_accuracy_m?: number | null;
   /** Faces found in it (null: not looked for yet, or a public page's); a video's, the people seen. */
   face_count?: number | null;
+  /** A Live Photo: its playback plays the few seconds around it (its motion, never shown on its own). */
+  live_photo?: boolean;
   /** What the file doesn't say (ADR-017), beside the file's GPS. Signed-in only. */
   location?: AssetLocation | null;
   /** What installed plug-ins' work says of it (ADR-023): each plug-in on here that made it a fact. Signed-in only. */

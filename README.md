@@ -17,7 +17,8 @@ The user guide, from installing it to every setting, is at **[docs.lumiverb.io](
 - **Privacy-first** — originals stay on your own storage, read in place and never modified or uploaded
 
 Supports JPEG, PNG, WebP, HEIC/HEIF (an iPhone's), BMP, TIFF, DNG, camera RAW (Canon CR2/CR3/CRW, Nikon NEF/NRW, Sony ARW/SR2/SRF,
-Fujifilm RAF, Olympus ORF, Panasonic RW2/RAW, Leica RWL), and video (MP4/MOV/MKV).
+Fujifilm RAF, Olympus ORF, Panasonic RW2/RAW, Leica RWL), and video (MP4/MOV/MKV). An iPhone's Live Photo is one
+clip, its photo, whose few seconds of video play from it.
 
 ---
 

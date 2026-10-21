@@ -8,6 +8,8 @@ Lumiverb only reads your originals. It never writes to them, moves, renames, upl
 
 It reads JPEG, HEIC and HEIF (an iPhone's photos), PNG, WebP, BMP, TIFF, DNG, camera RAW (Canon CR2, CR3 and CRW, Nikon NEF and NRW, Sony ARW, SR2 and SRF, Fujifilm RAF, Olympus ORF, Panasonic RW2 and RAW, Leica RWL) and MP4, MOV and MKV video. Other files are left alone.
 
+An iPhone's Live Photo is two files, the photo and a .mov of the few seconds around it, saved with the same name. Lumiverb shows them as one clip, the photo, with **LIVE** on it in the photo's view: click it to play those seconds. It tells them apart by the identifier Apple writes in both, never by the name alone, so a short video that happens to share a photo's name stays a video of its own. Deleting the photo for good deletes its moving part with it.
+
 ## Adding a library
 
 Only an admin adds libraries.

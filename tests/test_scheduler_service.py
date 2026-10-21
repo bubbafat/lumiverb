@@ -1484,7 +1484,9 @@ def storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Storage:
 class Fresh:
     """A scheduler just started, with an account made as Accounts makes one
     (nothing looked at yet), lib_1's storage reachable and a clip due for
-    every kind; a slot in every pool. What's offered is noted (offered),
+    every kind; a slot in every pool for each producer it serves (capture and
+    Live Photos share exiftool's), so a tick makes the first of each kind.
+    What's offered is noted (offered),
     and what each job made (made)."""
 
     def __init__(self, storage: Storage, *, held=(), everything: bool = False) -> None:
@@ -1508,7 +1510,9 @@ class Fresh:
         def makes(acct, job) -> None:
             acct.client.post(f"/made/{job.kind}")
 
-        self.s = Scheduler(lambda: {"t1": self.acct}, capacity={p.name: 1 for p in pools().values() if not p.per_account},
+        slots = {p.name: max(1, len({k.artifact for k in QUEUED if k.spec.pool == p.name}))
+                 for p in pools().values() if not p.per_account}
+        self.s = Scheduler(lambda: {"t1": self.acct}, capacity=slots,
                            candidates=candidates, scan=self.scan, inline_refill=True, clock=self.clock,
                            runners={k.base: partial(run_work, ReadsOriginals) if k.storage else makes for k in QUEUED},
                            on_hold=lambda tenant_id: self.paused, retry_requested=lambda tenant_id: None,

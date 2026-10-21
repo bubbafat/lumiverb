@@ -32,6 +32,7 @@ PLUGIN_ID = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 ORIGINAL = "lumiverb.original"
 METADATA = "lumiverb.metadata"
 CAPTURE_TIME = "lumiverb.capture_time"
+LIVE_PHOTO = "lumiverb.live_photo"
 PREVIEW = "lumiverb.preview"
 LOCATION = "lumiverb.location"
 LOCATION_PERSON = "lumiverb.location.person"
@@ -57,8 +58,9 @@ BOX = Field("box", "record", (Field("x", _N), Field("y", _N), Field("w", _N), Fi
 
 # What Lumiverb keeps that no producer makes.
 LUMIVERB: tuple[Data, ...] = (
-    Data(ORIGINAL, "The file itself, in its library. Never handed to a plug-in: the API serves no originals.",
-         (Field("file", "file"),), made_by="the library"),
+    Data(ORIGINAL, "The file itself, in its library, at its path. Never handed to a plug-in: the API serves no "
+         "originals.",
+         (Field("file", "file"),), stored=("assets.rel_path",), made_by="the library"),
     Data(METADATA, "Its media type, size, length, camera and lens.",
          (Field("media_type", "text"), Field("width", _N), Field("height", _N), Field("duration_sec", _N),
           Field("camera_make", "text"), Field("camera_model", "text"), Field("lens", "text")),
@@ -143,6 +145,7 @@ RESERVED: frozenset[str] = frozenset({
     "scene_rep", "scene_vision", "scenes", "thumbnail", "transcript", "video_faces", "video_preview", "vision",
     "whisper",
     "capture_time", "image", "metadata", "original", "people", "video",
+    "live_photo",
 })
 
 

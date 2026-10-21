@@ -51,7 +51,7 @@ from src.producers import names
 logger = logging.getLogger(__name__)
 
 # What a device makes from the originals, in the order it makes them: renders last.
-ORDER = (names.VIDEO_FORMAT, names.CAPTURE_TIME, names.ANALYSIS_PROXY)
+ORDER = (names.VIDEO_FORMAT, names.CAPTURE_TIME, names.LIVE_PHOTO, names.ANALYSIS_PROXY)
 PAGE = 500  # reader-work's clips a page
 
 

@@ -62,6 +62,14 @@ The text read in a photo.
 - **Made from:** `lumiverb.preview`.
 - **Was:** `ocr`.
 
+## `lumiverb.live_photo`
+
+Which Live Photo it's part of: Apple's identifier, the same in the photo and in the few seconds of video beside it, which plays from the photo instead of showing on its own.
+
+- **Fields:** `id` text.
+- **Made by:** Live Photos (photos and videos).
+- **Made from:** `lumiverb.original`, `lumiverb.metadata`; of other clips, `lumiverb.original`.
+
 ## `lumiverb.location`
 
 Where it was: a person's location, else the file's GPS, else an applied guess (never a suggestion), with how sure, in meters.
@@ -104,16 +112,16 @@ Its media type, size, length, camera and lens.
 
 - **Fields:** `media_type` text; `width` number; `height` number; `duration_sec` number; `camera_make` text; `camera_model` text; `lens` text.
 - **Made by:** the scan (a video's length, its probe).
-- **Read by:** Scenes, Faces in videos, Transcripts.
+- **Read by:** Live Photos, Scenes, Faces in videos, Transcripts.
 - **Protocol 1's input:** `metadata` (a plug-in's manifest says it that way).
 
 ## `lumiverb.original`
 
-The file itself, in its library. Never handed to a plug-in: the API serves no originals.
+The file itself, in its library, at its path. Never handed to a plug-in: the API serves no originals.
 
 - **Fields:** `file` file.
 - **Made by:** the library.
-- **Read by:** Video facts (probe), Capture time and GPS accuracy, Proxies and thumbnails, Video previews, Analysis proxies.
+- **Read by:** Video facts (probe), Capture time and GPS accuracy, Live Photos (its own clip's and other clips'), Proxies and thumbnails, Video previews, Analysis proxies.
 
 ## `lumiverb.people`
 

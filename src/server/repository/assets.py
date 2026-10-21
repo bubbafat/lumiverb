@@ -921,13 +921,14 @@ class AssetRepository:
             return 0
         params = {"asset_ids": asset_ids}
         # Lumiverb never deletes originals, so a file the user trashed may
-        # still be on disk. Remember it, or the next scan would bring it back.
+        # still be on disk. Remember it, or the next scan would bring it back;
+        # a Live Photo's motion too, gone with its photo (live_photos.left_by).
         self._session.execute(
             text(
                 "INSERT INTO ignored_files (library_id, rel_path, content_hash, file_size, file_mtime, created_at)"
                 " SELECT a.library_id, a.rel_path, a.content_hash, a.file_size, a.file_mtime, :now FROM assets a"
                 " WHERE a.asset_id = ANY(:asset_ids)"
-                "   AND a.deleted_at IS NOT NULL AND a.deleted_reason = 'user'"
+                "   AND a.deleted_at IS NOT NULL AND a.deleted_reason IN ('user', 'live_photo')"
                 # A file whose content isn't known names the whole path: not
                 # one a clip in sight holds now (a changed file is a new clip).
                 "   AND (a.content_hash IS NOT NULL OR NOT EXISTS (SELECT 1 FROM assets o"
@@ -1150,9 +1151,13 @@ class AssetRepository:
         orientation: int | None = None,
         gps_accuracy_m: float | None = None,
         taken_at_offset_min: int | None = None,
+        live_photo_id: str | None = None,
+        live_photo_read: bool = False,
     ) -> None:
         """Update EXIF fields on asset record: what the file says. GPS that
-        isn't a real position ((0, 0): no fix) is stored as none."""
+        isn't a real position ((0, 0): no fix) is stored as none. The Live
+        Photo identifier only when the scanner read it (live_photo_read):
+        one that doesn't leaves what's kept."""
         from src.shared.location import is_fix
 
         taken_at_dt: datetime | None = None
@@ -1194,7 +1199,8 @@ class AssetRepository:
                     focal_length_35mm = :focal_length_35mm,
                     lens_model = :lens_model,
                     flash_fired = :flash_fired,
-                    orientation = :orientation
+                    orientation = :orientation,
+                    live_photo_id = CASE WHEN :live_photo_read THEN :live_photo_id ELSE live_photo_id END
                 WHERE asset_id = :asset_id
                 RETURNING {located}
                 """
@@ -1219,6 +1225,8 @@ class AssetRepository:
                 "lens_model": lens_model,
                 "flash_fired": flash_fired,
                 "orientation": orientation,
+                "live_photo_read": live_photo_read,
+                "live_photo_id": live_photo_id,
                 "asset_id": asset_id,
             },
         ).mappings().first()

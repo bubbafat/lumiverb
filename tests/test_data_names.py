@@ -46,7 +46,7 @@ REPO = Path(__file__).resolve().parent.parent
 BEFORE = REPO / "tests" / "fixtures" / "producers_before_names.json"
 # Lumiverb's own producers added since the names (ADR-024): named from the start, with no old word and nothing
 # before names to hold them to. A new one is added here on purpose.
-ADDED_SINCE = {"lumiverb.video.description"}
+ADDED_SINCE = {"lumiverb.video.description", "lumiverb.live_photo"}
 
 
 def _without_added(now: dict) -> dict:
@@ -135,17 +135,19 @@ def test_the_registry_works_out_what_it_did_before_names():
     assert set(registry()) >= ADDED_SINCE and not ADDED_SINCE & set(WAS)
 
 
-# What a producer's SQL may read that's no one's data: the clip's own row, the library's switch, the lineage
-# its made says it by, the account's settings.
-_NOT_DATA_COLUMNS = {"asset_id", "media_type", "library_id"}
-_NOT_DATA_TABLES = {"artifact_lineage", "system_metadata", "libraries"}
+# What a producer's SQL may read that's no one's data: a clip's row (whether it's in sight, too), the library's
+# switch, the lineage its made says it by, the account's settings.
+_NOT_DATA_COLUMNS = {"asset_id", "media_type", "library_id", "deleted_at"}
+_NOT_DATA_TABLES = {"artifact_lineage", "system_metadata", "libraries", "assets", "active_assets"}
 
 
 def _read_by(sql: str) -> set[str]:
-    """What a producer's applies, made or recheck reads: assets.<column> and the tables it selects from."""
-    columns = {f"assets.{c}" for c in re.findall(r"\ba\.([a-z_]+)", sql)} - {f"assets.{c}" for c in _NOT_DATA_COLUMNS}
+    """What a producer's applies, made or recheck reads: assets.<column> of each clip's row it reads (its own, a,
+    and any other clip of its library it looks at, an alias over assets) and the other tables it selects from."""
+    clips = {"a", *re.findall(r"\b(?:FROM|JOIN)\s+(?:active_)?assets\s+([a-z]\w*)", sql)}
+    columns = {f"assets.{c}" for clip in clips for c in re.findall(rf"\b{clip}\.([a-z_]+)", sql)}
     tables = set(re.findall(r"\b(?:FROM|JOIN)\s+([a-z_]+)", sql)) - _NOT_DATA_TABLES
-    return columns | tables
+    return (columns - {f"assets.{c}" for c in _NOT_DATA_COLUMNS}) | tables
 
 
 def test_what_each_producer_reads_is_what_its_sql_reads():

@@ -149,7 +149,8 @@ def test_a_scanned_image_says_how_its_proxy_was_made(tmp_path):
     # Each by its name (ADR-024 phase 1 part 2: a server takes them from part 1), the preview too.
     assert json.loads(call.kwargs["data"]["lineage"]) == {
         "lumiverb.preview": P.lineage("lumiverb.preview", P.effective_settings("lumiverb.preview"), SHA),
-        "lumiverb.capture_time": P.lineage("lumiverb.capture_time", {}, SHA)}
+        "lumiverb.capture_time": P.lineage("lumiverb.capture_time", {}, SHA),
+        "lumiverb.live_photo": P.lineage("lumiverb.live_photo", {}, SHA)}
     assert set(call.kwargs["files"]) == {"lumiverb.preview"}
 
 
@@ -174,6 +175,7 @@ def test_a_scanned_video_says_how_its_proxy_probe_and_preview_were_made(tmp_path
     assert json.loads(posts["/v1/ingest"].kwargs["data"]["lineage"]) == {
         "lumiverb.preview": P.lineage("lumiverb.preview", P.effective_settings("lumiverb.preview"), SHA),
         "lumiverb.capture_time": P.lineage("lumiverb.capture_time", {}, SHA),
+        "lumiverb.live_photo": P.lineage("lumiverb.live_photo", {}, SHA),
         "lumiverb.video.format": P.lineage("lumiverb.video.format", {}, SHA)}
     assert json.loads(posts["/v1/assets/ast_a/artifacts/lumiverb.video.preview"].kwargs["data"]["lineage"]) == P.lineage(
         "lumiverb.video.preview", P.effective_settings("lumiverb.video.preview"), SHA)
@@ -195,7 +197,8 @@ def test_a_failed_probe_isnt_claimed(tmp_path):
     ):
         scan._scan_one_video(**args)
     [call] = [c for c in args["client"].post.call_args_list if c.args[0] == "/v1/ingest"]
-    assert set(json.loads(call.kwargs["data"]["lineage"])) == {"lumiverb.preview", "lumiverb.capture_time"}
+    assert set(json.loads(call.kwargs["data"]["lineage"])) == {"lumiverb.preview", "lumiverb.capture_time",
+                                                               "lumiverb.live_photo"}
 
 
 def test_a_refresh_swaps_the_settings_in_at_once_and_keeps_them_when_the_server_cant_say():

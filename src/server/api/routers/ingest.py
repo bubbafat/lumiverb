@@ -24,6 +24,7 @@ from src.producers.names import (
     CAPTURE_TIME,
     DESCRIPTION,
     LIKENESS,
+    LIVE_PHOTO,
     PREVIEW,
     VIDEO_FORMAT,
     WAS,
@@ -46,6 +47,7 @@ from src.server.storage.store import get_store
 from src.shared import asset_status
 from src.shared.content_hash import sampled, whole_file
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from src.shared.live_photos import identifier
 from src.shared.path_filter import PathFilter, is_path_included_merged
 
 logger = logging.getLogger(__name__)
@@ -143,7 +145,8 @@ def _required_lineage(raw: str | None, vision_data: dict | None, embeddings_data
     (422 lineage_required, before anything is saved): the proxy always, a
     description with a model, CLIP's vectors, a probe. The capture facts
     sent with the EXIF count as made only when it says how (the Python
-    scan does); otherwise the capture producer reads them again."""
+    scan does); otherwise the capture producer reads them again. So does a
+    Live Photo identifier, read or found not there (live_photo_id sent)."""
     from src.server.api.routers.producers import require_lineage
     from src.shared.producers import CLIP_MODEL_ID
 
@@ -151,6 +154,8 @@ def _required_lineage(raw: str | None, vision_data: dict | None, embeddings_data
     made = [PREVIEW]
     if exif_data is not None and by_name.get(CAPTURE_TIME) is not None:
         made.append(CAPTURE_TIME)
+    if exif_data is not None and "live_photo_id" in exif_data and by_name.get(LIVE_PHOTO) is not None:
+        made.append(LIVE_PHOTO)
     if vision_data is not None and vision_data.get("model_id"):
         made.append(DESCRIPTION)
     if embeddings_data and any(e.get("model_id") == CLIP_MODEL_ID for e in embeddings_data):
@@ -234,7 +239,15 @@ def _do_ingest(
             lens_model=exif_data.get("lens_model"),
             flash_fired=exif_data.get("flash_fired"),
             orientation=exif_data.get("orientation"),
+            live_photo_id=identifier(exif_data.get("live_photo_id")),
+            live_photo_read="live_photo_id" in exif_data,
         )
+        # A photo's Live Photo motion, its preview there already, out of sight as part of it; a video's own
+        # pairs once its preview is kept (src/server/repository/live_photos.py).
+        if live_photo_id := identifier(exif_data.get("live_photo_id")):
+            from src.server.repository.live_photos import LivePhotoRepository
+
+            LivePhotoRepository(session).pair(library_id, [live_photo_id])
 
     # --- Store vision results if provided ---
     if vision_data is not None:
@@ -294,6 +307,13 @@ def _do_ingest(
             from src.server.repository.lineage import forget
 
             forget(session, [asset_id], CAPTURE_TIME, commit=False)
+        if LIVE_PHOTO in lineage_by_kind:
+            record_lineage(session, asset_id, LIVE_PHOTO, lineage_by_kind[LIVE_PHOTO], commit=False)
+        else:
+            # Not read, or read without saying how: the Live Photos producer reads it when it applies.
+            from src.server.repository.lineage import forget
+
+            forget(session, [asset_id], LIVE_PHOTO, commit=False)
     # Only what was stored: a description with no model is dropped above,
     # and only the CLIP producer's vectors are its artifact.
     if vision_data is not None and vision_data.get("model_id"):

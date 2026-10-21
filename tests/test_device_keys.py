@@ -57,6 +57,7 @@ SCANNING = {
     ("POST", "/v1/assets/{asset_id}/artifacts/{artifact_type}"),
     ("PUT", "/v1/assets/{asset_id}/video-facet"),
     ("PUT", "/v1/assets/{asset_id}/capture"),
+    ("PUT", "/v1/assets/{asset_id}/live-photo"),
     ("POST", "/v1/assets/{asset_id}/uploads"),
     ("GET", "/v1/uploads/{upload_id}"),
     ("PUT", "/v1/uploads/{upload_id}"),

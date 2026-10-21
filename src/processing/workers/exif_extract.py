@@ -62,6 +62,8 @@ EXIF_FIELDS = [
     "ProcessingSoftware",
     # Video
     "Duration",
+    # A Live Photo's identifier: a photo's Apple maker notes, its .mov's QuickTime keys
+    "ContentIdentifier",
 ]
 
 
@@ -246,6 +248,14 @@ def capture_facts(exif: dict) -> dict:
         "taken_at_offset_min": parse_taken_at_offset_min(exif),
         "gps_accuracy_m": parse_gps_accuracy_m(exif) if lat is not None else None,
     }
+
+
+def live_photo_id(exif: dict) -> str | None:
+    """The Live Photo the file is part of (src/shared/live_photos.py): Apple's
+    content identifier, in a photo and in its .mov; None when it has none."""
+    from src.shared.live_photos import identifier
+
+    return identifier(exif.get("ContentIdentifier"))
 
 
 def parse_iso(exif: dict) -> int | None:

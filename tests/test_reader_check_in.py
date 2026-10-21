@@ -236,7 +236,7 @@ def test_what_changed_is_everything_a_reader_acts_on(env):
     assert r["filters"]["account"] == {"includes": sorted(d["pattern"] for d in defaults["includes"]),
                                        "excludes": sorted(d["pattern"] for d in defaults["excludes"])}
     assert set(r["made_with"]) == {"lumiverb.preview", "lumiverb.video.preview", "lumiverb.video.format",
-                                   "lumiverb.capture_time", "lumiverb.video.analysis_proxy"}
+                                   "lumiverb.capture_time", "lumiverb.live_photo", "lumiverb.video.analysis_proxy"}
     for artifact, made in r["made_with"].items():
         want = _want(lib, artifact, None)
         assert (made["producer"], made["version"], made["settings_hash"]) == (

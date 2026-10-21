@@ -12,6 +12,7 @@ import VideoPlayer from "./VideoPlayer";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { usePlayback } from "../api/usePlayback";
+import { LiveMotion } from "./LiveMotion";
 import type { AssetPageItem, AssetRating, FaceItem, RatingColor, SimilarHit } from "../api/types";
 import { FaceCropImage } from "./FaceCropImage";
 import { momentLabel, moments } from "../lib/faceMoments";
@@ -1009,6 +1010,15 @@ export function Lightbox({
                   alt={filename}
                   className={`max-w-full object-contain ${isFullscreen ? "max-h-[calc(100svh-4rem)]" : "max-h-[55svh] lg:max-h-[calc(100svh-4rem)]"}`}
                 />
+                {detail?.live_photo && (
+                  <LiveMotion
+                    key={asset.asset_id}
+                    assetId={asset.asset_id}
+                    isPublic={isPublic}
+                    publicLibraryId={publicLibraryId}
+                    publicProjectId={publicProjectId}
+                  />
+                )}
                 {showFaces && facesData?.faces.map((face) => {
                   if (!face.bounding_box) return null;
                   const isHighlighted = highlightFaceId === face.face_id;

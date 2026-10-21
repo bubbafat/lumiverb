@@ -231,7 +231,8 @@ def purge_assets(
     after: AfterCommit | None = None,
 ) -> int:
     """Delete these trashed assets for good: rows, files, playback cuts and search
-    documents. 409 in_projects when any are in projects, unless remove_from_projects.
+    documents, with the Live Photo motions they leave without a photo. 409
+    in_projects when any are in projects, unless remove_from_projects.
 
     Re-checked under a row lock: only those still deleted for `reason` (since
     before `before`) go. One restored, archived or trashed again since it was
@@ -258,6 +259,11 @@ def purge_assets(
                 "removes them from those projects. Send remove_from_projects: true to go ahead.",
                 usage.model_dump(),
             )
+    # A Live Photo's motion goes with the last photo it's part of: out of sight, it's nothing on its own.
+    from src.server.repository.live_photos import LivePhotoRepository
+
+    motions = LivePhotoRepository(session).left_by(asset_ids)
+    to_delete, asset_ids = to_delete + motions, asset_ids + [m.asset_id for m in motions]
     keys_to_remove = _files_of(session, tenant_id, to_delete)  # read before their rows go
     deleted_count = asset_repo.permanently_delete(asset_ids, commit=after is None)
     cleanup = AfterCommit() if after is None else after

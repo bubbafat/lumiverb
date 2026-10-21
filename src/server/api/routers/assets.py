@@ -14,6 +14,7 @@ from src.producers.names import (
     DESCRIPTION,
     FACES,
     LIKENESS,
+    LIVE_PHOTO,
     TEXT,
     TRANSCRIPT,
     VIDEO_DESCRIPTION,
@@ -29,7 +30,7 @@ from src.server.api.dependencies import (
     require_signed_in,
 )
 from src.server.api.devices import may_call
-from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
+from src.server.api.errors import ApiError, ConflictError, DecisionRequiredError, GoneError
 from src.server.api.library_access import names
 from src.server.api.limits import MAX_IDS
 from src.server.api.routers.producers import LineageIn, lineage_dict, require_lineage, with_source
@@ -136,6 +137,9 @@ class AssetResponse(BaseModel):
     gps_accuracy_m: float | None = None
     # Faces found in it (null: not looked for yet); a video's, the people seen.
     face_count: int | None = None
+    # A Live Photo: its playback (GET /v1/assets/{id}/playback) plays the few seconds around it, its
+    # motion, which is part of it and never shown on its own (src/server/repository/live_photos.py).
+    live_photo: bool = False
 
 
 class BatchTrashRequest(BaseModel):
@@ -315,6 +319,9 @@ def _asset_detail(session: Session, request: Request, asset: Asset) -> AssetResp
     facet = AssetRepository(session).get_video_facet(asset.asset_id)
     # Stored rows are returned as they are (validation is for writes).
     response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
+    from src.server.repository.live_photos import LivePhotoRepository
+
+    response.live_photo = LivePhotoRepository(session).motion_of(asset) is not None
     _trim_public_transcript(request, session, response)
     if not getattr(request.state, "is_public_request", False):
         from src.server.repository.locations import for_asset
@@ -347,6 +354,7 @@ def _project_visitor_view(response: AssetResponse) -> AssetResponse:
         transcript_srt=response.transcript_srt,
         transcript_language=response.transcript_language,
         video_facet=response.video_facet,
+        live_photo=response.live_photo,
     )
 
 
@@ -648,6 +656,48 @@ def put_capture(
     session.commit()
     return CaptureResponse(changed=(before["taken_at"], before["taken_at_offset_min"])
                            != (after["taken_at"], after["taken_at_offset_min"]))
+
+
+class LivePhotoSubmit(BaseModel):
+    """A clip's Live Photo identifier read from its file (the Live Photos producer): None, it has none."""
+
+    live_photo_id: str | None = Field(default=None, max_length=64)
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
+
+
+class LivePhotoResponse(BaseModel):
+    hidden: int  # videos this made a photo's motion, out of sight as part of it
+
+
+@router.put("/{asset_id}/live-photo", response_model=LivePhotoResponse, dependencies=[Depends(require_reader)])
+@may_call("asset")
+def put_live_photo(
+    asset_id: str,
+    body: LivePhotoSubmit,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> LivePhotoResponse:
+    """Store a clip's Live Photo identifier, read again from its file by its
+    library's reader, and pair it: a video a photo of its library shares it
+    with is that photo's motion, out of sight as part of it
+    (src/server/repository/live_photos.py). 422 for one that isn't an
+    identifier."""
+    from src.server.repository.live_photos import LivePhotoRepository
+    from src.shared.live_photos import identifier
+
+    made = require_lineage(body.lineage, LIVE_PHOTO)  # before anything is saved
+    live_photo_id = identifier(body.live_photo_id) if body.live_photo_id is not None else None
+    if body.live_photo_id is not None and live_photo_id is None:
+        raise ApiError(422, "not_an_identifier", "live_photo_id is letters, digits and dashes, 64 at most.")
+    repo = LivePhotoRepository(session)
+    library_id = repo.set_identifier(asset_id, live_photo_id)
+    if library_id is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    lineage.record(session, asset_id, LIVE_PHOTO, made, commit=False)
+    hidden = repo.pair(library_id, [live_photo_id]) if live_photo_id else []
+    if hidden:
+        LibraryRepository(session).bump_revision(library_id)
+    session.commit()
+    return LivePhotoResponse(hidden=len(hidden))
 
 
 @router.delete("/{asset_id}", status_code=204)

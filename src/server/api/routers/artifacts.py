@@ -166,6 +166,24 @@ def record_kept(session: Session, asset_id: str, artifact_type: str, key: str, s
         asset_repo.set_analysis_proxy(asset_id, key, sha256)
     if artifact_type in (PREVIEW, VIDEO_PREVIEW, ANALYSIS_PROXY):
         record_lineage(session, asset_id, made_by_file(artifact_type), made)
+    if artifact_type == VIDEO_PREVIEW:
+        _pair_live_photo(session, asset_id)
+
+
+def _pair_live_photo(session: Session, asset_id: str) -> None:
+    """A video's preview kept: a Live Photo's motion can play, so it's paired with its photo, out of sight as
+    part of it (src/server/repository/live_photos.py). Commits."""
+    from src.server.repository.libraries import LibraryRepository
+    from src.server.repository.live_photos import LivePhotoRepository
+
+    repo = LivePhotoRepository(session)
+    found = repo.identifier_of(asset_id)
+    if found is None:
+        return
+    library_id, live_photo_id = found
+    if repo.pair(library_id, [live_photo_id]):
+        LibraryRepository(session).bump_revision(library_id)
+    session.commit()
 
 
 class ArtifactUploadResponse(BaseModel):
