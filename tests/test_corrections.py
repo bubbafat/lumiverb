@@ -14,10 +14,10 @@ import pytest
 from sqlalchemy import text
 
 from src.shared import producers as P
+from tests.derived import describer, saved
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _row, _sha, _want
 from tests.test_reconciler import _analysis_proxy_made, _due, _library
-from tests.derived import saved
 
 SRT_MACHINE = "1\n00:00:00,000 --> 00:00:02,000\nhello from whisper\n"
 SRT_MACHINE_2 = "1\n00:00:00,000 --> 00:00:02,000\nhello again from whisper\n"
@@ -217,7 +217,8 @@ def _image(env, name: str) -> tuple[tuple, str, str]:
 def _describe_as(env, clip: str, description: str, tags: list[str], model: str = "qwen3-vl:8b"):
     client, headers, *_ = env
     r = saved(client, "vision", clip, json={"model_id": model, "description": description, "tags": tags,
-                                                        "lineage": _want(env, "lumiverb.image.description", None)}, headers=headers)
+                                            "lineage": _want(env, describer(client, clip, headers), None)},
+              headers=headers)
     assert r.status_code == 200, r.text
 
 

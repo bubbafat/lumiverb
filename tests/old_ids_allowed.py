@@ -70,7 +70,7 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         'preview': ('docs/data-names.md', 'src/producers/proxy/__init__.py',),
         'scenes': (
             'docs/cursor-api.md', 'src/producers/scene_vision/work.py', 'src/producers/scenes/work.py',
-            'tests/scenes.py', 'tests/test_lineage_api.py', 'tests/test_scene_detail.py',
+            'src/producers/video_description/work.py', 'tests/scenes.py', 'tests/test_lineage_api.py', 'tests/test_scene_detail.py',
             'tests/test_scene_redo_api.py', 'tests/test_scheduler_runners.py', 'tests/test_video_api.py',
             'tests/test_video_faces.py', 'tests/test_video_index.py',
         ),
@@ -252,7 +252,8 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         'vision': (
             'docs/cursor-api.md', 'src/processing/vision_guard.py', 'src/producers/pools.py',
-            'src/producers/scene_vision/work.py', 'src/server/api/routers/admin.py', 'src/server/api/routers/tenant.py',
+            'src/producers/scene_vision/work.py', 'src/producers/video_description/work.py',
+            'src/server/api/routers/admin.py', 'src/server/api/routers/tenant.py',
             'src/server/repository/ai_machines.py', 'src/server/scheduler/account.py',
             'src/ui/web/src/lib/waits.test.ts', 'src/ui/web/src/pages/settings/AiSection.test.tsx',
             'src/ui/web/src/pages/settings/AiSection.tsx', 'src/ui/web/src/pages/settings/ProcessingSection.test.tsx',

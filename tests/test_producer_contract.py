@@ -33,7 +33,7 @@ def test_every_producer_declares_what_the_rest_needs():
     assert list(producers) == [
         "lumiverb.video.format", "lumiverb.capture_time", "lumiverb.preview", "lumiverb.video.preview",
         "lumiverb.video.analysis_proxy", "lumiverb.video.scenes", "lumiverb.video.scene_descriptions",
-        "lumiverb.image.description", "lumiverb.image.text", "lumiverb.image.likeness", "lumiverb.image.faces",
+        "lumiverb.video.description", "lumiverb.image.description", "lumiverb.image.text", "lumiverb.image.likeness", "lumiverb.image.faces",
         "lumiverb.video.faces", "lumiverb.video.transcript", "lumiverb.location.guess"]
     for p in producers.values():
         assert isinstance(p, ProducerSpec) and p.applies and p.made and p.artifact == p.makes.name

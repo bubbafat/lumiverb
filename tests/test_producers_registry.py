@@ -14,6 +14,7 @@ def test_one_producer_per_artifact_and_each_artifact_once():
     assert set(P.ARTIFACTS) == {
         "lumiverb.video.format", "lumiverb.capture_time", "lumiverb.preview", "lumiverb.video.preview", "lumiverb.video.analysis_proxy", "lumiverb.video.scenes", "lumiverb.video.scene_descriptions",
         "lumiverb.image.description", "lumiverb.image.text", "lumiverb.image.likeness", "lumiverb.image.faces", "lumiverb.video.faces", "lumiverb.video.transcript", "lumiverb.location.guess",
+        "lumiverb.video.description",
     }
     # A producer is named by what it makes (ADR-024): its artifact is its name.
     assert all(a == p.makes.name for a, p in P.PRODUCERS.items())
@@ -33,7 +34,7 @@ def test_each_ai_producer_takes_its_jobs_model():
 
     assert {a: p.job for a, p in P.PRODUCERS.items() if p.job} == {
         "lumiverb.image.description": "vision", "lumiverb.image.text": "vision", "lumiverb.video.scene_descriptions": "vision",
-        "lumiverb.video.transcript": "transcripts", "lumiverb.image.likeness": "clip",
+        "lumiverb.video.description": "vision", "lumiverb.video.transcript": "transcripts", "lumiverb.image.likeness": "clip",
         "lumiverb.image.faces": "faces", "lumiverb.video.faces": "faces"}  # the AI jobs keep their words
     assert all(p.job in JOBS for p in P.PRODUCERS.values() if p.job)
     models = {"vision": "qwen3-vl:8b", "transcripts": "medium"}

@@ -37,6 +37,7 @@ from sqlalchemy import text
 
 from src.server.database import get_tenant_session, tenant_database_url
 from tests.producer_fakes import due
+from tests.test_data_names import ADDED_SINCE
 from tests.test_first_run_setup import control  # noqa: F401 (a fixture)
 from tests.test_plugin_runner import data as short_data  # noqa: F401 (a fixture)
 from tests.test_plugin_work import _job, facts  # noqa: F401 (facts: a fixture)
@@ -85,7 +86,7 @@ def test_phase1_clients_and_plug_ins_get_what_they_got_before(facts):  # noqa: F
     before = json.loads(BEFORE.read_text())
     for key in ("handed", "inputs_hash"):
         assert now[key] == before[key], f"{key} isn't what it was before phase 1"
-    mine = {row["artifact"]: row for row in now["producers"]}
+    mine = {row["artifact"]: row for row in now["producers"] if row["artifact"] not in ADDED_SINCE}
     theirs = {row["artifact"]: row for row in _renamed(before["producers"])}
     assert list(mine) == list(theirs), "the same producers, in the same order"
     changed = {a: {k: (theirs[a].get(k), mine[a].get(k)) for k in set(theirs[a]) | set(mine[a])
@@ -197,14 +198,15 @@ def test_rename_an_account_from_before_migrated_up_answers_as_it_did_and_down_is
     r = client.get("/v1/producers", params={"library_id": library_id}, headers=robert)
     assert r.status_code == 200, r.text
     now = {"producers": [_as_then(row) for row in r.json()["producers"]],
-           "switches": client.get("/v1/producers/queue", headers=robert).json().get("switches"),
+           "switches": [s for s in client.get("/v1/producers/queue", headers=robert).json().get("switches")
+                        if s["target"] not in ADDED_SINCE],
            "failures": client.get("/v1/producers/failures", headers=robert).json(),
            "due": {kind: sorted(clips[c["asset_id"]] for c in due(url, kind, [library_id]))
                    for kind in sorted(_kind(k) for k in seeded["said"]["due"])}}
     then = _renamed(seeded["said"])
     then["due"] = {_kind(k): v for k, v in then["due"].items()}
     now, then = _timeless(now), _timeless(then)
-    mine = {row["artifact"]: row for row in now["producers"]}
+    mine = {row["artifact"]: row for row in now["producers"] if row["artifact"] not in ADDED_SINCE}
     theirs = {row["artifact"]: row for row in then["producers"]}
     assert list(mine) == list(theirs), "the same producers, in the same order"
     changed = {a: {k: (theirs[a].get(k), mine[a].get(k)) for k in set(theirs[a]) | set(mine[a])

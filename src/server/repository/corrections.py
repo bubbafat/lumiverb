@@ -23,11 +23,18 @@ from sqlmodel import Session
 
 from ulid import ULID
 
-from src.producers.names import DESCRIPTION, TEXT
+from src.producers.names import DESCRIPTION, TEXT, VIDEO_DESCRIPTION
 from src.shared.utils import utcnow
 
-# The fields a person can write, and the machine's artifact each belongs to.
+# The fields a person can write, and the machine's artifact each belongs to: a photo's, and a video's where it
+# differs (its description is written from its scenes').
 FIELDS: dict[str, str] = {"description": DESCRIPTION, "tags": DESCRIPTION, "ocr_text": TEXT}
+VIDEO_FIELDS: dict[str, str] = {**FIELDS, "description": VIDEO_DESCRIPTION, "tags": VIDEO_DESCRIPTION}
+
+
+def fields_of(media_type: str | None) -> dict[str, str]:
+    """The fields a person can write on a clip of this kind, and whose each is."""
+    return VIDEO_FIELDS if media_type == "video" else FIELDS
 
 
 def tags_join(alias: str = "m") -> str:
@@ -104,7 +111,9 @@ class CorrectionsRepository:
 
         # One editor's save at a time per clip: each changes only its fields,
         # from what the other saved.
-        self._session.execute(text("SELECT 1 FROM assets WHERE asset_id = :a FOR UPDATE"), {"a": asset_id})
+        media_type = self._session.execute(text("SELECT media_type FROM assets WHERE asset_id = :a FOR UPDATE"),
+                                           {"a": asset_id}).scalar()
+        artifacts = fields_of(media_type)
         current = self.get(asset_id) or {"description": None, "ocr_text": None, "tags": None}
         values = {f: current[f] for f in FIELDS}
         removed: set[str] = set()
@@ -126,8 +135,8 @@ class CorrectionsRepository:
             self._session.execute(text("UPDATE asset_ocr SET text = '', has_text = false WHERE asset_id = :a"),
                                   {"a": asset_id})
         # What they removed is missing again: the machine makes it.
-        for artifact in {FIELDS[f] for f in removed}:
-            if artifact == DESCRIPTION:
+        for artifact in {artifacts[f] for f in removed}:
+            if artifact != TEXT:
                 self._session.execute(text("DELETE FROM asset_metadata WHERE asset_id = :a"), {"a": asset_id})
             else:
                 self._session.execute(text("DELETE FROM asset_ocr WHERE asset_id = :a"), {"a": asset_id})
@@ -147,7 +156,7 @@ class CorrectionsRepository:
                 " SELECT :id, :a, 'person', '1', :now, '{}'::jsonb"
                 " WHERE NOT EXISTS (SELECT 1 FROM asset_metadata WHERE asset_id = :a)"
             ), {"id": f"meta_{ULID()}", "a": asset_id, "now": utcnow()})
-            lineage.record(self._session, asset_id, DESCRIPTION, None, person=True, commit=False)
+            lineage.record(self._session, asset_id, artifacts["description"], None, person=True, commit=False)
 
         if all(v is None for v in values.values()):
             self._session.execute(text("DELETE FROM asset_corrections WHERE asset_id = :a"), {"a": asset_id})

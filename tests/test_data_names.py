@@ -44,6 +44,25 @@ pytestmark = pytest.mark.fast
 
 REPO = Path(__file__).resolve().parent.parent
 BEFORE = REPO / "tests" / "fixtures" / "producers_before_names.json"
+# Lumiverb's own producers added since the names (ADR-024): named from the start, with no old word and nothing
+# before names to hold them to. A new one is added here on purpose.
+ADDED_SINCE = {"lumiverb.video.description"}
+
+
+def _without_added(now: dict) -> dict:
+    """What's worked out now, the producers added since the names left out (wherever they're named)."""
+    def named(word: str) -> bool:
+        return word.removeprefix("redo:") in ADDED_SINCE
+
+    out = {**now, "scheduled": [a for a in now["scheduled"] if not named(a)],
+           "pause_targets": [a for a in now["pause_targets"] if not named(a)],
+           "ai_job_kinds": {j: [k for k in ks if not named(k)] for j, ks in now["ai_job_kinds"].items()},
+           "kinds": {n: k for n, k in now["kinds"].items() if not named(n)},
+           "producers": {a: {**p, "redo_also": [r for r in p["redo_also"] if not named(r)]}
+                         for a, p in now["producers"].items() if not named(a)}}
+    for rule in ("applies", "made", "recheck"):
+        out[rule] = {a: sql for a, sql in now[rule].items() if not named(a)}
+    return out
 
 
 def _now() -> dict:
@@ -112,7 +131,8 @@ def _before_named() -> dict:
 def test_the_registry_works_out_what_it_did_before_names():
     # needs worked out from reads, the same as declared before; nothing queued, paused or kept differently: only
     # each word is its name now (ADR-024 part 3).
-    assert _now() == _before_named()
+    assert _without_added(_now()) == _before_named()
+    assert set(registry()) >= ADDED_SINCE and not ADDED_SINCE & set(WAS)
 
 
 # What a producer's SQL may read that's no one's data: the clip's own row, the library's switch, the lineage
@@ -159,13 +179,13 @@ def test_the_names_history_is_the_registry():
     before = json.loads(BEFORE.read_text())
     own = {a for a, p in registry().items() if not p.plugin}
     artifacts = {was["artifact"]: name for name, was in WAS.items() if "artifact" in was}
-    assert set(artifacts) == set(before["producers"]) and set(artifacts.values()) == own
+    assert set(artifacts) == set(before["producers"]) and set(artifacts.values()) == own - ADDED_SINCE
     assert {(was["artifact"], was["producer"]) for was in WAS.values() if "artifact" in was} \
         == {(a, p["producer"]) for a, p in before["producers"].items()}
     assert {was["kind"] for was in WAS.values() if "kind" in was} \
         == {p["kind"] for p in before["producers"].values() if p["kind"]}
     assert {name for name, was in WAS.items() if "kind" in was} \
-        == {k for k in SCHEDULER_KINDS if k != "scan" and not k.startswith("redo:")}
+        == {k for k in SCHEDULER_KINDS if k != "scan" and not k.startswith("redo:")} - ADDED_SINCE
     assert set(FILES) == ALLOWED_ARTIFACT_TYPES == {name for name, was in WAS.items() if "file" in was}
     assert all(f in makers() or f.rpartition(".")[0] in makers() for f in FILES)
     assert {made_by_file(f) for f in FILES} <= own
@@ -211,14 +231,17 @@ def test_what_a_person_writes_is_what_corrections_keep():
     # The fields a person writes over, by artifact (src/server/repository/corrections.py), and a transcript,
     # which a person uploads whole (its language and its SRT: the segments).
     from src.server.api.routers.assets import TranscriptSubmitRequest
-    from src.server.repository.corrections import FIELDS
+    from src.server.repository.corrections import FIELDS, VIDEO_FIELDS
 
     written = {a: p.makes.person for a, p in registry().items() if p.makes.person}
-    assert set(written) == {*FIELDS.values(), "lumiverb.video.transcript"}
+    assert set(written) == {*FIELDS.values(), *VIDEO_FIELDS.values(), "lumiverb.video.transcript"}
     assert {f: a for f, a in FIELDS.items()} == {
         "description": "lumiverb.image.description", "tags": "lumiverb.image.description",
         "ocr_text": "lumiverb.image.text"}
-    assert written["lumiverb.image.description"] == ("description", "tags")
+    # A video's description is written from its scenes: its own producer's.
+    assert VIDEO_FIELDS == {**FIELDS, "description": "lumiverb.video.description",
+                            "tags": "lumiverb.video.description"}
+    assert written["lumiverb.image.description"] == written["lumiverb.video.description"] == ("description", "tags")
     assert written["lumiverb.image.text"] == ("text",)
     assert written["lumiverb.video.transcript"] == ("language", "segments")
     assert {"language", "srt"} <= set(TranscriptSubmitRequest.model_fields)

@@ -147,6 +147,15 @@ The copy of a video Lumiverb analyses: smaller, and the browser plays it.
 - **Was:** `analysis_proxy` (lineage's producer `analysis-proxy`, its job's kind `render`).
 - **Files:** `lumiverb.video.analysis_proxy` (was `analysis_proxy`).
 
+## `lumiverb.video.description`
+
+A video described as a whole, from its scenes in order, with tags.
+
+- **Fields:** `description` text; `tags` list (`tag` text).
+- **A person can write:** `description`, `tags`: then theirs is shown.
+- **Made by:** Video descriptions (videos).
+- **Made from:** `lumiverb.video.scene_descriptions`.
+
 ## `lumiverb.video.faces`
 
 The faces seen in a video: one for each person seen, and when. Who each is: lumiverb.people.
@@ -183,6 +192,7 @@ Each scene described, with tags.
 - **A list, each with:** `start_ms` number; `end_ms` number; `description` text; `tags` list (`tag` text).
 - **Made by:** Scene descriptions (videos).
 - **Made from:** `lumiverb.video.analysis_proxy`, `lumiverb.video.scenes`.
+- **Read by:** Video descriptions.
 - **Was:** `scene_vision` (lineage's producer `scene-vision`).
 
 ## `lumiverb.video.scenes`

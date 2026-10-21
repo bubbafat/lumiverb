@@ -20,6 +20,7 @@ from sqlmodel import Session
 
 from src.server.models.tenant import VideoScene
 from tests.clips import make_clip
+from tests.derived import describer
 from tests.machine_lineage import made
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 
@@ -53,7 +54,7 @@ def _describe(env, clip: str, description: str, tags: list[str] | None = None) -
     client, headers, *_ = env
     r = client.post("/v1/assets/batch-vision", headers=headers, json={
         "items": [{"asset_id": clip, "model_id": "qwen3-vl:8b", "description": description, "tags": tags or []}],
-        "lineage": made("lumiverb.image.description")})
+        "lineage": made(describer(client, clip, headers))})
     assert r.status_code == 200 and r.json()["updated"] == 1, r.text
 
 

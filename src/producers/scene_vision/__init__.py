@@ -28,6 +28,8 @@ PRODUCER = ProducerSpec(
           " AND s.staged IS DISTINCT FROM 'finding')"),
     settings=ai_settings(VISION_PROMPT, fixed=NOT_OFFERED),
     redo_on_source_change=False,
+    # The video's own description is written from them.
+    redo_also=(names.VIDEO_DESCRIPTION,),
     run="src.producers.scene_vision.work:SceneVision",
     pool=VISION,
 )

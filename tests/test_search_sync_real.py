@@ -14,10 +14,10 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
+from tests.derived import describer, saved
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 from tests.test_reconciler import _library
-from tests.derived import saved
 
 pytestmark = pytest.mark.slow
 
@@ -46,7 +46,8 @@ def _ok(r) -> None:
 def _describe(lib, clip: str, description: str, tags: list[str]) -> None:
     client, headers, *_ = lib
     _ok(saved(client, "vision", clip, headers=headers, json={
-        "model_id": "m", "description": description, "tags": tags, "lineage": _want(lib, "lumiverb.image.description", None)}))
+        "model_id": "m", "description": description, "tags": tags,
+        "lineage": _want(lib, describer(client, clip, headers), None)}))
 
 
 def _correct(lib, clip: str, **body) -> None:
