@@ -167,6 +167,7 @@
 <p>Under <strong>Libraries</strong>, each library says whether its files can be reached: Reachable, Can't be reached, or Not checked lately.</p>
 <h2 id="the-log">The log<a class="anchor" href="#the-log" aria-label="Link to this section">#</a></h2>
 <p>Server admins see <strong>Admin › Logs</strong>: newest first, filtered by part (API, Processing, Plug-ins and more), with <strong>Search</strong>, <strong>Problems only</strong>, <strong>Follow</strong>, and <strong>Download these lines</strong> to send to someone helping you. On a server with more than one account, it shows only on the machine Lumiverb runs on.</p>
+<p>When a page says something like &quot;Load failed&quot; on a phone, the request never reached Lumiverb, so the server saw nothing. The web app remembers each one and sends it once a request gets through. It shows in the log under API as &quot;web: … couldn't reach the server for …&quot;, with who, when, the page and their browser. Search for <strong>web:</strong> to find them.</p>
 <p>On a Mac the log is one file, kept to the latest 50 MB:</p>
 <div class="cmd"><pre><code>tail -f "$(brew --prefix)/var/log/lumiverb.log"</code></pre></div>
 <p>On Linux it's in the system journal:</p>

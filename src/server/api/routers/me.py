@@ -1,12 +1,17 @@
-"""GET /v1/me — return current user info; POST /v1/me/password — change your own."""
+"""GET /v1/me — return current user info; POST /v1/me/password — change your own; POST
+/v1/me/failed-requests — what your browser couldn't load, for the log."""
+
+import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from src.server.database import get_control_session
 from src.server.repository.control_plane import ApiKeyRepository, UserRepository
 
 router = APIRouter(prefix="/v1/me", tags=["me"])
+logger = logging.getLogger(__name__)
 
 
 class CurrentUserResponse(BaseModel):
@@ -102,3 +107,71 @@ def change_password(body: PasswordChange, request: Request) -> PasswordChanged:
         revoked = users.update_password(user.user_id, bcrypt.hashpw(new.encode(), bcrypt.gensalt(rounds=12)).decode())
         token = _issue_jwt(users.get_by_id(user_id), settings.jwt_secret)
     return PasswordChanged(access_token=token, expires_in=JWT_EXPIRY_SECONDS, api_keys_revoked=revoked)
+
+
+_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
+_SHORT = 200
+
+
+def _plain(value: str) -> str:
+    """Text a log line takes as it is: one line, nothing that isn't printed (no newline to forge a line with,
+    no escape to color one)."""
+    if not value.isprintable():
+        raise ValueError("plain text only, on one line")
+    return value
+
+
+class FailedRequest(BaseModel):
+    """A request the browser couldn't make at all: no answer came, so the server never saw it."""
+
+    method: str
+    path: str = Field(max_length=_SHORT)  # the API's path, /v1/..., its query left out
+    error: str = Field(max_length=_SHORT)  # the browser's own words: "Load failed", "Failed to fetch"
+    at: datetime  # when, by the browser's clock
+    page: str = Field(default="", max_length=_SHORT)  # where in the app it was, its path
+
+    @field_validator("method")
+    @classmethod
+    def _method(cls, value: str) -> str:
+        if value not in _METHODS:
+            raise ValueError(f"one of {', '.join(sorted(_METHODS))}")
+        return value
+
+    @field_validator("path")
+    @classmethod
+    def _path(cls, value: str) -> str:
+        if not value.startswith("/v1/") or "?" in value or " " in value:
+            raise ValueError("the API's path, /v1/..., without its query")
+        return _plain(value)
+
+    @field_validator("error", "page")
+    @classmethod
+    def _text(cls, value: str) -> str:
+        return _plain(value)
+
+
+class FailedRequests(BaseModel):
+    failed: list[FailedRequest] = Field(min_length=1, max_length=20)
+
+
+@router.post("/failed-requests", status_code=204)
+def report_failed_requests(body: FailedRequests, request: Request) -> None:
+    """Requests this person's browser couldn't make at all, sent once one gets through (the web app's
+    src/ui/web/src/api/failedRequests.ts): the connection dropped, so the server never saw them, and nothing
+    else would say so. Each a line in the log, which Admin › Logs shows, with who and their browser. A person
+    signed in, never a key; 20 at a time; 10 sends a minute, by address and by person (429)."""
+    from src.server.api.errors import ApiError
+    from src.server.api.rate_limit import failed_requests_limiter
+
+    user_id: str | None = getattr(request.state, "user_id", None)
+    if not user_id or getattr(request.state, "key_id", None):
+        raise ApiError(403, "signed_in_only", "A browser signed in says what it couldn't load, not an API key.")
+    failed_requests_limiter.check(request)
+    failed_requests_limiter.check(request, key=f"user:{user_id}")
+    with get_control_session() as session:
+        user = UserRepository(session).get_by_id(user_id)
+    who = user.email if user is not None else user_id
+    browser = "".join(c for c in request.headers.get("user-agent", "") if c.isprintable())[:_SHORT] or "no browser said"
+    for f in body.failed:
+        logger.warning("web: %s's browser couldn't reach the server for %s %s at %s: %s (on %s; %s)",
+                       who, f.method, f.path, f.at.isoformat(timespec="seconds"), f.error, f.page or "?", browser)
