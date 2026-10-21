@@ -3,13 +3,10 @@ import { useLocation, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  batchRateAssets,
   createSavedView,
   getFilteredFacets,
   listLibraries,
-  lookupRatings,
   queryAssets,
-  rateAsset,
 } from "../api/client";
 import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
@@ -17,13 +14,14 @@ import { ProjectPicker } from "../components/ProjectPicker";
 import { SetLocationModal } from "../components/SetLocationModal";
 import { useCanEdit, useIsDemo } from "../lib/useCanEdit";
 import { useClipActions } from "../lib/useClipActions";
+import { useRatings, type RatingUpdate } from "../lib/useRatings";
 import { useRevisionRefresh } from "../lib/useRevisionRefresh";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { SaveSearchAsProjectModal } from "../components/SaveSearchAsProjectModal";
 import { ZoomControl } from "../components/ZoomControl";
-import type { AssetPageItem, AssetRating, BrowseItem, RatingColor } from "../api/types";
+import type { AssetPageItem, BrowseItem } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "../components/RatingControls";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
@@ -331,49 +329,10 @@ export default function UnifiedBrowsePage() {
   // Ratings
   // ---------------------------------------------------------------------------
 
-  const ratingsQuery = useQuery({
-    queryKey: ["ratings", orderedAssetIds.slice(0, 500)],
-    queryFn: () => lookupRatings(orderedAssetIds.slice(0, 500)),
-    enabled: orderedAssetIds.length > 0 && !demo,
-    staleTime: 30_000,
-  });
-  const ratingsMap: Record<string, AssetRating> = ratingsQuery.data?.ratings ?? {};
-
-  const handleRatingChange = useCallback(
-    async (assetId: string, update: { favorite?: boolean; stars?: number; color?: RatingColor | null }) => {
-      const prev = ratingsMap[assetId] ?? { favorite: false, stars: 0, color: null };
-      const optimistic: AssetRating = {
-        favorite: update.favorite !== undefined ? update.favorite : prev.favorite,
-        stars: update.stars !== undefined ? update.stars : prev.stars,
-        color: update.color !== undefined ? update.color : prev.color,
-      };
-      queryClient.setQueryData(
-        ["ratings", orderedAssetIds.slice(0, 500)],
-        (old: { ratings: Record<string, AssetRating> } | undefined) => ({
-          ratings: { ...(old?.ratings ?? {}), [assetId]: optimistic },
-        }),
-      );
-      try {
-        await rateAsset(assetId, update);
-      } catch {
-        queryClient.invalidateQueries({ queryKey: ["ratings"] });
-      }
-    },
-    [ratingsMap, orderedAssetIds, queryClient],
-  );
-
+  const { ratingsMap, rate: handleRatingChange, rateSelection } = useRatings(orderedAssetIds, !demo, clipActions.fail);
   const handleBatchRating = useCallback(
-    async (update: { favorite?: boolean; stars?: number; color?: RatingColor | null }) => {
-      const ids = selection.toArray();
-      if (ids.length === 0) return;
-      try {
-        await batchRateAssets(ids, update);
-        queryClient.invalidateQueries({ queryKey: ["ratings"] });
-      } catch {
-        // silently fail — user can retry
-      }
-    },
-    [selection, queryClient],
+    (update: RatingUpdate) => rateSelection(selection.toArray(), update),
+    [selection, rateSelection],
   );
 
   // Clear selection on navigation
