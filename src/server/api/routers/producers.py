@@ -699,6 +699,16 @@ class ScanFailing(BaseModel):
     next_try: datetime | None = None
 
 
+class ScanUnreadable(BaseModel):
+    """A library with files the scheduler isn't allowed to read (their permissions): how many, the first of them
+    by path, and who it reads them as ("the lumiverb user")."""
+
+    library_id: str
+    files: int = 0
+    paths: list[str] = Field(default_factory=list)
+    reader: str = ""
+
+
 class SchedulerStatus(BaseModel):
     """What the scheduler is doing for the account (written every few seconds)."""
 
@@ -741,6 +751,8 @@ class SchedulerStatus(BaseModel):
     unlisted: dict[str, str] = Field(default_factory=dict)
     # Libraries whose scans keep failing: not scanned again until next_try.
     scans_failing: list[ScanFailing] = Field(default_factory=list)
+    # Libraries with files it isn't allowed to read: tried again at each scan.
+    scans_unreadable: list[ScanUnreadable] = Field(default_factory=list)
     # How long until things are made (src/server/scheduler/eta.py); None when it isn't running.
     eta: Eta | None = None
 
@@ -825,6 +837,7 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
         status.storage = {i: v for i, v in status.storage.items() if i in visible}
         status.held = [h for h in status.held if h.library_id in visible]
         status.scans_failing = [f for f in status.scans_failing if f.library_id in visible]
+        status.scans_unreadable = [f for f in status.scans_unreadable if f.library_id in visible]
     return status
 
 

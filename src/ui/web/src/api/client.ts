@@ -1157,6 +1157,9 @@ export interface ProducerWait {
   /** scan_failing: failing since, and when the library's scan is tried again. */
   since?: string;
   next_try?: string;
+  /** scan_unreadable: the first of the files it isn't allowed to read (clips: how many), and who it reads as. */
+  paths?: string[];
+  reader?: string;
 }
 
 /** Make again what a producer made below its level now (admins): these clips (asset_ids) or every one

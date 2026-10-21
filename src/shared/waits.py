@@ -50,6 +50,9 @@ GIVEN_UP = "given_up"
 # A library's scans' (Scans, each library's row): they keep failing (the
 # scan itself, not a file): tried again after a minute, doubling up to half an hour.
 SCAN_FAILING = "scan_failing"
+# A library's scans' too: files in it the scheduler isn't allowed to read
+# (their permissions), a person's to fix: tried again at each scan.
+SCAN_UNREADABLE = "scan_unreadable"
 # An installed plug-in's work (ADR-023): the plug-in isn't running (starting,
 # preparing its data, stopped after it kept stopping, the runner not running)
 # or didn't answer: its clips wait, uncharged.
@@ -71,6 +74,7 @@ REASONS: dict[str, str] = {
     RETRY_LATER: "its last try failed: tried again later",
     GIVEN_UP: "it failed too many times: tried again when someone asks",
     SCAN_FAILING: "a library's scans keep failing: tried again later, a longer while each time",
+    SCAN_UNREADABLE: "files in a library the scheduler isn't allowed to read: taken in once they're made readable",
 }
 
 

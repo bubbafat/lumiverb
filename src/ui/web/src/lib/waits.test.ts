@@ -14,6 +14,8 @@ const DETAILS: Record<string, Partial<ProducerWait>> = {
   scan: { paused: false },
   scan_failing: { library_id: "lib_1", library_name: "Empty Besters", message: "[unknown]: the API said 500",
                   since: "2026-10-13T13:50:00Z", next_try: "2026-10-13T14:20:00Z" },
+  scan_unreadable: { library_id: "lib_2", library_name: "Paris", paths: ["Disneyland/a.MOV", "b.jpg"],
+                     reader: "the lumiverb user" },
 };
 
 // The Scans row's waits are a library's, not clips (GET /v1/producers/queue, the scans switch's waits).
@@ -47,6 +49,18 @@ describe("Why work waits", () => {
     expect(waitSentence({ reason: "scan_failing", clips: 0, ...DETAILS.scan_failing }, say)).toBe(
       "Scans of Empty Besters keep failing ([unknown]: the API said 500); next try at <2026-10-13T14:20:00Z>.");
     expect(waitIsLoud({ reason: "scan_failing", clips: 0 })).toBe(true);
+  });
+
+  it("says how many files of which library can't be read, which, by whom, and what to do", () => {
+    // The demo server, 10-21: 27 of 62 copied files were readable by their owner alone.
+    const paths = Array.from({ length: 20 }, (_, i) => `IMG_${i}.jpg`);
+    expect(waitSentence({ reason: "scan_unreadable", clips: 27, ...DETAILS.scan_unreadable, paths }, say)).toBe(
+      "27 files in Paris can't be read: the lumiverb user isn't allowed to read them (IMG_0.jpg, IMG_1.jpg,"
+      + " IMG_2.jpg, IMG_3.jpg, IMG_4.jpg and 22 more). Make them readable and the next scan takes them in.");
+    expect(waitSentence({ reason: "scan_unreadable", clips: 1, ...DETAILS.scan_unreadable, paths: ["b.jpg"] }, say))
+      .toBe("1 file in Paris can't be read: the lumiverb user isn't allowed to read it (b.jpg). Make it readable"
+        + " and the next scan takes it in.");
+    expect(waitIsLoud({ reason: "scan_unreadable", clips: 1 })).toBe(true);
   });
 
   it("agrees with the count", () => {

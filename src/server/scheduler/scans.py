@@ -138,6 +138,9 @@ class ScanState:
     last_full_scan: dict[str, float] = field(default_factory=dict)
     retries: dict[str, Retry] = field(default_factory=dict)
     failing: dict[str, Failing] = field(default_factory=dict)
+    # Each library's files this machine isn't allowed to read (their permissions), as its scans last found them:
+    # a person's to fix, so Processing says which (unreadable_now). Found again by the next scan, not saved.
+    unreadable: dict[str, list[str]] = field(default_factory=dict)
 
 
 def load_state(path: Path) -> ScanState:
@@ -284,6 +287,7 @@ def scan_library(
     if prefix is None:
         state.last_full_scan[library_id] = now
     _note_failures(state, library, prefix, stats, changes, now)
+    _note_unreadable(state, library, prefix, stats)
     if stats.unlisted:
         logger.warning("scheduler: in %s, %d folder(s) couldn't be listed (%s); changes kept for the retry",
                        library["name"], len(stats.unlisted), ", ".join(stats.unlisted[:5]) or "/")
@@ -337,6 +341,24 @@ def _note_failures(
     elif old and (left or held):
         state.retries[library_id] = Retry(left, old.delay, old.due, held,
                                           {p: s for p, s in seen.items() if p in left})
+
+
+def _note_unreadable(state: ScanState, library: dict, prefix: str | None, stats: ScanStats) -> None:
+    """The library's files this machine isn't allowed to read, as this scan found them where it looked (its
+    prefix; all of it when None), and as earlier scans found them elsewhere; said in the log when there are any."""
+    from src.processing.scan import reader_named, some_of
+
+    library_id = library["library_id"]
+    kept = [p for p in state.unreadable.get(library_id, []) if prefix is not None and not is_within(p, prefix)]
+    unreadable = sorted({*kept, *getattr(stats, "unreadable", [])})
+    if not unreadable:
+        state.unreadable.pop(library_id, None)
+        return
+    state.unreadable[library_id] = unreadable
+    if getattr(stats, "unreadable", None):
+        logger.warning("scheduler: in %s, %d file(s) can't be read: %s isn't allowed to read %s. Make them "
+                       "readable and the next scan takes them in.", library["name"], len(unreadable),
+                       reader_named(), some_of(unreadable))
 
 
 # Whether this process has said its root map is empty (once per start).
@@ -442,6 +464,20 @@ def _scan_failed(state: ScanState, library: dict, exc: Exception, now: float) ->
     else:
         logger.warning("scheduler: scanning %s failed again (%s); trying again in %.0f min",
                        library["name"], error, delay / 60)
+
+
+# The most of a library's unreadable files the status names (it says how many there are).
+UNREADABLE_NAMED = 20
+
+
+def unreadable_now(state: ScanState | None, library_ids: list[str]) -> list[dict]:
+    """Of these libraries, those with files this machine isn't allowed to read: how many, the first of them by
+    path, and who it reads them as, as the scheduler's status says them."""
+    from src.processing.scan import reader_named
+
+    found = dict(state.unreadable) if state is not None else {}  # a copy: a scan job changes it meanwhile
+    return [{"library_id": i, "files": len(paths), "paths": paths[:UNREADABLE_NAMED], "reader": reader_named()}
+            for i in library_ids if (paths := found.get(i))]
 
 
 def failing_now(state: ScanState | None, library_ids: list[str]) -> list[dict]:
