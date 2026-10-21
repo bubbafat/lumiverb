@@ -69,6 +69,23 @@ def _unreachable(url: str, why: str) -> VisionEndpointError:
     return VisionEndpointError(UNREACHABLE)
 
 
+# Anthropic's own models list wants its API version (and takes the key as x-api-key); its OpenAI-compatible
+# chat completions need neither. It lists 20 at a time unless asked for more.
+ANTHROPIC_HOST = "api.anthropic.com"
+ANTHROPIC_VERSION = "2023-06-01"
+
+
+def _asked_with(hostname: str | None, api_key: str | None) -> tuple[dict, dict]:
+    """The headers and query a models list is asked for with, by the endpoint's host."""
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    if hostname != ANTHROPIC_HOST:
+        return headers, {}
+    headers["anthropic-version"] = ANTHROPIC_VERSION
+    if api_key:
+        headers["x-api-key"] = api_key
+    return headers, {"limit": 1000}
+
+
 def list_models(api_url: str, api_key: str | None = None, *, timeout: float = TIMEOUT_SEC) -> list[str]:
     """The model ids GET {api_url}/models lists, sorted. Raises VisionEndpointError."""
     url = check_url(api_url)
@@ -79,10 +96,10 @@ def list_models(api_url: str, api_key: str | None = None, *, timeout: float = TI
         raise _unreachable(url, f"doesn't resolve ({e})") from None
     if blocked:
         raise VisionEndpointError("That address isn't allowed.")
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    headers, params = _asked_with(parts.hostname, api_key)
     try:
         # No redirects: the answer is the URL's own (and the key goes nowhere else).
-        resp = requests.get(f"{url}/models", headers=headers, timeout=timeout, allow_redirects=False)
+        resp = requests.get(f"{url}/models", headers=headers, params=params, timeout=timeout, allow_redirects=False)
     except requests.Timeout:
         raise _unreachable(url, f"no answer within {timeout:.0f} seconds") from None
     except requests.RequestException as e:
