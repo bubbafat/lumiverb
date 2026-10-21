@@ -79,7 +79,7 @@ def _unreachable(url: str, why: str) -> VisionEndpointError:
 SAID_UP_TO = 200
 
 
-def _said(resp: requests.Response) -> str:
+def answer_said(resp: requests.Response) -> str:
     """What an answer that isn't a models list says went wrong, in a line: its error's message when it's
     JSON (OpenAI's and Anthropic's error.message, others' message or detail), else its text."""
     try:
@@ -93,7 +93,7 @@ def _said(resp: requests.Response) -> str:
     return said[:SAID_UP_TO] + ("…" if len(said) > SAID_UP_TO else "")
 
 
-def _failed(e: requests.RequestException) -> str:
+def failed(e: requests.RequestException) -> str:
     """Why a request failed, in a few words: the system's own (Connection refused, …), else its kind."""
     found = re.search(r"\[Errno -?\d+\] ([^'\")\]]+)", str(e))
     return f"{type(e).__name__}: {found.group(1).strip()}" if found else type(e).__name__
@@ -116,8 +116,9 @@ def _asked_with(hostname: str | None, api_key: str | None) -> tuple[dict, dict]:
     return headers, {"limit": 1000}
 
 
-def list_models(api_url: str, api_key: str | None = None, *, timeout: float = TIMEOUT_SEC) -> list[str]:
-    """The model ids GET {api_url}/models lists, sorted. Raises VisionEndpointError."""
+def allowed(api_url: str) -> str:
+    """The URL, checked, when the server may ask it: a plain http(s) URL whose host resolves to no link-local or
+    metadata address. Raises VisionEndpointError."""
     url = check_url(api_url)
     parts = urlsplit(url)
     try:
@@ -126,6 +127,13 @@ def list_models(api_url: str, api_key: str | None = None, *, timeout: float = TI
         raise _unreachable(url, f"doesn't resolve ({e})") from None
     if blocked:
         raise VisionEndpointError("That address isn't allowed.")
+    return url
+
+
+def list_models(api_url: str, api_key: str | None = None, *, timeout: float = TIMEOUT_SEC) -> list[str]:
+    """The model ids GET {api_url}/models lists, sorted. Raises VisionEndpointError."""
+    url = allowed(api_url)
+    parts = urlsplit(url)
     headers, params = _asked_with(parts.hostname, api_key)
     try:
         # No redirects: the answer is the URL's own (and the key goes nowhere else).
@@ -133,9 +141,9 @@ def list_models(api_url: str, api_key: str | None = None, *, timeout: float = TI
     except requests.Timeout:
         raise _unreachable(url, f"no answer within {timeout:.0f} seconds") from None
     except requests.RequestException as e:
-        raise _unreachable(url, _failed(e)) from None
+        raise _unreachable(url, failed(e)) from None
     if resp.status_code != 200:
-        said = _said(resp)
+        said = answer_said(resp)
         raise _unreachable(url, f"/models answered HTTP {resp.status_code}" + (f" ({said})" if said else ""))
     try:
         data = resp.json().get("data")

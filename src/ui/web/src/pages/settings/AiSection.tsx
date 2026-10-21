@@ -9,11 +9,13 @@ import {
   getCurrentUser,
   removeMachine,
   setJobModel,
+  tryMachine,
   updateMachine,
   type AiJob,
   type AiMachine,
   type AiSettings,
   type MachineFields,
+  type MachineTry,
 } from "../../api/client";
 import { AI_PRESETS, CUSTOM, presetOf } from "../../lib/aiPresets";
 import { OLLAMA_GUIDE } from "../../lib/guides";
@@ -209,6 +211,10 @@ function MachineRow({ ai, machine, admin }: { ai: AiSettings; machine: AiMachine
     onError: (e) => setProblem(message(e)),
   });
   const offline = machine.enabled && machine.jobs.length > 0 && machine.status && !machine.status.online;
+  // A Test: what it answered to what descriptions & text's work sends (MachineTried).
+  const vision = ai.jobs.find((j) => j.job === "vision");
+  const test = useMutation({ mutationFn: () => tryMachine(machine.machine_id), onMutate: () => setProblem(null),
+                             onError: (e) => setProblem(message(e)) });
 
   if (editing) {
     return (
@@ -233,6 +239,19 @@ function MachineRow({ ai, machine, admin }: { ai: AiSettings; machine: AiMachine
             {!machine.built_in && (
               <button
                 type="button"
+                className={linkClass}
+                aria-label={`Test ${machine.name}`}
+                title={vision?.model ? `Send it a picture and a video's scenes with ${vision.model}` :
+                  "Choose a model for descriptions & text first"}
+                disabled={test.isPending || !vision?.model}
+                onClick={() => test.mutate()}
+              >
+                {test.isPending ? "Testing…" : "Test"}
+              </button>
+            )}
+            {!machine.built_in && (
+              <button
+                type="button"
                 className="text-sm text-red-300 hover:text-red-200 disabled:opacity-50"
                 aria-label={`Remove ${machine.name}`}
                 disabled={remove.isPending}
@@ -254,12 +273,43 @@ function MachineRow({ ai, machine, admin }: { ai: AiSettings; machine: AiMachine
         {machine.shares_gpu && " · video work comes first on its GPU"}
       </p>
       <MachineStatusLine machine={machine} />
+      {test.data && <TestResults tried={test.data} />}
       {problem && (
         <p role="alert" className="text-sm text-red-300">
           {problem}
         </p>
       )}
     </li>
+  );
+}
+
+/** What a Test came back with: for each request, how it did (its room used, how long it took) or why it wouldn't
+ * do, and its answer. */
+function TestResults({ tried }: { tried: MachineTry }) {
+  return (
+    <div aria-label={`Test of ${tried.machine}`} className="space-y-2 rounded border border-gray-700/60 p-2 text-sm">
+      <p className="text-xs text-gray-400">
+        Sent {tried.sent}, with {tried.model}.
+      </p>
+      <ul className="space-y-2">
+        {tried.tries.map((t) => (
+          <li key={t.titles.join()} className="space-y-0.5">
+            <p className="text-gray-200">{t.titles.join(", ")}</p>
+            <p role={t.problem ? "alert" : "status"} className={t.problem ? "text-amber-300" : "text-emerald-300"}>
+              {t.problem || "Answered as the work needs it"}
+              {` · ${t.seconds.toLocaleString()} s`}
+              {t.tokens && ` · ${t.tokens.answer.toLocaleString()} of ${t.limit.toLocaleString()} tokens`}
+            </p>
+            {t.answer && (
+              <details>
+                <summary className="cursor-pointer text-xs text-gray-400">Its answer</summary>
+                <pre className="whitespace-pre-wrap break-words text-xs text-gray-300">{t.answer}</pre>
+              </details>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

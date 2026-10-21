@@ -7,13 +7,24 @@ never shown."""
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from typer.testing import CliRunner
 
 from src.client.cli.commands import ai
 from src.client.cli.main import app
 from tests.derived import saved
-from tests.test_ai_machines import GAMING_PC, LLAVA, QWEN, STUDIO, _ai, _machine, _machines, none  # noqa: F401
+from tests.test_ai_machines import (  # noqa: F401
+    GAMING_PC,
+    LLAVA,
+    QWEN,
+    STUDIO,
+    _ai,
+    _machine,
+    _machines,
+    none,
+)
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _ingest_with, _sha, _want
 from tests.test_reconciler import _library
@@ -120,3 +131,22 @@ def test_a_jobs_model_is_shown_and_set_asking_what_becomes_of_what_the_old_one_m
     assert missing.exit_code == 1 and "offers gpt-9" in missing.output and f"PC: {LLAVA}, {QWEN}" in missing.output
     assert cli("model", "vision", "--off").exit_code == 0
     assert next(j for j in _ai(env)["jobs"] if j["job"] == "vision")["model"] == ""
+
+
+def test_a_machine_is_tested_from_here_too(env, none, cli):
+    from tests.test_ai_try import _answering
+
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
+    with fake:
+        assert cli("machines", "add", "PC", "--url", GAMING_PC, "--jobs", "vision").exit_code == 0
+        assert cli("model", "vision", QWEN, "--new-only").exit_code == 0
+    answering, asked = _answering()
+    with answering, patch("src.shared.vision_endpoint._blocked", return_value=False):
+        tested = cli("machines", "test", "PC")
+    assert tested.exit_code == 0, tested.output
+    assert "Sent a picture Lumiverb draws" in tested.output and "answered as the work needs it" in tested.output
+    assert "64 of 500 tokens" in tested.output and len(asked) == 3
+    thinking, _ = _answering(finish="length")
+    with thinking, patch("src.shared.vision_endpoint._blocked", return_value=False):
+        ran_out = cli("machines", "test", "PC")
+    assert ran_out.exit_code == 1 and "It ran out of room" in ran_out.output
