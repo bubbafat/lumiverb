@@ -437,6 +437,7 @@ const KIND_LABELS: Record<string, [string, string]> = {
   "lumiverb.image.description": ["description", "descriptions"],
   "lumiverb.image.text": ["text read", "texts read"],
   "lumiverb.video.scene_descriptions": ["scene description", "scene descriptions"],
+  "lumiverb.video.description": ["video description", "video descriptions"],
   "lumiverb.image.faces": ["face batch", "face batches"],
   "lumiverb.video.transcript": ["transcript", "transcripts"],
   "lumiverb.video.scenes": ["scene detection", "scene detections"],

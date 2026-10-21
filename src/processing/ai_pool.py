@@ -339,6 +339,9 @@ class PooledCaptionProvider(_OnAMachine, CaptionProvider):
     def describe(self, proxy_path: Path) -> dict:
         return self._on_a_machine(lambda p: p.describe(proxy_path))
 
+    def describe_text(self, text: str) -> dict:
+        return self._on_a_machine(lambda p: p.describe_text(text))
+
     def extract_text(self, proxy_path: Path) -> str:
         return self._on_a_machine(lambda p: p.extract_text(proxy_path))
 

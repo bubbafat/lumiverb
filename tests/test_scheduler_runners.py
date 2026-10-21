@@ -1003,3 +1003,65 @@ def test_the_scan_pass_checks_in_first_and_leaves_out_paused_libraries(acct, mon
     assert passed == {"ids": ["lib_1"], "scan_now": {"lib_1"}, "scanning": "lib_1"}
     assert acct.scanning is None  # what its check-ins say: scanning while it is
     assert acct.to_send == {"lib_1": (3, 4096)}  # and what its scans have left to send
+
+
+# ---------------------------------------------------------------------------
+# A video's own description, written from its scenes'
+# ---------------------------------------------------------------------------
+
+
+def _video_described(acct, scenes: list[dict], answer=None):
+    provider = MagicMock()
+    provider.describe_text.side_effect = answer or (lambda text: {"description": "A day at the beach.",
+                                                                  "tags": ["beach", " "]})
+    acct.vision.provider.return_value = provider
+    acct.client.get.return_value.json.return_value = {"scenes": scenes}
+    return _run(acct, "lumiverb.video.description", "ast_1"), provider
+
+
+def test_a_videos_description_is_written_from_its_scenes_in_order(acct) -> None:
+    result, provider = _video_described(acct, [
+        {"start_ms": 0, "description": " Waves roll onto an empty beach. ", "tags": ["sea", ""]},
+        {"start_ms": 75_400, "description": "Two people walk along the shore at sunset.", "tags": []}])
+    assert result is None
+    acct.client.get.assert_called_once_with("/v1/video/ast_1/scenes")  # the scenes shown, in order
+    [text] = provider.describe_text.call_args.args
+    assert text == ("1. (0:00) Waves roll onto an empty beach. [tags: sea]\n"
+                    "2. (1:15) Two people walk along the shore at sunset.")
+    item, lineage = _item_posted(acct, "/v1/assets/batch-vision")
+    assert (item["asset_id"], item["description"], item["tags"], item["source_hash"]) == (
+        "ast_1", "A day at the beach.", ["beach"], SHA)
+    used = acct.producers.with_model("lumiverb.video.description", acct.vision.model)
+    assert lineage == acct.producers.lineage("lumiverb.video.description", None, used=used)
+    # Its own settings on the machines: the video's prompt, up to 8 sentences.
+    assert acct.vision.provider.call_args.kwargs["settings"] == used
+    assert "up to 8" in used["prompt"]
+
+
+def test_a_video_whose_scenes_arent_all_described_waits(acct) -> None:
+    for scenes in ([{"start_ms": 0, "description": "Waves."}, {"start_ms": 5000, "description": None}], []):
+        result, provider = _video_described(acct, scenes)
+        assert result == ["ast_1"]
+        provider.describe_text.assert_not_called()
+    acct.failures.add.assert_not_called()
+    acct.client.post.assert_not_called()
+
+
+def test_a_videos_description_the_machines_cant_make_goes_through_their_guard(acct) -> None:
+    from src.processing.workers.captions.base import CaptionError
+
+    error = CaptionError("machine gone", endpoint_fault=True)
+
+    def fails(text):
+        raise error
+
+    acct.vision.charges.return_value = False  # the machines' trouble: it waits, uncharged
+    assert _video_described(acct, [{"start_ms": 0, "description": "Waves."}], answer=fails)[0] == ["ast_1"]
+    acct.vision.charges.assert_called_once_with(error)
+    acct.failures.add.assert_not_called()
+    acct.vision.charges.return_value = True  # the model saying nothing is the clip's: charged
+    assert _video_described(acct, [{"start_ms": 0, "description": "Waves."}],
+                            answer=lambda text: {"description": " ", "tags": []})[0] is None
+    assert _charged(acct) == [("lumiverb.video.description", "ast_1")]
+    acct.client.post.assert_not_called()
+

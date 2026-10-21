@@ -16,6 +16,7 @@ from src.producers.names import (
     LIKENESS,
     TEXT,
     TRANSCRIPT,
+    VIDEO_DESCRIPTION,
     VIDEO_FORMAT,
 )
 from src.server.after_commit import AfterCommit
@@ -31,7 +32,7 @@ from src.server.api.devices import may_call
 from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
 from src.server.api.library_access import names
 from src.server.api.limits import MAX_IDS
-from src.server.api.routers.producers import LineageIn, require_lineage, with_source
+from src.server.api.routers.producers import LineageIn, lineage_dict, require_lineage, with_source
 from src.server.models.tenant import Asset
 from src.server.repository import lineage
 from src.server.repository.assets import (
@@ -861,15 +862,26 @@ def submit_batch_vision(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
-    """Submit AI vision results for multiple assets in one request."""
-    made = require_lineage(body.lineage, DESCRIPTION)  # before anything is saved
+    """Descriptions and tags, a photo's (its description producer's) or a video's (written from its scenes:
+    the video description producer's), as the lineage says; each clip the kind its producer describes."""
+    from src.server.api.errors import InvalidChoiceError
+
+    sent = lineage_dict(body.lineage)
+    artifact = VIDEO_DESCRIPTION if sent and sent.get("producer") == VIDEO_DESCRIPTION else DESCRIPTION
+    made = require_lineage(body.lineage, artifact)  # before anything is saved
+    media = "video" if artifact == VIDEO_DESCRIPTION else "image"
     meta_repo = AssetMetadataRepository(session)
     asset_repo = AssetRepository(session)
     updated = 0
     skipped = 0
 
+    found = {item.asset_id: asset_repo.get_by_id(item.asset_id) for item in body.items}
+    if wrong := sorted(i for i, a in found.items() if a is not None and a.media_type != media):
+        raise InvalidChoiceError(
+            "wrong_media_type", f"{artifact} describes {media}s only: {', '.join(wrong)} isn't one.",
+            {"artifact": artifact, "asset_ids": wrong})
     for item in body.items:
-        asset = asset_repo.get_by_id(item.asset_id)
+        asset = found[item.asset_id]
         if asset is None or asset.deleted_at is not None:
             skipped += 1
             continue
@@ -880,7 +892,7 @@ def submit_batch_vision(
             data={"description": item.description, "tags": item.tags},
         )
         asset_repo.set_status(item.asset_id, asset_status.DESCRIBED)
-        lineage.record(session, item.asset_id, DESCRIPTION, with_source(made, item.source_hash))
+        lineage.record(session, item.asset_id, artifact, with_source(made, item.source_hash))
         updated += 1
 
     if updated > 0:

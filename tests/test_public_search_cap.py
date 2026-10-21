@@ -14,10 +14,10 @@ from contextlib import contextmanager, nullcontext
 
 import pytest
 
+from tests.derived import describer, saved
 from tests.machine_lineage import made
 from tests.scenes import Scene, described_scenes
 from tests.test_public_library_middleware import _ingest, public_lib_client  # noqa: F401
-from tests.derived import saved
 
 # What public pages play until an admin says otherwise (tenant_settings.PUBLIC_DEFAULT_SECONDS).
 CAP_MS = 10_000
@@ -45,7 +45,7 @@ def _describe(env, asset_id: str, description: str) -> None:
     client, api_key, *_ = env
     r = saved(client, "vision", asset_id, headers=_auth(api_key), json={
         "model_id": "test-vision", "model_version": "1", "description": description, "tags": [],
-        "lineage": made("lumiverb.image.description")})
+        "lineage": made(describer(client, asset_id, _auth(api_key)))})
     assert r.status_code == 200, r.text
 
 

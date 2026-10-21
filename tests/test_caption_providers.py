@@ -320,3 +320,36 @@ def test_the_reply_and_its_finish_reason_are_logged(caplog):
     with patch(post, return_value=resp), caplog.at_level(logging.DEBUG, logger=logger_name):
         p._chat("data:image/jpeg;base64,abc", "describe", p._vision)
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+@pytest.mark.fast
+def test_a_videos_scenes_are_described_as_text_alone_with_its_own_settings() -> None:
+    """describe_text (a video's description): no image, its prompt then the scenes, its own sampling and
+    answer length; the answer read as a photo's is, and a machine refusing it is the machine's fault."""
+    from unittest.mock import MagicMock, patch
+
+    from src.processing.workers.captions.base import CaptionError
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.shared.producers import effective_settings
+
+    settings = effective_settings("lumiverb.video.description")
+    p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "qwen", settings=settings)
+    reply = MagicMock(ok=True)
+    reply.json.return_value = {"choices": [{"message": {
+        "content": '{"description": "Waves, then a walk at sunset.", "tags": ["beach", "sunset"]}'}}]}
+    with patch("requests.post", return_value=reply) as post:
+        assert p.describe_text("1. (0:00) Waves.\n2. (0:05) A walk at sunset.") == {
+            "description": "Waves, then a walk at sunset.", "tags": ["beach", "sunset"]}
+    body = post.call_args.kwargs["json"]
+    [message] = body["messages"]
+    assert message["content"] == [
+        {"type": "text", "text": settings["prompt"] + "\n\n1. (0:00) Waves.\n2. (0:05) A walk at sunset."}]
+    assert (body["max_tokens"], body["temperature"]) == (900, 0.2)
+
+    refused = MagicMock(ok=False, status_code=503, text="overloaded")
+    refused.raise_for_status.side_effect = __import__("requests").HTTPError(response=refused)
+    with patch("requests.post", return_value=refused), patch.object(p, "_sleep_with_countdown"), \
+            pytest.raises(CaptionError) as caught:
+        p.describe_text("1. (0:00) Waves.")
+    assert caught.value.endpoint_fault
+

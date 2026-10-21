@@ -258,13 +258,20 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         except Exception as e:  # noqa: BLE001
             raise CaptionError(f"Couldn't read the image: {e}", endpoint_fault=False) from e
 
-        prompt = self._vision["prompt"]
+        return self._described(proxy_path.name, [{"type": "image_url", "image_url": {"url": data_url}},
+                                                 {"type": "text", "text": self._vision["prompt"]}])
 
+    def describe_text(self, text: str) -> dict:
+        """{"description", "tags"} from text alone (a video's scenes, in order): the prompt, then the text.
+        Raises CaptionError as describe() does."""
+        return self._described("text", [{"type": "text", "text": f"{self._vision['prompt']}\n\n{text}"}])
+
+    def _described(self, what: str, content: list[dict]) -> dict:
         last_error: Exception | None = None
         last_raw: str = ""
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
-                raw = self._chat(data_url, prompt, self._vision)
+                raw = self._ask(content, self._vision)
                 last_raw = raw
                 return self._parse_description(raw)
             except Exception as e:  # noqa: BLE001
@@ -279,13 +286,13 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                         sleep_time = max(0.1, delay + jitter)
                     logger.info(
                         "Vision retry %d/%d for %s (sleeping %.1fs): %s",
-                        attempt, self.MAX_ATTEMPTS, proxy_path.name, sleep_time, e,
+                        attempt, self.MAX_ATTEMPTS, what, sleep_time, e,
                     )
                     self._sleep_with_countdown(sleep_time)
                     continue
                 logger.warning(
                     "OpenAI-compatible caption failed for %s after %d attempts: %s\n  Last raw response: %s",
-                    proxy_path, self.MAX_ATTEMPTS, e, last_raw[:500] if last_raw else "(empty)",
+                    what, self.MAX_ATTEMPTS, e, last_raw[:500] if last_raw else "(empty)",
                 )
                 raise CaptionError(str(e) or type(e).__name__, endpoint_fault=is_endpoint_fault(e)) from e
 
@@ -477,17 +484,14 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         return out
 
     def _chat(self, data_url: str, prompt: str, settings: dict) -> str:
+        return self._ask([{"type": "image_url", "image_url": {"url": data_url}}, {"type": "text", "text": prompt}],
+                         settings)
+
+    def _ask(self, content: list[dict], settings: dict) -> str:
+        """One request: the content (an image and the prompt, or text alone), the reply's text."""
         payload = {
             "model": self._model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                        {"type": "text", "text": prompt},
-                    ],
-                }
-            ],
+            "messages": [{"role": "user", "content": content}],
             "max_tokens": int(settings["max_tokens"]),
             "temperature": float(settings["temperature"]),
         }

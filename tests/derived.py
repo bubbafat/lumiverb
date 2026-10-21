@@ -20,6 +20,13 @@ ITEM = {
 BATCH = {"model_id"}  # ocr's: the reading model, for the whole batch
 
 
+def describer(client: Any, clip: str, headers: dict) -> str:
+    """The producer that describes a clip: a photo's, or a video's (written from its scenes': batch-vision
+    takes each kind under its own)."""
+    media = client.get(f"/v1/assets/{clip}", headers=headers).json()["media_type"]
+    return "lumiverb.video.description" if media == "video" else "lumiverb.image.description"
+
+
 def saved(client: Any, kind: str, clip: str, *, json: dict, **kwargs: Any):
     """POST /v1/assets/batch-<kind> for one clip; the response as it is
     ({"updated", "skipped"}: a clip that isn't there, or is in the trash, is
