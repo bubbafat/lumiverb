@@ -7,13 +7,14 @@ VISION_PROMPT = (
     "tags. Respond only with valid JSON in this exact format:\n"
     '{"description": "...", "tags": ["tag1", "tag2", ...]}'
 )
-# A video's own description, written from its scenes' (VIDEO_SCENES is what follows it: the scenes in order).
+# A video's own description, written from its scenes' (they follow it, in order: video_description.work.scenes_text).
 VIDEO_PROMPT = (
     "These are the scenes of one video, in order, each described from a single frame, with when it starts. "
-    "Describe the whole video as someone watching it would: what happens and in what order, where it is, who "
-    "or what is in it, and the mood. Be specific and vivid, but say only what the scenes support. Write 2 "
-    "sentences for a short, simple video and up to 8 for a long one with more going on. Don't mention "
-    "scenes, frames or times. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact "
+    "Say plainly what the video shows, as a careful viewer would note it: where it is, who or what is in it, "
+    "and what happens, in order. Use only what the scenes say. No praise, feelings or sales words "
+    "(luxurious, idyllic, breathtaking, evokes), and no guessing at what isn't shown. Short sentences: 2 for a "
+    "short, simple video, up to 8 for a long one with more going on, never padding. Don't mention scenes, "
+    "frames or times. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact "
     "format:\n"
     '{"description": "...", "tags": ["tag1", "tag2", ...]}'
 )

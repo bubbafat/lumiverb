@@ -1033,9 +1033,10 @@ def test_a_videos_description_is_written_from_its_scenes_in_order(acct) -> None:
         "ast_1", "A day at the beach.", ["beach"], SHA)
     used = acct.producers.with_model("lumiverb.video.description", acct.vision.model)
     assert lineage == acct.producers.lineage("lumiverb.video.description", None, used=used)
-    # Its own settings on the machines: the video's prompt, up to 8 sentences.
+    # Its own settings on the machines: the video's prompt, plain, from the scenes alone, up to 8 sentences.
     assert acct.vision.provider.call_args.kwargs["settings"] == used
-    assert "up to 8" in used["prompt"]
+    assert "up to 8" in used["prompt"] and "Use only what the scenes say" in used["prompt"]
+    assert "No praise, feelings or sales words" in used["prompt"]
 
 
 def test_a_video_whose_scenes_arent_all_described_waits(acct) -> None:
