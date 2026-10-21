@@ -48,7 +48,9 @@ sudo bash scripts/deploy-web.sh --domain try.lumiverb.io --api-upstream http://1
 ```
 
 certbot gets the certificate and redirects HTTP to HTTPS; ufw lets in 22,
-80 and 443.
+80 and 443. Let's Encrypt is asked only once the domain points at this
+machine: until then the script says which record to add, at what address,
+and the site serves HTTP until it's run again.
 
 ### 4. The tunnel, and the server's limits in nginx
 
