@@ -80,6 +80,46 @@ describe("FilterBar for a public page's visitor", () => {
   });
 });
 
+describe("FilterBar's Photos nearby", () => {
+  function barNear(near: string) {
+    const onSetFilter = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <FilterBar filters={[{ type: "near", value: near }]} sort="taken_at" dir="desc" onSetFilter={onSetFilter}
+            onSetSort={() => {}} onClearAll={() => {}} facets={facets} isPublic={false} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return onSetFilter;
+  }
+
+  it("changes how far it looks on its chip, the filters closed, and clears it there", () => {
+    try {
+      localStorage.setItem("lv_show_filters", "false");
+    } catch {
+      /* ignore */
+    }
+    const onSetFilter = barNear("40.6892,-74.0445,1");
+    const distance = screen.getByLabelText("Distance") as HTMLSelectElement;
+    expect(distance.value).toBe("1");
+    expect(Array.from(distance.options).map((o) => o.text)).toContain("500 km");
+    fireEvent.change(distance, { target: { value: "25" } });
+    expect(onSetFilter).toHaveBeenCalledWith("near", "40.6892,-74.0445,25");
+    fireEvent.click(screen.getByRole("button", { name: "Clear distance" }));
+    expect(onSetFilter).toHaveBeenCalledWith("near", null);
+  });
+
+  it("shows a distance from a link that isn't one of its own, in order", () => {
+    barNear("40.6892,-74.0445,3");
+    const distance = screen.getByLabelText("Distance") as HTMLSelectElement;
+    expect(distance.value).toBe("3");
+    const shown = Array.from(distance.options).map((o) => o.value);
+    expect(shown.indexOf("3")).toBe(shown.indexOf("2") + 1);
+  });
+});
+
 describe("FilterBar saving a search", () => {
   function barWith(filters: { type: string; value: string }[], onSaveAsProject = vi.fn(), folder?: string) {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

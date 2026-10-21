@@ -853,7 +853,7 @@ class NearLocation(LeafFilter):
         return ValueKind.LOCATION
 
     def label(self) -> str:
-        return f"Within {self.radius_km}km"
+        return f"Within {self.radius_km:g} km"
 
     def to_sql(self, params: dict, counter: list[int]) -> str:
         lat_delta = self.radius_km / 111.0
@@ -892,7 +892,15 @@ class NearLocation(LeafFilter):
         lat = float(parts[0])
         lon = float(parts[1])
         radius = float(parts[2]) if len(parts) > 2 else 1.0
+        if not all(math.isfinite(v) for v in (lat, lon, radius)) or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            raise ValueError(f"NearLocation needs a place on the earth: {raw}")
+        if not 0 < radius <= NEAR_MAX_KM:
+            raise ValueError(f"NearLocation's radius is more than 0 and at most {NEAR_MAX_KM:g} km: {raw}")
         return cls(lat=lat, lon=lon, radius_km=radius)
+
+
+# Half the earth's circumference: any farther is everywhere.
+NEAR_MAX_KM = 20_000.0
 
 
 @dataclass(frozen=True)

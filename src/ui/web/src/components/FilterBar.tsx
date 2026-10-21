@@ -558,7 +558,14 @@ export function FilterBar({
                 return <Chiclet key={f.type} label={formatDateChiclet(dateVal.from, dateVal.to)} onClear={clearDate} />;
               }
               if (f.type === "near" && nearVal) {
-                return <Chiclet key={f.type} label={`Within ${nearVal.radius}km`} onClear={() => onSetFilter("near", null)} />;
+                return (
+                  <NearChiclet
+                    key={f.type}
+                    radius={nearVal.radius}
+                    onRadius={(r) => onSetFilter("near", composeNear(nearVal.lat, nearVal.lon, r))}
+                    onClear={() => onSetFilter("near", null)}
+                  />
+                );
               }
               return (
                 <Chiclet
@@ -791,24 +798,6 @@ export function FilterBar({
             />
           )}
 
-          {/* Geo-proximity radius selector (only when near filter is set) */}
-          {nearVal && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-gray-400">Radius:</span>
-              <select
-                value={nearVal.radius}
-                onChange={(e) => onSetFilter("near", composeNear(nearVal.lat, nearVal.lon, e.target.value))}
-                className={selectCls}
-              >
-                {[0.5, 1, 5, 10, 50].map((r) => (
-                  <option key={r} value={String(r)}>
-                    {r}km
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
           {/* Rating filters */}
           {!isPublic && (
           <div className="flex flex-wrap items-center gap-3">
@@ -955,6 +944,40 @@ function FilterMenu({
         </div>
       )}
     </div>
+  );
+}
+
+/** How far Photos nearby looks, in km; one in the link that isn't here is shown as it is. */
+const NEAR_RADII = ["0.2", "0.5", "1", "2", "5", "10", "25", "50", "100", "500"];
+
+/** Photos nearby, on the chip itself: how far it looks, changed in place, and clearing it. */
+function NearChiclet({ radius, onRadius, onClear }: {
+  radius: string;
+  onRadius: (radius: string) => void;
+  onClear: () => void;
+}) {
+  const radii = NEAR_RADII.includes(radius) ? NEAR_RADII : [...NEAR_RADII, radius].sort((a, b) => Number(a) - Number(b));
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-gray-700 py-0.5 pl-3 pr-1 text-sm text-gray-200">
+      <label htmlFor="near-radius">Within</label>
+      <select
+        id="near-radius"
+        aria-label="Distance"
+        value={radius}
+        onChange={(e) => onRadius(e.target.value)}
+        className="rounded-full border-0 bg-gray-600 py-0.5 pl-2 pr-6 text-sm text-gray-100 focus:ring-1 focus:ring-indigo-500"
+      >
+        {radii.map((r) => (
+          <option key={r} value={r}>
+            {r} km
+          </option>
+        ))}
+      </select>
+      <button type="button" onClick={onClear} aria-label="Clear distance"
+              className="rounded-full px-1.5 text-gray-400 hover:text-gray-100">
+        x
+      </button>
+    </span>
   );
 }
 
