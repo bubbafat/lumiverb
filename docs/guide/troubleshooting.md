@@ -23,6 +23,8 @@ Under **Libraries**, each library says whether its files can be reached: Reachab
 
 Server admins see **Admin › Logs**: newest first, filtered by part (API, Processing, Plug-ins and more), with **Search**, **Problems only**, **Follow**, and **Download these lines** to send to someone helping you. On a server with more than one account, it shows only on the machine Lumiverb runs on.
 
+When a page says something like "Load failed" on a phone, the request never reached Lumiverb, so the server saw nothing. The web app remembers each one and sends it once a request gets through. It shows in the log under API as "web: … couldn't reach the server for …", with who, when, the page and their browser. Search for **web:** to find them.
+
 On a Mac the log is one file, kept to the latest 50 MB:
 
 ```bash

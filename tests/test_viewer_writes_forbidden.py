@@ -27,6 +27,7 @@ from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _ru
 # reads sent as POST (a body too big for a query string).
 VIEWER_WRITABLE = {
     ("POST", "/v1/me/password"),  # signed in only, never with a key (tests/test_change_password.py)
+    ("POST", "/v1/me/failed-requests"),  # what their browser couldn't load, for the log (tests/test_failed_requests.py)
     ("PUT", "/v1/assets/{asset_id}/rating"),
     ("PUT", "/v1/assets/ratings"),
     ("POST", "/v1/assets/ratings/lookup"),

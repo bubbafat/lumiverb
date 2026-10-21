@@ -33,6 +33,7 @@ import type {
   RatingLookupResponse,
   BatchRatingResponse,
 } from "./types";
+import { noteFailed, sendFailed } from "./failedRequests";
 
 export class ApiError extends Error {
   constructor(
@@ -149,14 +150,24 @@ type AuthFetchInit = Omit<RequestInit, "headers"> & { headers?: Record<string, s
  * 409 decision or a 404 after a refresh reaches the caller like any other.
  * It signs out only when the refresh fails or the retry is 401 again. A
  * refresh that fails after another tab stored a new token retries with that
- * token instead of signing every tab out.
+ * token instead of signing every tab out. A request that gets no answer at all
+ * is noted, and said to the server once one gets through (failedRequests.ts).
  */
 export async function authFetch(path: string, init: AuthFetchInit = {}): Promise<Response> {
-  const send = (token: string) =>
-    fetch(`/v1${path}`, {
-      ...init,
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init.headers },
-    });
+  const send = async (token: string) => {
+    let res: Response;
+    try {
+      res = await fetch(`/v1${path}`, {
+        ...init,
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init.headers },
+      });
+    } catch (err) {
+      noteFailed(init.method ?? "GET", path, err);
+      throw err;
+    }
+    sendFailed(getApiKey());
+    return res;
+  };
   const used = getApiKey();
   let res = await send(used);
   if (res.status !== 401) return res;
