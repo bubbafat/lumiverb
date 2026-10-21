@@ -216,9 +216,36 @@ def test_the_command_line_makes_the_same_admin(control, tmp_path, monkeypatch, c
     assert capsys.readouterr().err.strip() == "✗ This Lumiverb is set up already. Log in instead."
 
 
-def test_the_command_line_asks_twice_and_makes_nothing_on_a_mismatch(control, tmp_path, monkeypatch, capsys):
-    typed = iter([PASSWORD, PASSWORD + "!"])
+def test_the_command_line_says_the_rule_first_and_asks_again(control, tmp_path, monkeypatch, capsys):
+    typed = iter(["too short", PASSWORD, PASSWORD + "!", PASSWORD, PASSWORD])
+    asked = []
+
+    def getpass(prompt: str) -> str:
+        asked.append((prompt, capsys.readouterr().err.splitlines()))  # what was said before each question
+        return next(typed)
+
+    monkeypatch.setattr(cli, "getpass", getpass)
+    assert cli.main(["setup", "--env", str(_env_file(tmp_path, control)), "--email", "a@example.com"]) == 0
+    assert asked == [
+        ("Password: ", ["At least 12 characters, at most 72."]),
+        ("Password: ", ["✗ Use 12 to 72 characters"]),  # checked as it's typed, before it's asked for again
+        ("Password again: ", []),
+        ("Password: ", ["✗ The passwords don't match"]),
+        ("Password again: ", []),
+    ]
+    assert [user.email for user in _rows(control, User)] == ["a@example.com"]
+
+
+def test_the_command_line_makes_nothing_after_three_tries(control, tmp_path, monkeypatch, capsys):
+    typed = iter([PASSWORD, PASSWORD + "!"] * 3)
     monkeypatch.setattr(cli, "getpass", lambda _prompt: next(typed))
     assert cli.main(["setup", "--env", str(_env_file(tmp_path, control)), "--email", "a@example.com"]) == 1
-    assert capsys.readouterr().err.strip() == "✗ The passwords don't match"
+    assert capsys.readouterr().err.splitlines()[1:] == ["✗ The passwords don't match"] * 3
+    assert _rows(control, User) == []
+
+
+def test_the_command_line_checks_the_email_before_asking_for_a_password(control, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "getpass", lambda _prompt: pytest.fail("nothing more may be asked"))
+    assert cli.main(["setup", "--env", str(_env_file(tmp_path, control)), "--email", "robert"]) == 1
+    assert capsys.readouterr().err.strip() == "✗ Enter your email address."
     assert _rows(control, User) == []
