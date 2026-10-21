@@ -222,6 +222,48 @@ describe("AiSection", () => {
     expect(await screen.findByText("Mac Studio")).toBeTruthy();
   });
 
+  it("offers where a machine is: each fills in its URL and name, and says what to know; a custom URL stays", async () => {
+    // The demo server, 10-21: each provider had a catch of its own (OpenAI's URL, Anthropic's models list, Gemini's
+    // names and thinking models).
+    const anthropic = "https://api.anthropic.com/v1";
+    offers = { [anthropic]: ["claude-haiku-4-5-20251001", "claude-opus-4-6"] };
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
+    const form = screen.getByRole("form", { name: "Add a machine" });
+    const where = within(form).getByLabelText("Where") as HTMLSelectElement;
+    expect(where.value).toBe("custom");
+    expect((within(form).getByLabelText("Endpoint URL") as HTMLInputElement).value).toBe("");
+    expect([...where.options].map((o) => o.text)).toEqual(["Custom URL", "Ollama on this computer",
+      "Ollama on another computer", "OpenAI", "Anthropic (Claude)", "Google Gemini"]);
+
+    fireEvent.change(where, { target: { value: "anthropic" } });
+    expect((within(form).getByLabelText("Endpoint URL") as HTMLInputElement).value).toBe(anthropic);
+    expect((within(form).getByLabelText("Name") as HTMLInputElement).value).toBe("Claude");
+    const about = within(form).getByRole("list", { name: "About Anthropic (Claude)" });
+    expect(about.textContent).toContain("Needs an API key: console.anthropic.com › API keys.");
+    expect(about.textContent).toContain("Works for descriptions & text: claude-haiku-4-5-20251001");
+
+    // Another choice replaces a name it filled in, never one typed; the URL stays editable.
+    fireEvent.change(where, { target: { value: "ollama" } });
+    expect((within(form).getByLabelText("Name") as HTMLInputElement).value).toBe("Ollama");
+    expect(within(form).getByRole("list", { name: "About Ollama on this computer" }).textContent).toContain(
+      "Needs no key.");
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Den PC" } });
+    fireEvent.change(where, { target: { value: "anthropic" } });
+    expect((within(form).getByLabelText("Name") as HTMLInputElement).value).toBe("Den PC");
+    fireEvent.change(within(form).getByLabelText("API key"), { target: { value: "sk-ant-x" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
+    expect((await within(form).findByText(/Connected: offers/)).textContent).toContain("claude-haiku-4-5-20251001");
+    expect(within(form).queryByText(/doesn't list/)).toBeNull();
+  });
+
+  it("an edited machine has no Where: its URL is its own", async () => {
+    machines = [machine({ name: "Gaming PC" })];
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Gaming PC" }));
+    expect(within(screen.getByRole("form", { name: "Edit Gaming PC" })).queryByLabelText("Where")).toBeNull();
+  });
+
   it("marks a machine as sharing the GPU video work runs on", async () => {
     machines = [machine({ name: "Gaming PC" })];
     offers = { [STUDIO]: [QWEN] };

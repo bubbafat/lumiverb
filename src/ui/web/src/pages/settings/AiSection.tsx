@@ -15,6 +15,7 @@ import {
   type AiSettings,
   type MachineFields,
 } from "../../api/client";
+import { AI_PRESETS, CUSTOM, presetOf } from "../../lib/aiPresets";
 import { OLLAMA_GUIDE } from "../../lib/guides";
 
 const inputClass =
@@ -281,6 +282,9 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
   // What it offered at the last Connect; null until connected (again).
   const [models, setModels] = useState<string[] | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  // Where a new machine is (lib/aiPresets.ts): it fills in the URL and a name, and says what to know.
+  const [kind, setKind] = useState(CUSTOM);
+  const preset = presetOf(kind);
 
   const sameUrl = !!machine && url.trim().replace(/\/+$/, "") === machine.api_url;
   // A key typed now; "" to save none; undefined keeps the saved one.
@@ -350,6 +354,44 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
       }}
     >
       <p className="font-medium text-gray-100">{title}</p>
+      {!machine && (
+        <div className="space-y-1">
+          <label className="block space-y-1 text-sm text-gray-300">
+            <span>Where</span>
+            <select
+              aria-label="Where"
+              value={kind}
+              className={inputClass}
+              onChange={(e) => {
+                const next = presetOf(e.target.value);
+                setKind(next.id);
+                if (next.id !== CUSTOM) {
+                  setUrl(next.url);
+                  if (!name.trim() || AI_PRESETS.some((p) => p.name && p.name === name.trim())) setName(next.name);
+                }
+                edited();
+              }}
+            >
+              {AI_PRESETS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {kind !== CUSTOM && (
+            <ul aria-label={`About ${preset.label}`} className="space-y-0.5 text-xs text-gray-400">
+              <li>{preset.keyFrom ? `Needs an API key: ${preset.keyFrom}.` : "Needs no key."}</li>
+              {preset.model && (
+                <li>
+                  Works for descriptions &amp; text: {preset.model} (chosen under Models once it&apos;s added).
+                </li>
+              )}
+              {preset.note && <li>{preset.note}</li>}
+            </ul>
+          )}
+        </div>
+      )}
       <label className="block space-y-1 text-sm text-gray-300">
         <span>Name</span>
         <input aria-label="Name" placeholder="Gaming PC" value={name} className={inputClass} onChange={(e) => setName(e.target.value)} />
@@ -417,6 +459,9 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
               <span role="status" className="text-sm text-emerald-300">
                 Connected: offers {models.join(", ")}
               </span>
+            )}
+            {models && preset.model && !models.includes(preset.model) && (
+              <span className="text-sm text-amber-300">It doesn&apos;t list {preset.model}: pick another under Models.</span>
             )}
             {!models && moved && <span className="text-sm text-gray-500">Connect to check it before saving.</span>}
           </div>
