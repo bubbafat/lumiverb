@@ -17,6 +17,8 @@ import LibraryPreviewsSection from "./LibraryPreviewsSection";
 import LibraryReaderSection from "./LibraryReaderSection";
 import LibraryScansSection from "./LibraryScansSection";
 import { ProjectUsageList, clipCount } from "../components/ProjectUsageList";
+import { editsIt, roleOn } from "../lib/libraryRoles";
+import { useRole } from "../lib/useCanEdit";
 
 /* ---------- pattern warning helper ---------- */
 
@@ -300,6 +302,9 @@ export default function LibrarySettingsPage() {
   });
 
   const library = libraries?.find((l) => l.library_id === libraryId);
+  // Its path filters are its editors' and admins', to see and to change (require_editor): anyone else sees the
+  // page without them, never their error (try.lumiverb.io, 10-21).
+  const edits = editsIt(roleOn(library, useRole()));
 
   const {
     data: filters,
@@ -308,7 +313,7 @@ export default function LibrarySettingsPage() {
   } = useQuery({
     queryKey: ["library-filters", libraryId],
     queryFn: () => getLibraryFilters(libraryId!),
-    enabled: !!libraryId,
+    enabled: !!libraryId && edits,
   });
 
   const invalidateAll = () => {
@@ -374,6 +379,7 @@ export default function LibrarySettingsPage() {
           )}
         </div>
 
+        {edits && (
         <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-3">
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-gray-100">
@@ -466,6 +472,7 @@ export default function LibrarySettingsPage() {
             </div>
           )}
         </div>
+        )}
 
         {libraryId && <LibraryScansSection libraryId={libraryId} />}
 

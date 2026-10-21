@@ -351,10 +351,13 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAler
                       libraryId={libraryId}
                       activePath={activePath}
                       onNavigate={onNavigate}
-                      onExcludeFolder={(path) =>
-                        navigate(
-                          `/libraries/${libraryId}/settings?tab=filters&exclude=${encodeURIComponent(path + "/**")}`,
-                        )
+                      onExcludeFolder={
+                        canEdit
+                          ? (path) =>
+                              navigate(
+                                `/libraries/${libraryId}/settings?tab=filters&exclude=${encodeURIComponent(path + "/**")}`,
+                              )
+                          : undefined
                       }
                       onArchiveFolder={
                         canEdit ? (path, count) => folderActions.archiveFolder(libraryId, path, count) : undefined
