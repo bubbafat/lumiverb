@@ -40,6 +40,8 @@ import contextlib
 import io
 import json
 import logging
+import os
+import pwd
 import threading
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping
@@ -132,6 +134,9 @@ class ScanStats:
     failed_seen: dict[str, tuple[int, str | None]] = field(default_factory=dict)
     # Files left for their retry, unchanged since they failed (run_scan's waiting).
     waiting_paths: list[str] = field(default_factory=list)
+    # Files the system wouldn't let this machine read (their permissions): failed too, but said apart, as they're
+    # a person's to fix, and tried again at each scan (not left for a retry: trying costs only a refusal).
+    unreadable: list[str] = field(default_factory=list)
     # Clips a person removed, brought back into sight (force_add).
     restored: int = 0
 
@@ -269,6 +274,7 @@ def _scan_one(
     previews = previews or Previews()
     try:
         with originals.local_file(rel_path) as source_path:
+            _readable(source_path)
             # 1. Generate 2048px JPEG proxy
             jpeg_bytes, width_orig, height_orig = _generate_proxy_bytes(
                 source_path, jpeg_quality=previews.proxy["jpeg_quality"])
@@ -318,6 +324,12 @@ def _scan_one(
             stats.failed += 1
             stats.failed_paths.append(rel_path)
         progress.advance(task_id)
+    except PermissionError:  # its permissions: said once for the scan, with the others
+        _refused(rel_path, stats)
+        with stats.lock:
+            stats.failed += 1
+            stats.failed_paths.append(rel_path)
+        progress.advance(task_id)
     except Exception as e:
         logger.exception("Failed to scan %s: %s", rel_path, e)
         with stats.lock:
@@ -346,6 +358,7 @@ def _scan_one_video(
     previews = previews or Previews()
     try:
         with originals.local_file(rel_path) as source_path:
+            _readable(source_path)
             # 1. Extract poster frame as JPEG proxy
             jpeg_bytes, width_orig, height_orig = _extract_video_poster(
                 source_path, jpeg_quality=previews.proxy["jpeg_quality"])
@@ -409,6 +422,12 @@ def _scan_one_video(
 
     except UnsafeRelPathError:
         logger.warning("Skipping %s: escapes library root", rel_path)
+        with stats.lock:
+            stats.failed += 1
+            stats.failed_paths.append(rel_path)
+        progress.advance(task_id)
+    except PermissionError:  # its permissions: said once for the scan, with the others
+        _refused(rel_path, stats)
         with stats.lock:
             stats.failed += 1
             stats.failed_paths.append(rel_path)
@@ -635,22 +654,26 @@ def _plan(client: ApiClient, scan_id: str, unlisted: list[str], console: Console
     return counts, plan
 
 
-def _hashes_of(originals: Originals, rel_path: str, whole_too: bool = False) -> tuple[str, str | None] | None:
+def _hashes_of(originals: Originals, rel_path: str, whole_too: bool = False
+               ) -> tuple[str, str | None] | Exception:
     """The file's content hash, and the whole file's "sha256" when asked for
-    and that isn't it (a file over 64 MiB, its plan's legacy), or None when
-    it can't be read."""
+    and that isn't it (a file over 64 MiB, its plan's legacy), or why it
+    can't be read."""
     try:
         with originals.local_file(rel_path) as path:
             found = content_hash(path)
             return found, whole_file_sha256(path) if whole_too and sampled(found) else None
+    except PermissionError as exc:  # said once for the scan, with the others (run_scan's unreadable)
+        logger.debug("Can't read %s: %s", rel_path, exc)
+        return exc
     except (OSError, UnsafeRelPathError) as exc:
         logger.warning("Can't read %s: %s", rel_path, exc)
-        return None
+        return exc
 
 
 def _hashed(originals: Originals, files: list[dict], concurrency: int
-            ) -> Iterator[tuple[dict, tuple[str, str | None] | None]]:
-    """Each file with its hashes (_hashes_of; None: it couldn't be read), in the
+            ) -> Iterator[tuple[dict, tuple[str, str | None] | Exception]]:
+    """Each file with its hashes (_hashes_of; an error: it couldn't be read), in the
     order given, read `concurrency` at a time and never more than
     concurrency * 2 waiting."""
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="hash") as pool:
@@ -666,20 +689,55 @@ def _hashed(originals: Originals, files: list[dict], concurrency: int
             yield done, fut.result()
 
 
-def _unread(f: dict, work: _Work, stats: ScanStats) -> None:
+def _unread(f: dict, work: _Work, stats: ScanStats, refused: bool = False) -> None:
     """A file the plan asked about that couldn't be read: it was found, so
     it's neither changed nor gone, and no hash is sent. Counted as before the
     server compared: unchanged where a clip is, skipped where a person
-    removed a file, else tried as new (failing, it's tried again later)."""
+    removed a file, else tried as new (failing, it's tried again later).
+    refused: the system wouldn't let it be read (its permissions): it's
+    unreadable, and a new one fails now, as reading it to upload would."""
     planned = f["_plan"]
+    if refused and planned["reason"] != "removed":
+        _refused(f["rel_path"], stats)
     if planned["asset_id"]:
         f["asset_id"] = planned["asset_id"]
         work.unchanged.append(f)
         stats.unchanged += 1
     elif planned["reason"] == "removed":
         work.skipped += 1
+    elif refused:
+        with stats.lock:
+            stats.failed += 1
+            stats.failed_paths.append(f["rel_path"])
     else:
         work.new.append(f)
+
+
+def _readable(path: str | os.PathLike) -> None:
+    """PermissionError when this machine isn't allowed to read the file: said so, before a decoder that opens it
+    itself (libvips, ffmpeg) fails with its own words for it."""
+    with open(path, "rb"):
+        pass
+
+
+def _refused(rel_path: str, stats: ScanStats) -> None:
+    with stats.lock:
+        if rel_path not in stats.unreadable:
+            stats.unreadable.append(rel_path)
+
+
+def reader_named() -> str:
+    """Who this machine reads files as, for a person to give them to: "the lumiverb user"."""
+    try:
+        return f"the {pwd.getpwuid(os.geteuid()).pw_name} user"
+    except KeyError:
+        return f"user {os.geteuid()}"
+
+
+def some_of(paths: list[str], shown: int = 5) -> str:
+    """A few of these paths, and how many more."""
+    more = len(paths) - shown
+    return ", ".join(paths[:shown]) + (f" and {more:,} more" if more > 0 else "")
 
 
 def _take(f: dict, d: dict, work: _Work, stats: ScanStats) -> None:
@@ -755,8 +813,8 @@ def _hash_and_decide(
         tid = progress.add_task("Hashing", total=len(to_hash))
         for f, hashed in hashes:
             progress.advance(tid)
-            if hashed is None:
-                _unread(f, work, stats)
+            if isinstance(hashed, Exception):
+                _unread(f, work, stats, refused=isinstance(hashed, PermissionError))
                 continue
             f["content_hash"], f["previous_hash"] = hashed
             batch.append(f)
@@ -1263,7 +1321,15 @@ def _run(
     proxy_cache = ProxyCache(client=client) if cache_previews else None
     _upload(client, library_id, originals, work, proxy_cache, stats, concurrency=concurrency, console=console,
             to_upload=to_upload, previews=previews)
-    stats.failed_seen = {p: _as_seen(on_disk[p]) for p in stats.failed_paths if p in on_disk}
+    # One it couldn't read isn't left for its retry: trying it costs only a refusal, and its permissions changing
+    # (made readable) changes neither its size nor its time.
+    stats.failed_seen = {p: _as_seen(on_disk[p]) for p in stats.failed_paths
+                         if p in on_disk and p not in stats.unreadable}
+    if stats.unreadable:
+        stats.unreadable.sort()
+        console.print(f"[yellow]{len(stats.unreadable):,} file(s) can't be read: {reader_named()} isn't allowed to "
+                      f"read {escape(some_of(stats.unreadable))}. Make them readable and the next scan takes them in."
+                      "[/yellow]")
     if proxy_cache is not None:
         _populate_cache_for_unchanged(client, work.unchanged, proxy_cache, stats, console)
     return stats

@@ -18,6 +18,7 @@ export const WAIT_REASONS = [
   "retry_later",
   "given_up",
   "scan_failing",
+  "scan_unreadable",
 ] as const;
 
 export type WaitReason = (typeof WAIT_REASONS)[number];
@@ -127,6 +128,15 @@ export const WAIT_SENTENCES: Record<WaitReason, (w: ProducerWait, c: WaitContext
     const next = w.next_try ? `; next try at ${c.when(w.next_try)}` : "";
     return `Scans of ${w.library_name || "a library"} keep failing${why}${next}.`;
   },
+  scan_unreadable: (w) => {
+    const one = w.clips === 1;
+    const shown = (w.paths ?? []).slice(0, 5);
+    const more = w.clips - shown.length;
+    const which = shown.length ? ` (${shown.join(", ")}${more > 0 ? ` and ${n(more)} more` : ""})` : "";
+    return `${n(w.clips)} ${one ? "file" : "files"} in ${w.library_name || "a library"} can't be read: `
+      + `${w.reader || "Lumiverb"} isn't allowed to read ${one ? "it" : "them"}${which}. `
+      + `Make ${one ? "it" : "them"} readable and the next scan takes ${one ? "it" : "them"} in.`;
+  },
 };
 
 /** The sentence for a wait; a reason this page doesn't know yet (a newer server) still says how many wait. */
@@ -140,6 +150,6 @@ export function waitSentence(w: ProducerWait, c: WaitContext): string {
 /** Reasons that stop its work until someone acts (shown amber); the rest only take a while. */
 export function waitIsLoud(w: ProducerWait): boolean {
   if (w.reason === "needs" || w.reason === "scan") return !!w.paused;
-  return ["paused", "scheduler", "ai_machines", "plugin_down", "storage", "new_version", "given_up", "scan_failing"]
-    .includes(w.reason);
+  return ["paused", "scheduler", "ai_machines", "plugin_down", "storage", "new_version", "given_up", "scan_failing",
+    "scan_unreadable"].includes(w.reason);
 }

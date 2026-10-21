@@ -131,3 +131,43 @@ def test_a_failing_file_waits_for_its_retry_unless_it_changed_and_is_never_taken
     assert lib.id not in state.retries
     clips = _in_sight(env, lib)
     assert clips["a.png"]["asset_id"] == a and "broken.jpg" in clips and _missing(env, lib) == {}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root may read any file")
+def test_a_file_it_isnt_allowed_to_read_is_said_tried_at_each_scan_and_taken_in_once_readable(
+        env, api, lib, read, caplog):
+    # The demo server, 10-21: 27 of 62 copied files were readable by their owner alone, and nothing said so but
+    # a traceback each in the log.
+    from src.processing.scan import reader_named
+    from src.server.scheduler.scans import unreadable_now
+
+    _image(lib, "a.png", 1)
+    _image(lib, "locked.png", 2)
+    locked = lib.root / "locked.png"
+    locked.chmod(0)
+    state = ScanState()
+    try:
+        with caplog.at_level("WARNING"):
+            _pass(api, lib, state, read, 0)
+        assert state.unreadable[lib.id] == ["locked.png"]
+        assert unreadable_now(state, [lib.id]) == [
+            {"library_id": lib.id, "files": 1, "paths": ["locked.png"], "reader": reader_named()}]
+        said = [r.getMessage() for r in caplog.records if "can't be read" in r.getMessage()]
+        assert said == [f"scheduler: in {lib.library['name']}, 1 file(s) can't be read: {reader_named()} isn't "
+                        "allowed to read locked.png. Make them readable and the next scan takes them in."], said
+        assert "Traceback" not in caplog.text and "Failed to scan" not in caplog.text
+        assert "a.png" in _in_sight(env, lib) and "locked.png" not in _in_sight(env, lib)
+
+        # Not left for its retry, as a broken file is: the next full scan tries it again (it costs a refusal), and
+        # it fails again, before its retry was due.
+        assert state.retries[lib.id].seen == {} and state.retries[lib.id].due == T + RETRY_FIRST_SEC
+        _pass(api, lib, state, read, 2)
+        assert state.retries[lib.id].delay == 2 * RETRY_FIRST_SEC
+        assert state.unreadable[lib.id] == ["locked.png"]
+
+        locked.chmod(0o644)  # made readable: its size and time are as they were
+        assert "locked.png" in _pass(api, lib, state, read, 4)
+        assert lib.id not in state.unreadable and unreadable_now(state, [lib.id]) == []
+        assert "locked.png" in _in_sight(env, lib) and lib.id not in state.retries
+    finally:
+        locked.chmod(0o644)

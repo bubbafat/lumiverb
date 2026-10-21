@@ -191,7 +191,8 @@ class Harness:
     record what's handed out. A runner made `real` runs the real runner. Its
     scan job scans nothing until a gate gives it a library (scan_library):
     then the real scan pass, whose scan of that library records it (scanned)
-    or fails (scan_error)."""
+    or fails (scan_error), finding the files it's told it can't read
+    (unreadable; clean, the scans that found none)."""
 
     def __init__(self, tenant_id: str, library_id: str, root: Path) -> None:
         from src.producers import pools
@@ -207,6 +208,8 @@ class Harness:
         self.scan_library: dict | None = None
         self.scan_error: Exception | None = None
         self.scanned: list[str] = []
+        self.unreadable: list[str] = []
+        self.clean: list[str] = []
         self.plugins_said: dict | None = {}  # what the plug-in runner says of each plug-in
         self._lock = threading.Lock()
 
@@ -237,7 +240,11 @@ class Harness:
             self.scanned.append(library["library_id"])
         if self.scan_error is not None:
             raise self.scan_error
-        return ScanStats()
+        if not self.unreadable:
+            with self._lock:
+                self.clean.append(library["library_id"])
+        return ScanStats(failed=len(self.unreadable), failed_paths=list(self.unreadable),
+                         unreadable=list(self.unreadable))
 
     def _runner(self, base: str) -> Callable:
         def run_(acct, job):
@@ -472,6 +479,22 @@ def _scanned(case: Case) -> bool:
     return case.clip in case.h.scanned
 
 
+def _hold_scan_unreadable(case: Case) -> None:
+    """A file in the library this machine isn't allowed to read (its permissions): each scan finds it so."""
+    (case.root / "a.jpg").write_bytes(b"x")  # its drive has something on it: reachable
+    case.h.acct.client.get.return_value.json.return_value = {"changes": [], "truncated": False}
+    case.h.scan_library = {"library_id": case.h.library_id, "name": "Gate_scan_unreadable", "root_path": str(case.root)}
+    case.h.unreadable = ["a.jpg"]
+
+
+def _lift_scan_unreadable(case: Case) -> None:
+    case.h.unreadable = []  # made readable: the next scan takes it in
+
+
+def _read_all(case: Case) -> bool:
+    return case.clip in case.h.clean
+
+
 def _scans_row(case: Case) -> dict[str, dict]:
     """The library's scans' waits (GET /v1/producers/queue's libraries), by reason."""
     client, headers, library_id, *_ = case.lib
@@ -531,6 +554,9 @@ GATES: dict[str, Gate] = {
     # The Scans row's: a library's scan, through the real scan pass and its back-off.
     "scan_failing": Gate("scans", _hold_scan_failing, _lift_scan_failing, clip=lambda lib: lib[2],
                          ran=_scanned, said=_scans_row, clips=False),
+    # The Scans row's too: files the scan isn't allowed to read, until they're made readable.
+    "scan_unreadable": Gate("scans", _hold_scan_unreadable, _lift_scan_unreadable, clip=lambda lib: lib[2],
+                            ran=_read_all, said=_scans_row),
 }
 
 

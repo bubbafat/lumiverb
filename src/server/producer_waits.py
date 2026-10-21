@@ -43,6 +43,7 @@ from src.shared.waits import (
     RETRY_LATER,
     SCAN,
     SCAN_FAILING,
+    SCAN_UNREADABLE,
     SCHEDULER,
     STORAGE,
 )
@@ -156,16 +157,22 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
 def scan_waits(session: Session, status: Any, within: list[str] | None = None) -> list[dict[str, Any]]:
     """Why libraries' scans wait, as each library's row says it (GET
     /v1/producers/queue): each library whose scans keep failing, with the
-    error, since when and the next try (SCAN_FAILING), while the scheduler
-    runs (only it knows; that it isn't running is said instead). within:
-    only these libraries."""
+    error, since when and the next try (SCAN_FAILING), and each with files
+    the scheduler isn't allowed to read, how many (clips), the first of them
+    and who it reads them as (SCAN_UNREADABLE), while the scheduler runs
+    (only it knows; that it isn't running is said instead). within: only
+    these libraries."""
     failing = [f for f in status.scans_failing if within is None or f.library_id in within]
-    if not status.live or not failing:
+    unreadable = [f for f in status.scans_unreadable if within is None or f.library_id in within]
+    if not status.live or not (failing or unreadable):
         return []
-    names = _library_names(session, [f.library_id for f in failing])
-    return [{"reason": SCAN_FAILING, "clips": 0, "library_id": f.library_id,
-             "library_name": names.get(f.library_id, ""), "message": f.error, "since": f.since,
-             "next_try": f.next_try} for f in failing]
+    names = _library_names(session, [f.library_id for f in (*failing, *unreadable)])
+    return [*({"reason": SCAN_FAILING, "clips": 0, "library_id": f.library_id,
+               "library_name": names.get(f.library_id, ""), "message": f.error, "since": f.since,
+               "next_try": f.next_try} for f in failing),
+            *({"reason": SCAN_UNREADABLE, "clips": f.files, "library_id": f.library_id,
+               "library_name": names.get(f.library_id, ""), "paths": f.paths, "reader": f.reader}
+              for f in unreadable)]
 
 
 def _read_by_devices(session: Session, library_id: str | None) -> dict[str, dict[str, Any]]:

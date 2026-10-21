@@ -469,9 +469,10 @@ class Scheduler:
         settings (no job goes until then), each AI job whose machines it can't
         use and why (ai_waits), each plug-in's work whose plug-in isn't
         running and why (plugin_waits), each kind whose listing failed
-        (unlisted), and each library whose scans keep failing (scans_failing:
-        tried again later)."""
-        from src.server.scheduler.scans import failing_now
+        (unlisted), each library whose scans keep failing (scans_failing:
+        tried again later), and each with files it isn't allowed to read
+        (scans_unreadable: a person's to fix)."""
+        from src.server.scheduler.scans import failing_now, unreadable_now
 
         return {
             "settings_ready": bool(acct.settings_ready),
@@ -480,6 +481,7 @@ class Scheduler:
             "plugin_waits": self._plugins_not_running(),
             "unlisted": dict(self._unlisted.get(tenant_id, {})),
             "scans_failing": failing_now(getattr(acct, "scan_state", None), acct.library_ids(storage=False)),
+            "scans_unreadable": unreadable_now(getattr(acct, "scan_state", None), acct.library_ids(storage=False)),
         }
 
     def _find_new_versions(self, tenant_id: str) -> None:
