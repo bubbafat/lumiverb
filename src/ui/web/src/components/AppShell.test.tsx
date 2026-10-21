@@ -70,13 +70,20 @@ describe("AppShell", () => {
     expect(screen.queryByRole("link", { name: "Projects" })).toBeNull();
   });
 
-  it("says nothing of the kind to a viewer signed in as themselves", async () => {
+  it("says nothing of the kind to a viewer signed in as themselves, and offers them no projects (an editor's)", async () => {
     vi.mocked(getCurrentUser).mockReset().mockResolvedValue(
       { user_id: "u3", email: "ana@example.com", role: "viewer", server_admin: false, demo: false });
     renderShell();
     await waitFor(() => expect(getCurrentUser).toHaveBeenCalled());
     await act(async () => {});
     expect(screen.queryByText(/trying Lumiverb as a viewer/)).toBeNull();
-    expect(screen.getByRole("link", { name: "Projects" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Projects" })).toBeNull();
+  });
+
+  it("offers projects to an editor", async () => {
+    vi.mocked(getCurrentUser).mockReset().mockResolvedValue(
+      { user_id: "u4", email: "eve@example.com", role: "editor", server_admin: false, demo: false });
+    renderShell();
+    expect(await screen.findByRole("link", { name: "Projects" })).toBeTruthy();
   });
 });

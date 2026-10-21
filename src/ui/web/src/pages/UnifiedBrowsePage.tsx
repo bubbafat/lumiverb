@@ -784,7 +784,7 @@ export default function UnifiedBrowsePage() {
           onClose={handleLightboxClose}
           onNavigate={handleLightboxNavigate}
           onDateClick={handleLightboxDateClick}
-          onAddToProject={demo ? undefined : (assetId) => setPickerAssetIds([assetId])}
+          onAddToProject={canEdit && !demo ? (assetId) => setPickerAssetIds([assetId]) : undefined}
           onArchive={canEdit ? (assetId) => {
             setLightboxAsset(null);
             void clipActions.archive([assetId]);
@@ -851,6 +851,11 @@ export default function UnifiedBrowsePage() {
               onChange={(color) => handleBatchRating({ color })}
               size="sm"
             />
+          </>
+        )}
+        {/* Projects are an editor's (the API's require_editor): a viewer rates, and that's all. */}
+        {canEdit && (
+          <>
             <div className="h-4 w-px bg-gray-700" />
             <button
               type="button"
@@ -859,10 +864,6 @@ export default function UnifiedBrowsePage() {
             >
               Add to project
             </button>
-          </>
-        )}
-        {canEdit && (
-          <>
             <button
               type="button"
               onClick={() => setLocationAssetIds(selection.toArray())}

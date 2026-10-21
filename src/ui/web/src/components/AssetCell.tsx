@@ -175,6 +175,9 @@ function AssetCellInner({
       {/* Selection checkbox — top-left */}
       {onSelect && (
         <div
+          role="checkbox"
+          aria-checked={selected}
+          aria-label="Select"
           className={`absolute left-1.5 top-1.5 z-10 flex h-5 w-5 items-center justify-center rounded border transition-all ${
             selected
               ? "border-indigo-500 bg-indigo-600"

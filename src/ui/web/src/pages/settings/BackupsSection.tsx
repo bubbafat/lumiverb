@@ -157,8 +157,8 @@ function Frame({ children }: { children: React.ReactNode }) {
       <div>
         <h2 className="text-lg font-semibold text-gray-100">Backups</h2>
         <p className="mt-1 text-sm text-gray-400">
-          Every night, every database: people, names, ratings, notes, projects and settings. Previews and the search
-          index aren&apos;t in them; they&apos;re made again.
+          Every night, every database: people, names, ratings, notes, projects, settings and search. Previews
+          aren&apos;t in them; they&apos;re made again from the originals.
         </p>
         <p className="mt-1 text-sm text-gray-400">
           Keep a copy of this server&apos;s env file with them: it holds the key that opens the AI machines&apos; keys

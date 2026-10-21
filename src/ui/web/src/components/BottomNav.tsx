@@ -95,7 +95,7 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
   }`;
 
 /** adminAlert: a yellow or red dot on Admin when the system needs a look (AppShell asks).
- * showAdmin: the Admin link, for admins only. showProjects: not while trying it as a viewer. */
+ * showAdmin: the Admin link, for admins only. showProjects: an editor's and an admin's only. */
 export function BottomNav({ adminAlert = null, showAdmin = false, showProjects = true }: {
   adminAlert?: "yellow" | "red" | null; showAdmin?: boolean; showProjects?: boolean;
 } = {}) {

@@ -95,8 +95,8 @@ More on the Linux install below, under [Running a Linux server](#running-a-linux
 ### Backups
 
 Every night Lumiverb backs up its databases: people, names, faces, ratings,
-notes, projects and settings, everything only it holds. Previews and the
-search index aren't in them; they're made again from the originals. A Mac
+notes, projects, settings and search, everything only it holds. Previews
+aren't in them; they're made again from the originals. A Mac
 asleep at 03:00 backs up when it wakes, and a Mac's service backs up before
 an upgrade's migrations. Settings › Backups shows them, makes one now, and
 chooses the folder (on the machine itself); a folder on another drive keeps
@@ -160,8 +160,8 @@ section says when it last checked in.
 
 ## AI descriptions with Ollama
 
-Most of Lumiverb needs no setup: previews, search by what's in a photo,
-similar photos, faces and people, video scenes and transcripts all run on
+Most of Lumiverb needs no setup: previews, similar photos and search by
+picture, faces and people, video scenes and transcripts all run on
 the server itself. Descriptions, tags and text in photos (signs, screens,
 documents) need an **AI machine**: a computer running
 [Ollama](https://ollama.com) with a vision model. Without one they wait;

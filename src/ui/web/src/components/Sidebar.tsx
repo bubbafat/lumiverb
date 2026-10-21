@@ -161,7 +161,7 @@ export interface SidebarProps {
 
 export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAlert = null, showAdmin = false }: SidebarProps) {
   const canEdit = useCanEdit(Boolean(getApiKey()));
-  // Trying it as a viewer: no projects (an editor's), archive, trash or favorites, which a demo server doesn't answer.
+  // Trying it as a viewer: no archive, trash or favorites, which a demo server doesn't answer.
   const demo = useIsDemo(Boolean(getApiKey()));
   const folderActions = useClipActions();
   const { libraryId } = useParams<{ libraryId: string }>();
@@ -383,7 +383,8 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAler
             {photoStackIcon()}
             {showLabels && <span>Manage libraries</span>}
           </Link>
-          {!demo && (
+          {/* Projects are an editor's (the API's require_editor): a viewer, the demo's included, isn't offered them. */}
+          {canEdit && !demo && (
             <Link
               to="/projects"
               className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
