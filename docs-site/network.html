@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Network, phones and HTTPS · Lumiverb docs</title>
+  <meta name="description" content="Lumiverb is a web app: a phone, a tablet or another computer opens it in its browser. This page covers letting other devices in on a Mac, the ports, adding HTTPS, and how a Linux server differs.">
+  <link rel="canonical" href="https://docs.lumiverb.io/network.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html" aria-current="page">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html" aria-current="page">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Network, phones and HTTPS</h1>
+<p>Lumiverb is a web app: a phone, a tablet or another computer opens it in its browser. This page covers letting other devices in on a Mac, the ports, adding HTTPS, and how a Linux server differs.</p>
+<h2 id="a-mac-this-mac-only-at-first">A Mac: this Mac only at first<a class="anchor" href="#a-mac-this-mac-only-at-first" aria-label="Link to this section">#</a></h2>
+<p>A new install on a Mac answers only on that Mac, at <code>http://localhost:6464</code>. That's on purpose: you set it up there first, before anyone else can reach it.</p>
+<p>To let other devices on your network use it, a server admin, on the Mac itself:</p>
+<ol>
+<li>Open <strong>Settings › Network</strong>.</li>
+<li>Tick <strong>Let other devices on my network use Lumiverb</strong>.</li>
+<li>If the Mac asks whether nginx may accept incoming network connections, choose <strong>Allow</strong>.</li>
+</ol>
+<p>The page then lists the addresses to open on another device, such as <code>http://studio.local:6464</code> and <code>http://192.168.1.20:6464</code>: the Mac's name first, then its address on the network. Apple devices usually open the name; some Android phones and Windows PCs need the number. Nothing needs setting up on the device. Untick the box to go back to this Mac only.</p>
+<p>The change restarts Lumiverb's web server, so pages may not load for a few seconds. It can be made only on the Mac: elsewhere you get &quot;Change this on the computer Lumiverb is installed on.&quot; Everyone signed in can see what's set.</p>
+<p>Invite links use these addresses too, so set this before inviting people who'll use another device. See <a href="users-and-roles.html">Users and roles</a>.</p>
+<h2 id="phones-and-tablets">Phones and tablets<a class="anchor" href="#phones-and-tablets" aria-label="Link to this section">#</a></h2>
+<p>Open one of the addresses in the phone's browser and sign in. On a narrow screen, the sidebar becomes a bar at the bottom. The Mac has to be awake and on the same network.</p>
+<h2 id="ports">Ports<a class="anchor" href="#ports" aria-label="Link to this section">#</a></h2>
+<p>On a Mac, one port carries the web app and everything that talks to Lumiverb (the command line, devices, other apps):</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Connection</th>
+<th>Port</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Plain HTTP</td>
+<td>6464</td>
+</tr>
+<tr>
+<td>HTTPS, once added</td>
+<td>6465</td>
+</tr>
+</tbody>
+</table></div>
+<p>Change them only if something else on the Mac needs one. A server admin, on the Mac: in <strong>Settings › Network</strong>, under <strong>Ports</strong>, type new numbers and click <strong>Change ports</strong>. A port that can't be used (taken by something else, or the same for both) is refused, saying why. The page then gives the Mac's new address, which works within a few seconds: sign in again there. Anything else that uses the old address, such as a device or the command line's <code>--api-url</code>, needs the new one.</p>
+<h2 id="https">HTTPS<a class="anchor" href="#https" aria-label="Link to this section">#</a></h2>
+<p>Plain HTTP is fine on a home network you trust. To encrypt the connection as well, a server admin, on the Mac:</p>
+<ol>
+<li>In <strong>Settings › Network</strong>, tick <strong>Also offer an encrypted connection (HTTPS)</strong>.</li>
+<li>The page lists the HTTPS addresses, on port 6465.</li>
+</ol>
+<p>Plain HTTP keeps working beside it, so nothing breaks while devices move over.</p>
+<h3 id="trusting-lumiverbs-certificate">Trusting Lumiverb's certificate<a class="anchor" href="#trusting-lumiverbs-certificate" aria-label="Link to this section">#</a></h3>
+<p>Lumiverb makes its own certificate authority for this Mac and issues the certificate from it. Until a device trusts that authority, its browser says the connection isn't private. Each device trusts it once. On the device, open the address the page gives, ending in <code>/lumiverb-ca.crt</code>, then:</p>
+<ul>
+<li><strong>iPhone or iPad</strong>: open it in Safari and allow the download. In Settings › General › VPN &amp; Device Management, install it. Then turn it on in Settings › General › About › Certificate Trust Settings.</li>
+<li><strong>Mac</strong>: open it, then in Keychain Access set it to Always Trust. On the Mac Lumiverb runs on, <strong>Download it here</strong> gets it.</li>
+<li><strong>Other devices</strong>: install it as a trusted certificate authority in the device's own settings.</li>
+</ul>
+<p>The page shows the authority's SHA-256 fingerprint: compare it with the one the device shows before trusting it. The certificate is issued again when the Mac's name or address changes, and a month before it ends, without devices needing to trust anything again.</p>
+<h3 id="your-own-certificate">Your own certificate<a class="anchor" href="#your-own-certificate" aria-label="Link to this section">#</a></h3>
+<p>If you have a certificate for an address your devices already trust (from any certificate authority), click <strong>Use your own certificate</strong>. Paste the certificate in PEM form, its chain after it, and the private key without a passphrase, then click <strong>Use it</strong>. It's checked first and refused, saying why, if it can't be used. <strong>Use Lumiverb's own certificate instead</strong> goes back.</p>
+<h3 id="turning-plain-http-off">Turning plain HTTP off<a class="anchor" href="#turning-plain-http-off" aria-label="Link to this section">#</a></h3>
+<p>Once a device has opened Lumiverb over HTTPS, the page says which one and when. Only then can you untick <strong>Keep plain HTTP for other devices too</strong>. Other devices coming over plain HTTP are then sent to HTTPS; the certificate download stays on plain HTTP, so a new device can still get it. The Mac itself keeps its own plain address, <code>http://localhost:6464</code>, either way. Turning HTTPS off brings plain HTTP back for everyone.</p>
+<h2 id="dont-put-a-tunnel-on-the-mac-itself">Don't put a tunnel on the Mac itself<a class="anchor" href="#dont-put-a-tunnel-on-the-mac-itself" aria-label="Link to this section">#</a></h2>
+<p>Some things can only be done on the Mac itself: choosing library folders, moving previews, changing the network, and, on a Mac, Forgot password going straight to a new password. A tunnel or proxy running on the Mac (such as <code>tailscale serve</code>, cloudflared or ngrok) can bring other people's requests in as if they came from the Mac. Through one, anyone who reaches it could do those things, including resetting a password. Don't run one on the Lumiverb Mac. To use Lumiverb away from home, connect your device to your home network, for example with a VPN to it.</p>
+<h2 id="a-linux-server">A Linux server<a class="anchor" href="#a-linux-server" aria-label="Link to this section">#</a></h2>
+<p>On Linux, the install sets up nginx itself, and Settings › Network says who can reach it is set up where it's installed.</p>
+<ul>
+<li>Installed with a domain (<code>--domain</code> and <code>--email</code>), nginx gets a certificate from Let's Encrypt for that domain and sends plain HTTP to HTTPS. Phones and computers open <code>https://</code> and the domain. Unless installed with <code>--no-firewall</code>, the firewall lets in SSH, HTTP and HTTPS only.</li>
+<li>On a home network without a domain, it answers over plain HTTP.</li>
+</ul>
+<p>See <a href="install-linux.html">Install on a Linux server</a>.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="users-and-roles.html"><span>Previous</span>Users and roles</a><a class="next" href="storage.html"><span>Next</span>Storage</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/network.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#a-mac-this-mac-only-at-first">A Mac: this Mac only at first</a></li><li><a href="#phones-and-tablets">Phones and tablets</a></li><li><a href="#ports">Ports</a></li><li><a href="#https">HTTPS</a></li><li><a href="#dont-put-a-tunnel-on-the-mac-itself">Don&#x27;t put a tunnel on the Mac itself</a></li><li><a href="#a-linux-server">A Linux server</a></li></ul></nav>
+  </div>
+</body>
+</html>

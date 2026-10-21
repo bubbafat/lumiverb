@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Ratings, projects and sharing · Lumiverb docs</title>
+  <meta name="description" content="Rate clips for yourself, gather the ones you want into projects to work on or send to an editing app, and share a project or a whole library with people who don&#x27;t sign in.">
+  <link rel="canonical" href="https://docs.lumiverb.io/ratings-projects-sharing.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html" aria-current="page">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html" aria-current="page">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Ratings, projects and sharing</h1>
+<p>Rate clips for yourself, gather the ones you want into projects to work on or send to an editing app, and share a project or a whole library with people who don't sign in.</p>
+<h2 id="ratings">Ratings<a class="anchor" href="#ratings" aria-label="Link to this section">#</a></h2>
+<p>There are three kinds, and you can use all three on a clip:</p>
+<ul>
+<li><strong>Favorite</strong>: a heart.</li>
+<li><strong>Stars</strong>: 1 to 5.</li>
+<li><strong>Color</strong>: a red, orange, yellow, green, blue or purple label.</li>
+</ul>
+<p>To rate one clip, hover over its thumbnail and click the heart in its corner, or open it and use the <strong>Rating</strong> section of the viewer. In the viewer, the keys are faster: <strong>f</strong> for favorite, <strong>1</strong> to <strong>5</strong> for stars, <strong>0</strong> to clear them, <strong>6</strong> to <strong>9</strong> for red, orange, yellow and green, and backtick to clear the color. Clicking the same star or color again clears it. To rate many at once, select them and use the heart, stars and colors in the bar at the bottom (see <a href="browse-and-search.html#selecting-several-clips">Selecting several clips</a>).</p>
+<p>Ratings are yours. Everyone signed in, viewers too, has their own, and nobody sees anyone else's. Your stars show in a thumbnail's corner and your color as a stripe along its bottom. Ratings don't exist on public pages.</p>
+<h2 id="finding-what-you-rated">Finding what you rated<a class="anchor" href="#finding-what-you-rated" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Favorites</strong> in the sidebar shows everything you hearted, in every library you can see.</li>
+<li><strong>Filters</strong> › <strong>Rating</strong> narrows any grid or search: <strong>Favorites</strong>; <strong>Stars</strong>, where clicking one star shows exactly that many and clicking a second makes a range; and <strong>Color</strong>.</li>
+</ul>
+<p>A search with a rating filter can be kept with <strong>Save search</strong> (see <a href="browse-and-search.html#saved-searches">Saved searches</a>).</p>
+<h2 id="projects">Projects<a class="anchor" href="#projects" aria-label="Link to this section">#</a></h2>
+<p>A project is a list of clips you choose, from any of your libraries: the picks for a client, a film's footage, a family album. Projects are for editors and admins; viewers don't have them. Clips in a project stay where they are in their libraries, and the files are never touched.</p>
+<p>To make one:</p>
+<ul>
+<li>In <strong>Projects</strong>, click <strong>New project</strong>, type a name and, if you like, a description, and click <strong>Create</strong>.</li>
+<li>Or select clips, click <strong>Add to project</strong>, then <strong>Create new project</strong>, type a name and click <strong>Create &amp; add</strong>.</li>
+<li>Or save a search as a project (see <a href="#save-a-search-as-a-project">Save a search as a project</a>).</li>
+</ul>
+<p>To add clips, select them, or open one in the viewer, and click <strong>Add to project</strong>, then the project. Type in <strong>Search projects...</strong> to find it in a long list. You add clips to your own projects.</p>
+<p>To take clips out, open the project, select them and click <strong>Remove from project</strong>.</p>
+<p>A project's page shows its clips under a heading for each day, with <strong>Export</strong> and <strong>Settings</strong> at the top. In <strong>Settings</strong>, the project's owner changes its <strong>Name</strong>, <strong>Description</strong>, <strong>Sort order</strong> (<strong>Manual</strong>, <strong>Date added</strong> or <strong>Date taken</strong>) and <strong>Visibility</strong>, or clicks <strong>Move to trash</strong>. The sort order is the order an export lists the clips in.</p>
+<p>The <strong>Projects</strong> page has three tabs. <strong>Active</strong> shows your projects and those shared with you, each with its first clip as a cover; one someone else owns says <strong>Shared</strong>, and a public one <strong>Public</strong>. Hover over one of yours for <strong>Archive</strong>, which moves it to <strong>Archived</strong> (still readable and exportable; <strong>Restore</strong> brings it back), or <strong>Delete</strong>, which moves it to <strong>Trash</strong> with <strong>Undo</strong>. In <strong>Trash</strong>, click <strong>Restore</strong>, <strong>Delete forever</strong> or <strong>Empty trash</strong>. A project in the trash is deleted for good after the account's trash days (30 unless an admin changes them in <strong>Settings › Files</strong>).</p>
+<p>When some of a project's clips are in the trash, archived or missing from disk, its page says so and leaves them out. <strong>Restore them</strong> brings back clips someone moved to the trash.</p>
+<h2 id="save-a-search-as-a-project">Save a search as a project<a class="anchor" href="#save-a-search-as-a-project" aria-label="Link to this section">#</a></h2>
+<p>On a library's page or in <strong>All photos</strong>, with a search, a filter or a folder chosen, click <strong>Save as project</strong> beside the filters (editors and admins), type a name and click <strong>Save</strong>. The project holds the clips the search finds now. It doesn't change as new clips arrive; to keep the search itself, use <strong>Save search</strong>.</p>
+<p>A search that finds too many is refused: more than 10,000 clips, or more than 5,000 for a search with words. Narrow it first.</p>
+<h2 id="send-to-an-editing-app">Send to an editing app<a class="anchor" href="#send-to-an-editing-app" aria-label="Link to this section">#</a></h2>
+<p>On a project's page, click <strong>Export</strong>. The first time, <strong>Send to editor</strong> asks for a <strong>Format</strong>:</p>
+<ul>
+<li><strong>DaVinci Resolve / Premiere Pro</strong> (an <code>.xml</code> file)</li>
+<li><strong>Final Cut Pro</strong> (an <code>.fcpxml</code> file)</li>
+</ul>
+<p>Tick <strong>Make default</strong> to skip the question next time in this browser, and click <strong>Export file</strong>. The arrow beside <strong>Export</strong> asks again.</p>
+<p>The file points at your original files by their paths on the server. If the editing app runs on another computer where those paths differ, relink the clips there. Photos come in as stills. Clips in the trash, archived or missing from disk, and videos whose length isn't known, are left out, and Lumiverb says how many.</p>
+<h2 id="who-sees-a-project">Who sees a project<a class="anchor" href="#who-sees-a-project" aria-label="Link to this section">#</a></h2>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Visibility</th>
+<th>Who sees it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Private (only you)</strong></td>
+<td>You. New projects start private.</td>
+</tr>
+<tr>
+<td><strong>Shared (all team members)</strong></td>
+<td>Every editor and admin in your account who can see at least one of its clips. They can open and export it, not change it.</td>
+</tr>
+<tr>
+<td><strong>Public (anyone with link)</strong></td>
+<td>Anyone with its link, without signing in.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Only an admin can make a project public. Its owner can take it back to private or shared, which ends the link.</p>
+<p>A project's clips show only to people who can see their library, and a public project's visitors see only the clips its owner can still see. See <a href="users-and-roles.html">Users and roles</a>.</p>
+<h2 id="public-links">Public links<a class="anchor" href="#public-links" aria-label="Link to this section">#</a></h2>
+<p><strong>A public project.</strong> Once a project is public, its page for visitors is its own address with <code>/public</code> in front of <code>/projects</code>. If you open it at <code>https://photos.example.com/projects/1a2b3c</code>, share <code>https://photos.example.com/public/projects/1a2b3c</code>. Moving the project to the trash stops the link until it's restored.</p>
+<p><strong>A public library.</strong> On the <strong>Libraries</strong> page (<strong>Manage libraries</strong> in the sidebar), an admin clicks <strong>Not public</strong> beside a library and confirms to make it <strong>Public</strong>. <strong>Copy link</strong> then copies the address to share. Click <strong>Public</strong> to stop sharing it.</p>
+<p>Visitors must be able to reach your server: see <a href="network.html">Network, phones and HTTPS</a>.</p>
+<h2 id="what-a-public-page-shows">What a public page shows<a class="anchor" href="#what-a-public-page-shows" aria-label="Link to this section">#</a></h2>
+<p>Visitors see:</p>
+<ul>
+<li>a project's name, description and how many items it has; or a library's grid, which they can search (a limited number of times a minute), narrow to photos or videos and to dates, sorted by date taken;</li>
+<li>each photo, and each video's first 10 seconds unless an admin changes that in <strong>Settings › Playback</strong>;</li>
+<li>descriptions, tags, the text in photos, and a video's transcript as far as it plays.</li>
+</ul>
+<p>They never see file names or folders, locations, camera details, notes, faces or people, or ratings, and they can't change anything.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="places.html"><span>Previous</span>Places</a><a class="next" href="libraries.html"><span>Next</span>Libraries</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/ratings-projects-sharing.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#ratings">Ratings</a></li><li><a href="#finding-what-you-rated">Finding what you rated</a></li><li><a href="#projects">Projects</a></li><li><a href="#save-a-search-as-a-project">Save a search as a project</a></li><li><a href="#send-to-an-editing-app">Send to an editing app</a></li><li><a href="#who-sees-a-project">Who sees a project</a></li><li><a href="#public-links">Public links</a></li><li><a href="#what-a-public-page-shows">What a public page shows</a></li></ul></nav>
+  </div>
+</body>
+</html>

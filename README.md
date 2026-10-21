@@ -3,11 +3,15 @@
 > AI-powered photo and video library management for serious photographers.
 > Find any image or moment in a library of 100,000+ assets using natural language.
 
+The user guide, from installing it to every setting, is at **[docs.lumiverb.io](https://docs.lumiverb.io)**
+(its source: [docs/guide/](docs/guide/)). Try it as a viewer at [try.lumiverb.io](https://try.lumiverb.io).
+
 ---
 
 ## What It Does
 
-- **Natural language search** — "golden hour portraits on the beach" just works
+- **Natural language search** — "golden hour portraits on the beach" finds what its descriptions, tags,
+  text and transcripts say
 - **Video scene understanding** — every shot in every video is indexed and searchable
 - **Visual similarity** — find images that look like this one
 - **Privacy-first** — originals stay on your own storage, read in place and never modified or uploaded
@@ -65,13 +69,15 @@ certificate is checked against it):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \
-  | sudo bash -s -- --domain app.example.com --email you@example.com --worker
+  | sudo bash -s -- --domain app.example.com --email you@example.com --worker --root-map /srv/photos=/srv/photos
 ```
 
 It installs everything (PostgreSQL 18 with pgvector, nginx with a
 certificate, Python, Node.js), builds the web app and starts the
-services. `--worker` adds the scheduler, which does all the processing. Then
-create your account:
+services. `--worker` adds the scheduler, which does all the processing.
+`--root-map` names a folder it may read libraries in, here at the same path
+on both sides: one for each top folder your libraries are in (a library
+anywhere else is never read). Then create your account:
 
 ```bash
 sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env
@@ -83,7 +89,7 @@ Update:
 sudo bash /opt/lumiverb/scripts/update.sh
 ```
 
-A server on your home network, without a domain: [docs/linux-server.md](docs/linux-server.md).
+A server on your home network, without a domain: [the guide's Linux install](https://docs.lumiverb.io/install-linux.html#on-your-home-network).
 More on the Linux install below, under [Running a Linux server](#running-a-linux-server).
 
 ### Backups

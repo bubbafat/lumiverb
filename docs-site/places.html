@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Places · Lumiverb docs</title>
+  <meta name="description" content="Lumiverb knows where a photo or video was taken from the GPS in the file, from a location a person set, or from a guess made from clips taken around the same time. With the Place names plug-in on, it ">
+  <link rel="canonical" href="https://docs.lumiverb.io/places.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html" aria-current="page">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html" aria-current="page">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Places</h1>
+<p>Lumiverb knows where a photo or video was taken from the GPS in the file, from a location a person set, or from a guess made from clips taken around the same time. With the Place names plug-in on, it also names the nearest town and the landmark it was at.</p>
+<h2 id="where-a-location-comes-from">Where a location comes from<a class="anchor" href="#where-a-location-comes-from" aria-label="Link to this section">#</a></h2>
+<p>A clip has at most one location shown, chosen in this order:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Where it comes from</th>
+<th>What the viewer shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Set by a person</td>
+<td>An editor or admin chose it</td>
+<td>The point, then &quot;Set by&quot; and who; the file's own GPS, if any, on a line of its own (&quot;From the file&quot;)</td>
+</tr>
+<tr>
+<td>From the file</td>
+<td>The GPS the camera or phone wrote</td>
+<td>The point</td>
+</tr>
+<tr>
+<td>A guess</td>
+<td>Worked out from other clips (see <a href="#location-guesses">Location guesses</a>)</td>
+<td>The point and a <strong>Guess</strong> label</td>
+</tr>
+</tbody>
+</table></div>
+<p>A location from the file is read when the file is scanned. A position of exactly 0, 0 counts as no location: some devices write it when they have no fix.</p>
+<h2 id="seeing-a-clips-location">Seeing a clip's location<a class="anchor" href="#seeing-a-clips-location" aria-label="Link to this section">#</a></h2>
+<p>Open a clip and look at <strong>Location</strong> under <strong>Details</strong>. The coordinates are a link that opens the spot in Google Maps in a new tab. For a guess, click <strong>Guess</strong> to see how sure it is and why, for example &quot;About 2 km · From iPhone 15 Pro photos 14:02–14:40&quot;.</p>
+<p>Lumiverb has no map view of its own.</p>
+<h2 id="photos-nearby-and-has-location">Photos nearby and Has location<a class="anchor" href="#photos-nearby-and-has-location" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Photos nearby</strong>, under a clip's location in the viewer, shows every clip within 1 km of it. A &quot;Within 1km&quot; chip appears beside the search box; in <strong>Filters</strong>, <strong>Radius</strong> widens or narrows it (0.5, 1, 5, 10 or 50 km).</li>
+<li><strong>Filters</strong> › <strong>Has location</strong> shows only clips with a location from the file or a person.</li>
+<li><strong>Filters</strong> › <strong>Includes guesses</strong> counts guesses too, for both. It appears once there are guesses.</li>
+</ul>
+<h2 id="setting-a-location-by-hand">Setting a location by hand<a class="anchor" href="#setting-a-location-by-hand" aria-label="Link to this section">#</a></h2>
+<p>Editors and admins can set the location of any clips:</p>
+<ol>
+<li>Select the clips: tick the box in a thumbnail's corner (see <a href="browse-and-search.html#selecting-several-clips">Selecting several clips</a>).</li>
+<li>Click <strong>Set location…</strong> in the bar at the bottom.</li>
+<li>Choose how:
+<ul>
+<li><strong>Place</strong>: type two or more letters of a town or landmark and pick it from the list. This needs a plug-in that finds places, such as Place names (see below); without one, the dialog says so.</li>
+<li><strong>Coordinates</strong>: type latitude and longitude, such as <code>48.85837, 2.29448</code>.</li>
+<li><strong>Same place as</strong>: with several clips selected, pick the one whose location the others take.</li>
+</ul>
+</li>
+<li>Click <strong>Set location</strong>.</li>
+</ol>
+<p>If some of the clips already have a location, from the file or a person, Lumiverb asks first: click <strong>Replace</strong> (it says how many) to go ahead, or <strong>Back</strong>. A file's own GPS stays visible under the new location.</p>
+<p>Lumiverb never changes a location a person set, and where guesses are on, it helps place the clips taken around it. To undo it, click <strong>Clear</strong> beside &quot;Set by&quot; in the viewer: the clip goes back to its file's location, or a guess.</p>
+<h2 id="location-guesses">Location guesses<a class="anchor" href="#location-guesses" aria-label="Link to this section">#</a></h2>
+<p>Many cameras have no GPS, but a phone in the same pocket does. With <strong>Infer location</strong> on, Lumiverb places a clip that has no location from the clips in the same library that have one and were taken shortly before or after it, on any device. It corrects for a camera clock that's off (still on home time, say) by matching photos the camera and the phone took of the same scene. With a located clip on each side it places the clip between them, otherwise where the nearest one was, and says how sure it is: &quot;About 100 m&quot;, or &quot;About 20 km&quot; when the nearest is hours away.</p>
+<p>A guess never replaces a location from the file or one a person set, and it shows as a guess. When the clips it came from change or go, Lumiverb checks it again.</p>
+<p><strong>Infer location</strong> is each library's, and off unless turned on: tick it when adding the library, or later under <strong>Location guesses</strong> on the library's settings page (<strong>Manage libraries</strong>, then the library's <strong>Settings</strong>). Only the library's admin can change it. Turning it off removes that library's guesses after asking (<strong>Remove guesses</strong> or <strong>Keep it on</strong>); locations people set stay.</p>
+<p>How far before or after a clip Lumiverb looks is the account's <strong>Inference window</strong>: 360 minutes unless an admin changes it in the <strong>Location guesses</strong> row of <strong>Settings › Processing</strong>.</p>
+<h2 id="place-names-and-landmarks">Place names and landmarks<a class="anchor" href="#place-names-and-landmarks" aria-label="Link to this section">#</a></h2>
+<p><strong>Place names (GeoNames)</strong> is a plug-in that comes with Lumiverb, off unless an admin turns it on in <strong>Settings › Plug-ins</strong>. Turning it on shows GeoNames' license (Creative Commons Attribution 4.0) to accept with <strong>OK</strong>. The server then downloads GeoNames' lists once, about 600 MB, and builds its own list of the world's towns of 1,000 people or more and its landmarks; Settings › Plug-ins shows how far along it is. Nothing about your photos is sent to GeoNames.</p>
+<p>Once it's ready:</p>
+<ul>
+<li>Each clip with a location, a guess included, gets a <strong>Place names (GeoNames)</strong> section in the viewer: <strong>At</strong>, the landmark it was at, and <strong>Near</strong>, the nearest town (or &quot;Not near a town&quot;).</li>
+<li>Search finds clips by those names: <code>&quot;Magic Kingdom&quot;</code>, say.</li>
+<li><strong>Set location…</strong> finds places by name.</li>
+</ul>
+<p>How far away a town can be and still count is <strong>Nearest town within</strong>, 25 km unless an admin changes it in Settings › Plug-ins. See <a href="plugins.html">Plug-ins</a> for the rest.</p>
+<h2 id="who-sees-locations">Who sees locations<a class="anchor" href="#who-sees-locations" aria-label="Link to this section">#</a></h2>
+<p>Everyone signed in sees the locations of the clips they can see. Public pages never show a location of any kind, and their visitors can't filter by one.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="videos.html"><span>Previous</span>Videos</a><a class="next" href="ratings-projects-sharing.html"><span>Next</span>Ratings, projects and sharing</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/places.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#where-a-location-comes-from">Where a location comes from</a></li><li><a href="#seeing-a-clips-location">Seeing a clip&#x27;s location</a></li><li><a href="#photos-nearby-and-has-location">Photos nearby and Has location</a></li><li><a href="#setting-a-location-by-hand">Setting a location by hand</a></li><li><a href="#location-guesses">Location guesses</a></li><li><a href="#place-names-and-landmarks">Place names and landmarks</a></li><li><a href="#who-sees-locations">Who sees locations</a></li></ul></nav>
+  </div>
+</body>
+</html>

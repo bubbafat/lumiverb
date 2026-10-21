@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Browse and search · Lumiverb docs</title>
+  <meta name="description" content="Lumiverb&#x27;s web app shows the photos and videos in every library you can see, and finds them by what&#x27;s in them. This page covers the grid, search, filters, the viewer, and putting clips away.">
+  <link rel="canonical" href="https://docs.lumiverb.io/browse-and-search.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html" aria-current="page">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html" aria-current="page">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Browse and search</h1>
+<p>Lumiverb's web app shows the photos and videos in every library you can see, and finds them by what's in them. This page covers the grid, search, filters, the viewer, and putting clips away.</p>
+<h2 id="where-to-browse">Where to browse<a class="anchor" href="#where-to-browse" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>A library</strong>: click its name in the sidebar, or press ⌘K (Ctrl+K) and type part of its name. Its folders appear under it, each with how many clips it holds; click one to see only that folder. On a phone, the menu button beside the library's name opens its folders.</li>
+<li><strong>All photos</strong> in the sidebar: every library you can see, together.</li>
+<li><strong>Favorites</strong> in the sidebar: what you hearted (see <a href="ratings-projects-sharing.html#ratings">Ratings</a>).</li>
+</ul>
+<p>Which libraries you see depends on your role in each: see <a href="users-and-roles.html">Users and roles</a>.</p>
+<p>The grid puts clips under a heading for each day; the <strong>Grid density</strong> slider at the top right sizes the thumbnails. Videos show their length and play a silent preview when you hover over them. The grid updates itself as new clips are scanned.</p>
+<h2 id="search">Search<a class="anchor" href="#search" aria-label="Link to this section">#</a></h2>
+<p>Type in the <strong>Search ...</strong> box. Results come after a pause, or when you press Enter. On a library's page the search looks in that library (and folder, if one is chosen); in <strong>All photos</strong> it looks in every library you can see.</p>
+<p>A search reads the words Lumiverb has for each clip:</p>
+<ul>
+<li>its description and tags, written by an <a href="ai-machines.html">AI machine</a> or by a person;</li>
+<li>the text read in a photo;</li>
+<li>its note;</li>
+<li>a video's scene descriptions and transcript (see <a href="videos.html#search-inside-videos">Videos</a>);</li>
+<li>the landmark and town it was at, when the Place names plug-in is on (see <a href="places.html#place-names-and-landmarks">Places</a>);</li>
+<li>the names of its file and folders.</li>
+</ul>
+<p>How words match:</p>
+<ul>
+<li>With several words, a clip matching any of them is found. Clips matching more of them, or all of them in a row, come first.</li>
+<li>Quotes make a phrase: <code>&quot;birthday cake&quot;</code> finds only those words, in that order.</li>
+<li>A word of three letters or more also matches the start of longer words: <code>disney</code> finds &quot;Disneyland&quot;.</li>
+<li>Plurals and accents don't matter: <code>dogs</code> finds &quot;dog&quot;, and <code>zurich</code> finds &quot;Zürich&quot;.</li>
+</ul>
+<p>Results are ranked by how well they match: a description, tags or a note counts most, a file or folder name least. A search shows its 5,000 best matches at most.</p>
+<p>Type two letters of a person's name and pick them from the <strong>People</strong> list under the box to see only their clips.</p>
+<h2 id="filters-and-sorting">Filters and sorting<a class="anchor" href="#filters-and-sorting" aria-label="Link to this section">#</a></h2>
+<p>Beside the search box:</p>
+<ul>
+<li><strong>All</strong>, <strong>Photos</strong> or <strong>Videos</strong>.</li>
+<li>The sort list: <strong>Date Taken</strong> (the default), <strong>Date Added</strong>, <strong>Last Modified</strong>, <strong>File Size</strong>, <strong>ISO</strong>, <strong>Aperture</strong>, <strong>Focal Length</strong> or <strong>Filename</strong>, with the arrow beside it for ascending or descending. Sorting by a date groups clips by that date.</li>
+<li>The calendar button: <strong>Today</strong>, <strong>Yesterday</strong>, <strong>This week</strong>, <strong>This month</strong>, <strong>This year</strong>, or <strong>Custom</strong> for a range of dates taken.</li>
+<li><strong>Filters</strong>: <strong>Camera</strong> and <strong>Model</strong>, <strong>Lens</strong>, ranges for <strong>ISO</strong>, <strong>Aperture (f/)</strong> and <strong>Focal (mm)</strong>, <strong>Has location</strong>, <strong>Includes guesses</strong> (see <a href="places.html">Places</a>), <strong>Has faces</strong>, <strong>Person...</strong>, and <strong>Rating</strong> (<strong>Favorites</strong>, <strong>Stars</strong> and <strong>Color</strong>). Each shows once there's something to pick.</li>
+</ul>
+<p>Each filter shows as a chip beside the box. Click a chip to remove it, or <strong>Clear filters</strong> to remove them all. Clicking in the viewer filters too: a tag, the date taken, the camera, the lens, a shutter speed, aperture, ISO or focal length.</p>
+<p>The page's address holds the search and filters: bookmark it to come back to them.</p>
+<h2 id="saved-searches">Saved searches<a class="anchor" href="#saved-searches" aria-label="Link to this section">#</a></h2>
+<p>In <strong>All photos</strong>, with a search or filter set, click <strong>Save search</strong>, give it a name and click <strong>Save</strong>. It appears in the sidebar under Favorites. Hover over it and click ⋯ to <strong>Rename</strong> or <strong>Delete</strong> it. Only you see your saved searches.</p>
+<p>To keep the clips a search finds today as a fixed list, <a href="ratings-projects-sharing.html#save-a-search-as-a-project">save it as a project</a> instead.</p>
+<h2 id="the-viewer">The viewer<a class="anchor" href="#the-viewer" aria-label="Link to this section">#</a></h2>
+<p>Click a clip to open it. The panel beside it shows the file name and its folders, <strong>Description</strong>, <strong>Text in Image</strong>, <strong>Tags</strong>, a video's <strong>Transcript</strong> and <strong>People</strong>, your <strong>Rating</strong>, <strong>Notes</strong>, and <strong>Details</strong>: when it was taken, camera, lens, exposure, size and <strong>Location</strong>. Below them, as your role allows: <strong>Add to project</strong>, <strong>Archive</strong>, <strong>Move to trash</strong>, <strong>Show faces</strong> and, on a library's page, <strong>Find similar</strong>.</p>
+<p>Editors and admins can click <strong>Edit</strong> beside the description, the text in a photo or the tags. What a person writes is marked <strong>Edited</strong> and the machine never writes over it; <strong>Remove</strong> lets the machine write its own again. They can also <strong>Add note</strong>: everyone who can see the clip reads it, with who wrote it and when.</p>
+<p>Keys in the viewer:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Key</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>← and →</td>
+<td>Previous and next clip</td>
+</tr>
+<tr>
+<td>Esc</td>
+<td>Close, or leave full screen</td>
+</tr>
+<tr>
+<td>Shift+F</td>
+<td>Full screen</td>
+</tr>
+<tr>
+<td>Space</td>
+<td>Start or stop a slideshow (3 seconds a clip)</td>
+</tr>
+<tr>
+<td>f</td>
+<td>Favorite on or off</td>
+</tr>
+<tr>
+<td>1 to 5</td>
+<td>Stars (the same number again clears them)</td>
+</tr>
+<tr>
+<td>0</td>
+<td>Clear the stars</td>
+</tr>
+<tr>
+<td>6 to 9</td>
+<td>Red, orange, yellow or green label (the same number again clears it)</td>
+</tr>
+<tr>
+<td>Backtick</td>
+<td>Clear the color label</td>
+</tr>
+<tr>
+<td>d</td>
+<td>Show or hide the faces in a photo</td>
+</tr>
+<tr>
+<td>?</td>
+<td>Show or hide the key hints</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="selecting-several-clips">Selecting several clips<a class="anchor" href="#selecting-several-clips" aria-label="Link to this section">#</a></h2>
+<p>Hover over a thumbnail and tick the box in its corner. While anything is selected, a click selects instead of opening, and Shift-click selects everything in between. Click a day's heading to select the whole day. The bar at the bottom sets a heart, stars or a color on all of them. Editors and admins also get <strong>Add to project</strong>, <strong>Set location…</strong> (see <a href="places.html#setting-a-location-by-hand">Places</a>), <strong>Archive</strong> and <strong>Move to trash</strong>. <strong>Clear</strong> unselects.</p>
+<h2 id="similar-photos-and-search-by-picture">Similar photos and search by picture<a class="anchor" href="#similar-photos-and-search-by-picture" aria-label="Link to this section">#</a></h2>
+<p>Open a photo from a library's page and click <strong>Find similar</strong> for up to 20 photos in that library that look like it. Photos only; those with the same named people rank higher.</p>
+<p>The web app has no search by a picture of your own; the <a href="command-line.html">command line</a> does:</p>
+<div class="cmd"><pre><code>lumiverb similar --library Family --image ~/Desktop/beach.jpg</code></pre></div>
+<h2 id="archive-and-trash">Archive and trash<a class="anchor" href="#archive-and-trash" aria-label="Link to this section">#</a></h2>
+<p>Neither touches your files: they stay on disk where they are.</p>
+<ul>
+<li><strong>Archive</strong> (editors and admins) keeps clips out of browse and search, with everything they have, until someone unarchives them. To archive a folder, click the number beside it in the folder list, then <strong>Archive folder</strong>. The <strong>Archive</strong> page lists them under <strong>Archived by hand</strong> and <strong>File missing</strong> (clips whose file disappeared: they come back by themselves when it returns). Select clips and click <strong>Unarchive</strong>.</li>
+<li><strong>Move to trash</strong> (editors and admins) hides clips until they're deleted for good, 30 days later unless an admin changes it in <strong>Settings › Files</strong>. Clips in projects ask before they go. On the <strong>Trash</strong> page, select and click <strong>Restore</strong>; an admin can also <strong>Delete for good</strong> or <strong>Empty trash</strong>. A clip deleted for good comes back only if its file changes, moves or is renamed.</li>
+</ul>
+<p>Both offer <strong>Undo</strong> briefly.</p>
+<h2 id="downloads">Downloads<a class="anchor" href="#downloads" aria-label="Link to this section">#</a></h2>
+<p>Lumiverb never hands out your original files: open them where they live. The web app downloads a video's <a href="videos.html#transcripts">transcript</a> and a project's <a href="ratings-projects-sharing.html#send-to-an-editing-app">file for an editing app</a>. The command line saves a clip's preview image:</p>
+<div class="cmd"><pre><code>lumiverb download --library Family --path "2024/Beach/IMG_0412.jpg" --size preview --output ~/Desktop/</code></pre></div>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="updating.html"><span>Previous</span>Updating</a><a class="next" href="people.html"><span>Next</span>People and faces</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/browse-and-search.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#where-to-browse">Where to browse</a></li><li><a href="#search">Search</a></li><li><a href="#filters-and-sorting">Filters and sorting</a></li><li><a href="#saved-searches">Saved searches</a></li><li><a href="#the-viewer">The viewer</a></li><li><a href="#selecting-several-clips">Selecting several clips</a></li><li><a href="#similar-photos-and-search-by-picture">Similar photos and search by picture</a></li><li><a href="#archive-and-trash">Archive and trash</a></li><li><a href="#downloads">Downloads</a></li></ul></nav>
+  </div>
+</body>
+</html>

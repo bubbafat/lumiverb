@@ -33,7 +33,8 @@
       <nav aria-label="Site">
         <a href="#features">Features</a>
         <a href="#install">Install</a>
-        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://docs.lumiverb.io/">Docs</a>
+        <a class="demo-link" href="https://try.lumiverb.io">Demo</a>
         <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
       </nav>
     </div>
@@ -89,12 +90,12 @@
             <h3>On a Linux server</h3>
             <p>Ubuntu 22.04 or later, with a domain name pointing at it:</p>
             <div class="cmd"><pre><code>curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \
-  | sudo bash -s -- --domain app.example.com --email you@example.com --worker</code></pre></div>
-            <p>It installs everything, a certificate included. Then create your account:</p>
+  | sudo bash -s -- --domain app.example.com --email you@example.com --worker --root-map /srv/photos=/srv/photos</code></pre></div>
+            <p>It installs everything, a certificate included. <code>--root-map</code> names the folder your libraries are in. Then create your account:</p>
             <div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env</code></pre></div>
             <p class="small">To update:</p>
             <div class="cmd"><pre><code>sudo bash /opt/lumiverb/scripts/update.sh</code></pre></div>
-            <p class="small">A server on your home network, without a domain: <a href="https://github.com/bubbafat/lumiverb/blob/main/docs/linux-server.md">the Linux server guide</a>.</p>
+            <p class="small">A server on your home network, without a domain: <a href="https://docs.lumiverb.io/install-linux.html#on-your-home-network">the Linux install guide</a>.</p>
           </article>
         </div>
 
@@ -102,8 +103,8 @@
           Descriptions, tags and the text in photos need an <strong>AI machine</strong>:
           <a href="https://ollama.com">Ollama</a> with a vision model on any computer you have, or a key from OpenAI,
           Anthropic or Google. Settings › AI adds one, and its Test tries it before you give it the work.
-          Everything else, from search by what's in a picture to faces, video scenes and transcripts, runs on the server itself.
-          <a href="https://github.com/bubbafat/lumiverb#ai-descriptions-with-ollama">Setting up Ollama</a>.
+          Everything else, from similar photos and search by picture to faces, video scenes and transcripts, runs on the server itself.
+          <a href="https://docs.lumiverb.io/ai-machines.html">Setting up an AI machine</a>.
         </p>
       </div>
     </section>
@@ -117,7 +118,7 @@
           <li>
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
             <h3>Search in your own words</h3>
-            <p>Type “sunset over the harbor” or “kids on a trampoline”. Lumiverb finds it by what's in the picture and what's written about it, and finds more like any photo you pick.</p>
+            <p>Type “sunset over the harbor” or “kids on a trampoline”. Lumiverb finds it by what's been written about it, by its AI machine or by you, and finds more that look like any photo you pick.</p>
           </li>
           <li>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
@@ -261,7 +262,7 @@
   <footer class="bottom">
     <div class="wrap bottom-row">
       <span>Lumiverb · <a href="https://github.com/bubbafat/lumiverb/blob/main/LICENSE">MIT License</a></span>
-      <span><a href="https://github.com/bubbafat/lumiverb">GitHub</a> · <a href="https://try.lumiverb.io">Demo</a></span>
+      <span><a href="https://docs.lumiverb.io/">Docs</a> · <a href="https://github.com/bubbafat/lumiverb">GitHub</a> · <a href="https://try.lumiverb.io">Demo</a></span>
     </div>
   </footer>
 </body>

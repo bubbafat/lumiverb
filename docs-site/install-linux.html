@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Install on a Linux server · Lumiverb docs</title>
+  <meta name="description" content="On Linux, install scripts set Lumiverb up as a set of services, with its own PostgreSQL and nginx in front. Thereare two ways: on the internet with a domain name and a certificate, or on your home net">
+  <link rel="canonical" href="https://docs.lumiverb.io/install-linux.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html" aria-current="page">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html" aria-current="page">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Install on a Linux server</h1>
+<p>On Linux, install scripts set Lumiverb up as a set of services, with its own PostgreSQL and nginx in front. There
+are two ways: on the internet with a domain name and a certificate, or on your home network without one.</p>
+<h2 id="what-it-needs">What it needs<a class="anchor" href="#what-it-needs" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>Ubuntu 22.04 or later, and a user who can use <code>sudo</code>.</li>
+<li>4 GB of memory or more. With less and no swap, the install says so: finding faces, search and transcripts can
+need more than that at once.</li>
+<li>Room for what Lumiverb makes: about 15 GB per 100,000 photos, and up to 1 GB per hour of video. They can go on
+another disk (<code>--data-dir</code>, below).</li>
+<li>Your photos and videos in folders this machine can read: on its own disks, or mounted from a NAS.</li>
+</ul>
+<h2 id="the-folders-it-may-read">The folders it may read<a class="anchor" href="#the-folders-it-may-read" aria-label="Link to this section">#</a></h2>
+<p>Lumiverb reads a library only in folders you list when you install it, each with <code>--root-map</code>. For a folder
+that's at the same place for you and for Lumiverb, both sides are the same path:</p>
+<pre><code class="language-text">--root-map /srv/photos=/srv/photos</code></pre>
+<p>List each top folder your libraries will be in, with one <code>--root-map</code> for each. A library outside them is never
+read (the log says it's refused). To add one later, run the install command again with the new <code>--root-map</code>
+(it keeps everything else).</p>
+<h2 id="on-the-internet-with-a-domain">On the internet, with a domain<a class="anchor" href="#on-the-internet-with-a-domain" aria-label="Link to this section">#</a></h2>
+<p>With a domain name already pointing at the server (an A record to its address), one command installs everything:
+PostgreSQL 18, nginx with a certificate from Let's Encrypt, the web app and the processing.</p>
+<div class="cmd"><pre><code>curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh | sudo bash -s -- --domain photos.example.org --email you@example.org --worker --root-map /srv/photos=/srv/photos</code></pre></div>
+<p>Put your own domain and email in place of the examples. <code>--worker</code> makes this machine do the processing: leave
+it in. Add <code>--data-dir /mnt/big/lumiverb</code> to keep what Lumiverb makes on another disk.</p>
+<p>It checks that the domain points here before it asks for a certificate, and says which record to add if it
+doesn't. The firewall lets in SSH, HTTP and HTTPS only.</p>
+<h2 id="on-your-home-network">On your home network<a class="anchor" href="#on-your-home-network" aria-label="Link to this section">#</a></h2>
+<p>Without a domain, Lumiverb answers on the server's address over HTTP. Get the scripts:</p>
+<div class="cmd"><pre><code>git clone https://github.com/bubbafat/lumiverb.git</code></pre></div>
+<p>Install the API and the processing, with the address people will open (here the server is <code>192.168.1.50</code>):</p>
+<div class="cmd"><pre><code>sudo bash lumiverb/scripts/deploy-api.sh --app-host http://192.168.1.50 --worker --root-map /srv/photos=/srv/photos</code></pre></div>
+<p>Then the web app, answering on any name or address:</p>
+<div class="cmd"><pre><code>sudo bash lumiverb/scripts/deploy-web.sh --domain _ --api-upstream http://127.0.0.1:8000</code></pre></div>
+<p>Together they turn on the firewall, letting in SSH, HTTP and HTTPS only. If the server runs other services that
+people reach, add <code>--no-firewall</code> to both and keep your own firewall.</p>
+<p>Either way, add <code>--dry-run</code> to see the settings it will use without changing anything. Running a script again is
+safe: it keeps the settings it was given before.</p>
+<h2 id="create-your-account">Create your account<a class="anchor" href="#create-your-account" aria-label="Link to this section">#</a></h2>
+<p>The install has nobody who can sign in yet. Create the first account on the server; it asks for your email and a
+password (12 characters or more):</p>
+<div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env</code></pre></div>
+<p>You can do it in the web app instead, but its setup page works only from the server itself: from another
+computer, reach it through an SSH tunnel. Do this before you put any tunnel or proxy in front of Lumiverb.</p>
+<p>Then open Lumiverb in a browser, sign in, and follow <a href="first-steps.html">First steps</a>. When you add a library, its
+folder is the path on the server, inside a folder you listed with <code>--root-map</code>.</p>
+<h2 id="where-things-are">Where things are<a class="anchor" href="#where-things-are" aria-label="Link to this section">#</a></h2>
+<div class="table"><table>
+<thead>
+<tr>
+<th>What</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Settings</td>
+<td><code>/etc/lumiverb/env</code>, readable by root only (keep a copy with your backups)</td>
+</tr>
+<tr>
+<td>The program</td>
+<td><code>/opt/lumiverb</code></td>
+</tr>
+<tr>
+<td>What Lumiverb makes</td>
+<td><code>/var/lib/lumiverb</code>, or the folder given with <code>--data-dir</code></td>
+</tr>
+<tr>
+<td>The logs</td>
+<td>The system journal, also shown at Admin › Logs once allowed (<a href="troubleshooting.html">Troubleshooting</a>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Lumiverb runs as these services: <code>lumiverb-api</code>, <code>lumiverb-scheduler</code> (the processing), <code>lumiverb-plugins</code>, and
+nginx. The API listens on this machine only, behind nginx. To restart the API:</p>
+<div class="cmd"><pre><code>sudo systemctl restart lumiverb-api</code></pre></div>
+<p>To update to a new version, see <a href="updating.html">Updating</a>.</p>
+<h2 id="email-for-password-resets">Email for password resets<a class="anchor" href="#email-for-password-resets" aria-label="Link to this section">#</a></h2>
+<p>Without email, a forgotten password is reset on the server with <code>lumiverb-server reset-password</code>. To have
+Lumiverb send reset links by email, fill in the <code>SMTP_</code> lines in <code>/etc/lumiverb/env</code> and restart the API.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="install-mac.html"><span>Previous</span>Install on a Mac</a><a class="next" href="first-steps.html"><span>Next</span>First steps</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/install-linux.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-it-needs">What it needs</a></li><li><a href="#the-folders-it-may-read">The folders it may read</a></li><li><a href="#on-the-internet-with-a-domain">On the internet, with a domain</a></li><li><a href="#on-your-home-network">On your home network</a></li><li><a href="#create-your-account">Create your account</a></li><li><a href="#where-things-are">Where things are</a></li><li><a href="#email-for-password-resets">Email for password resets</a></li></ul></nav>
+  </div>
+</body>
+</html>

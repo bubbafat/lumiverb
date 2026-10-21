@@ -199,7 +199,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://try.lumiverb.io/v1/system/healt
 each say `404`. The API's log names each route turned away (`not exposed
 here`).
 
-### 10. lumiverb.io's page, from the same droplet
+### 10. lumiverb.io's page and docs.lumiverb.io, from the same droplet
 
 The front page is the checkout's `site/` folder, served as it is by the
 same nginx, as a site of its own. With A records for `lumiverb.io` and
@@ -217,6 +217,17 @@ takes it out again if nginx refuses it, and gets a certificate for each name
 that points here, saying which record to add for any that doesn't. Run it
 again once that record is there. Nothing in it reaches the API: `/v1/` there
 is a 404.
+
+The user guide is the checkout's `docs-site/` folder (built from `docs/guide/`
+by `scripts/build_docs.py` and kept built in the repository, so nothing is
+built here). With an A record for `docs.lumiverb.io`:
+
+```bash
+sudo bash /opt/lumiverb/scripts/deploy-site.sh --folder docs-site --domain docs.lumiverb.io
+```
+
+It's a site of its own too (`/etc/nginx/sites-available/lumiverb-docs-site`),
+with its own certificate.
 
 ## Updating
 

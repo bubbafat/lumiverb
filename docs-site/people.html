@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>People and faces · Lumiverb docs</title>
+  <meta name="description" content="Lumiverb finds the faces in your photos and videos and groups the ones nobody has named yet, so you can name a whole group at once. Each person you name gets a page with every photo and video they&#x27;re ">
+  <link rel="canonical" href="https://docs.lumiverb.io/people.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html" aria-current="page">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html" aria-current="page">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>People and faces</h1>
+<p>Lumiverb finds the faces in your photos and videos and groups the ones nobody has named yet, so you can name a whole group at once. Each person you name gets a page with every photo and video they're in.</p>
+<h2 id="how-faces-are-found">How faces are found<a class="anchor" href="#how-faces-are-found" aria-label="Link to this section">#</a></h2>
+<p>Faces are found on your server after a clip is scanned (or on a <a href="ai-worker.html">second machine</a>, if you set one up), with a face model Lumiverb downloads once. Your photos aren't sent anywhere. A video's faces are found in frames of its analysis copy, after its scenes (see <a href="videos.html">Videos</a>).</p>
+<p>How hard Lumiverb looks is a level, one for photos and one for videos. An admin sets them in <strong>Settings › Processing</strong>, in the <strong>Faces</strong> row (<strong>Photos</strong> and <strong>Videos</strong>), or in the setup wizard's <strong>What to find</strong> step.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Level</th>
+<th>Photos</th>
+<th>Videos</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Off</td>
+<td>No new faces are found. The faces already found, and their names, stay.</td>
+<td>The same</td>
+</tr>
+<tr>
+<td>Low</td>
+<td>Only clear faces near the camera</td>
+<td>One frame from each scene (the default)</td>
+</tr>
+<tr>
+<td>Normal</td>
+<td>The default</td>
+<td>Three frames from each scene</td>
+</tr>
+<tr>
+<td>High</td>
+<td>Small faces in crowds too, and more things that aren't faces</td>
+<td>Each scene's frame and one every 3 seconds; slower</td>
+</tr>
+</tbody>
+</table></div>
+<p>A new level applies to clips found from then on. After raising one, the Faces row says how many clips were looked at with a lower one, and an admin can click <strong>Redo</strong> to look at them again. Faces someone named, or said aren't a certain person, are kept through a redo.</p>
+<h2 id="naming-groups-of-faces">Naming groups of faces<a class="anchor" href="#naming-groups-of-faces" aria-label="Link to this section">#</a></h2>
+<p>Click <strong>People</strong> in the sidebar. Named people come first. Below them, <strong>Unnamed clusters</strong> holds faces that look alike, grouped. Each card shows a few faces and how many there are; click the count to see them all.</p>
+<p>Editors and admins name a group from its card:</p>
+<ul>
+<li><strong>Name all</strong> (with the group's count) names every face in it: type the name and click <strong>Save</strong>.</li>
+<li><strong>All … are...</strong> (with the count) adds them to someone already named: pick from the people they look most like, or type to search by name.</li>
+<li><strong>Dismiss</strong> hides the group for good, for faces you don't want to name (strangers, posters). <strong>Undo</strong> appears for a few seconds.</li>
+</ul>
+<p>A group can mix two people. Click a single face to open its photo or video with <strong>Who is this?</strong> already open for that face (in a photo, its box is red). Once you name it, the viewer moves on to the next face in the group.</p>
+<p>Above the cards, sort the groups (<strong>Largest first</strong>, <strong>Smallest first</strong> or <strong>Newest</strong>) and use <strong>Min faces</strong> to hide small ones. Groups are worked out again within a few minutes of faces changing, and the heading says <strong>Updating</strong> meanwhile. After naming several, click <strong>Refresh clusters</strong> to see the new groups. <strong>Merge close groups</strong>, in the Faces row of Settings › Processing, joins groups close enough to be one person; it's on unless an admin turns it off.</p>
+<p>Once someone is named, Lumiverb names new faces that look very like them by itself, and keeps doing so as you name more.</p>
+<h2 id="naming-a-face-in-a-photo">Naming a face in a photo<a class="anchor" href="#naming-a-face-in-a-photo" aria-label="Link to this section">#</a></h2>
+<p>In the viewer, click <strong>Show faces</strong>, or press <strong>d</strong>. Each face gets a box: white when no one has named it, green with the name when someone has, gray when it was dismissed. Editors and admins click a box:</p>
+<ul>
+<li>For an unnamed face, <strong>Who is this?</strong> lists the people it looks most like. Pick one, type in <strong>Search by name...</strong>, or click <strong>+ New person</strong>, type the name and click <strong>Create</strong>.</li>
+<li>For a named face: <strong>View person</strong>, <strong>Remove tag</strong>, or a name under <strong>Change to:</strong>. A tag you remove isn't put back by Lumiverb.</li>
+</ul>
+<p>For a viewer, clicking a named face opens that person's page.</p>
+<h2 id="people-in-a-video">People in a video<a class="anchor" href="#people-in-a-video" aria-label="Link to this section">#</a></h2>
+<p>A video gets no boxes. Its <strong>People</strong> section in the viewer lists one face for each person seen, with the times they're on screen, such as <code>0:12–0:40</code>. Click a time to jump there; this works once the whole video is ready to play (see <a href="videos.html#playing-a-video">Playing a video</a>). Editors and admins click <strong>Who is this?</strong>, or the name, to name or change it as for a photo.</p>
+<h2 id="a-persons-page">A person's page<a class="anchor" href="#a-persons-page" aria-label="Link to this section">#</a></h2>
+<p>Click a person on the People page. Their page shows each of their photos and videos once. A video's tile shows their face and <strong>▶ Video</strong>, and under it the first few times they're seen; click a time to play from there.</p>
+<p>Editors and admins can:</p>
+<ul>
+<li>click the name to rename them;</li>
+<li>click <strong>Merge into...</strong> and pick who this person really is: all their faces move there, and this person goes;</li>
+<li>click <strong>Delete person</strong>: the name goes, and their faces go back to unnamed groups.</li>
+</ul>
+<h2 id="dismissed-faces">Dismissed faces<a class="anchor" href="#dismissed-faces" aria-label="Link to this section">#</a></h2>
+<p><strong>Dismissed</strong>, at the top right of the People page, lists the groups dismissed. An editor or admin clicks <strong>Restore &amp; Name</strong>, then types a new name and clicks <strong>Restore</strong>, or picks a person already named to add them to.</p>
+<h2 id="finding-someones-photos">Finding someone's photos<a class="anchor" href="#finding-someones-photos" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>In the search box, type two letters of their name and pick them from <strong>People</strong>.</li>
+<li>Or use <strong>Filters</strong> › <strong>Person...</strong>.</li>
+<li><strong>Filters</strong> › <strong>Has faces</strong> shows every clip with a face found.</li>
+</ul>
+<p>Each adds a filter you can combine with a search or other filters (see <a href="browse-and-search.html#filters-and-sorting">Browse and search</a>).</p>
+<h2 id="who-can-do-what">Who can do what<a class="anchor" href="#who-can-do-what" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>Everyone signed in sees the People page, but only faces in the libraries they can see: someone with no faces there isn't listed (see <a href="users-and-roles.html">Users and roles</a>).</li>
+<li>Editors and admins name, change, merge, dismiss and delete.</li>
+<li>Faces and names never show on public pages.</li>
+</ul>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="browse-and-search.html"><span>Previous</span>Browse and search</a><a class="next" href="videos.html"><span>Next</span>Videos</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/people.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#how-faces-are-found">How faces are found</a></li><li><a href="#naming-groups-of-faces">Naming groups of faces</a></li><li><a href="#naming-a-face-in-a-photo">Naming a face in a photo</a></li><li><a href="#people-in-a-video">People in a video</a></li><li><a href="#a-persons-page">A person&#x27;s page</a></li><li><a href="#dismissed-faces">Dismissed faces</a></li><li><a href="#finding-someones-photos">Finding someone&#x27;s photos</a></li><li><a href="#who-can-do-what">Who can do what</a></li></ul></nav>
+  </div>
+</body>
+</html>

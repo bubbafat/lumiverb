@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Storage · Lumiverb docs</title>
+  <meta name="description" content="Lumiverb leaves your originals where they are and keeps what it makes from them in folders of its own. This page says what it keeps, where, how to move the previews to a bigger drive, and what happens">
+  <link rel="canonical" href="https://docs.lumiverb.io/storage.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html" aria-current="page">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html" aria-current="page">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Storage</h1>
+<p>Lumiverb leaves your originals where they are and keeps what it makes from them in folders of its own. This page says what it keeps, where, how to move the previews to a bigger drive, and what happens when a drive is unplugged.</p>
+<h2 id="what-lumiverb-keeps">What Lumiverb keeps<a class="anchor" href="#what-lumiverb-keeps" aria-label="Link to this section">#</a></h2>
+<div class="table"><table>
+<thead>
+<tr>
+<th>What</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Previews and thumbnails of every photo and video</td>
+<td>The previews folder</td>
+</tr>
+<tr>
+<td>A short preview of each video, and a full-length copy for analysis, which is also what the web app plays</td>
+<td>The previews folder</td>
+</tr>
+<tr>
+<td>Frames from video scenes, and face crops</td>
+<td>The previews folder</td>
+</tr>
+<tr>
+<td>The start of videos cut for capped playback (Settings › Playback)</td>
+<td>The previews folder, at most 2 GB</td>
+</tr>
+<tr>
+<td>The databases: people, libraries, clips, names, ratings, notes, projects, settings, and search</td>
+<td>On a Mac, the data folder. On Linux, PostgreSQL's own folder</td>
+</tr>
+<tr>
+<td>AI models for search, faces and transcripts</td>
+<td>The data folder</td>
+</tr>
+<tr>
+<td>Backups</td>
+<td>The data folder, unless a server admin chose another (see <a href="backups.html">Backups and restore</a>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The data folder is <code>$(brew --prefix)/var/lumiverb</code> on a Mac and <code>/var/lib/lumiverb</code> on Linux, unless the install chose another: it's <code>DATA_DIR</code> in the env file. Until someone moves them, the previews are in the data folder too.</p>
+<p>The previews folder is the one that grows with your libraries, the copies of videos most of all. How big those copies are is set under Analysis proxies in Settings › Processing (see <a href="processing.html">Processing</a>). Everything in it can be made again from the originals, which is why backups leave it out.</p>
+<h2 id="where-previews-live">Where previews live<a class="anchor" href="#where-previews-live" aria-label="Link to this section">#</a></h2>
+<p><strong>Settings › Storage</strong> shows, to a server admin:</p>
+<ul>
+<li><strong>Previews</strong>: the folder, and how much room is left on its drive.</li>
+<li><strong>Libraries with a folder of their own</strong>, if any.</li>
+<li><strong>Data</strong>: the data folder and its room. The database, the search index and the AI models stay there; Ollama keeps its models in its own place.</li>
+</ul>
+<p>Settings shows a dot beside Storage when something needs a look: a drive not plugged in, a folder Lumiverb can't write to, or a move that stopped.</p>
+<h2 id="moving-the-previews">Moving the previews<a class="anchor" href="#moving-the-previews" aria-label="Link to this section">#</a></h2>
+<p>Move them to a drive with room, such as off a Mac's system drive. A server admin, on the computer Lumiverb is installed on:</p>
+<ol>
+<li>In <strong>Settings › Storage</strong>, under Previews, click <strong>Move them…</strong>.</li>
+<li>Type a folder: an empty one on the drive you want, or one to make, such as <code>/Volumes/Media/Lumiverb previews</code>. Click <strong>Next</strong>.</li>
+<li>If it isn't there yet, Lumiverb asks; click <strong>Make it</strong>.</li>
+<li>It says how much moves and how much room there is. Click <strong>Move them</strong> (or <strong>Use it</strong>, when there's nothing to move yet).</li>
+</ol>
+<p>New previews go to the new folder at once, and the rest move in the background. The page shows how many files and how much are across. Lumiverb keeps working meanwhile: previews not moved yet show from where they are.</p>
+<p>If the move stops (the new drive full or unplugged, say), the page says why. It's tried again in 15 minutes, or click <strong>Try again</strong>. <strong>Back to the data folder…</strong> moves them back.</p>
+<p>From any other computer, the page says &quot;Move them on the computer Lumiverb is installed on.&quot;</p>
+<h2 id="a-librarys-own-previews-folder">A library's own previews folder<a class="anchor" href="#a-librarys-own-previews-folder" aria-label="Link to this section">#</a></h2>
+<p>One library can keep its previews in a folder of its own, such as a big video library's on a drive of its own. An account admin, on the computer Lumiverb is installed on, opens the library's <strong>Library settings › Previews</strong> and uses <strong>Move them…</strong> the same way. <strong>Back to the server's folder…</strong> moves them back.</p>
+<p>If that folder is on the same drive as the library's originals, the page warns you: with that drive unplugged, the library can't be browsed at all.</p>
+<h2 id="when-a-drive-is-unplugged">When a drive is unplugged<a class="anchor" href="#when-a-drive-is-unplugged" aria-label="Link to this section">#</a></h2>
+<p>When the drive with the previews isn't there, Settings › Storage says &quot;This folder isn't there. Is its drive plugged in? Until it is, previews don't show and none are made.&quot; For a library's own folder, only that library is affected. Plug the drive back in and everything carries on.</p>
+<p>Lumiverb never writes into a folder that stands in for a missing drive (such as an empty <code>/Volumes</code> folder on a Mac, or an unmounted mount point on Linux). Choosing a folder on a drive that isn't there is refused: &quot;There's no drive at … Is it mounted?&quot; A chosen previews folder holds a small file called <code>.lumiverb-previews</code>, which is how Lumiverb knows its drive is there. Leave it in place.</p>
+<p>Lumiverb also tries writing to each chosen folder every few minutes. If it can't, Settings says &quot;Lumiverb can't write to …&quot; with the reason, and no previews are made there until it can.</p>
+<h2 id="on-linux-folders-outside-the-data-folder">On Linux: folders outside the data folder<a class="anchor" href="#on-linux-folders-outside-the-data-folder" aria-label="Link to this section">#</a></h2>
+<p>On Linux, the API's service may write only inside the data folder. A previews or backups folder anywhere else is refused (&quot;Lumiverb can't write to …&quot;, or &quot;Lumiverb can't make a folder in …&quot;) until the service is allowed to. Open an override for the service:</p>
+<div class="cmd"><pre><code>sudo systemctl edit lumiverb-api</code></pre></div>
+<p>Add these lines, with your folder:</p>
+<pre><code class="language-text">[Service]
+ReadWritePaths=/mnt/big/lumiverb-previews</code></pre>
+<p>Save, then restart the API:</p>
+<div class="cmd"><pre><code>sudo systemctl restart lumiverb-api</code></pre></div>
+<p>Then choose the folder in Settings.</p>
+<h2 id="caches-and-their-caps">Caches and their caps<a class="anchor" href="#caches-and-their-caps" aria-label="Link to this section">#</a></h2>
+<p>A few things are kept only to save time, each with a cap in gigabytes, set in the env file:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LUMIVERB_PLAYBACK_CACHE_GB</code></td>
+<td>Cut videos for capped playback, per account</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>LUMIVERB_ANALYSIS_CACHE_GB</code></td>
+<td>Copies of videos for analysis the scheduler keeps, when it doesn't run on the same disk as the API</td>
+<td>50</td>
+</tr>
+<tr>
+<td><code>LUMIVERB_PREVIEW_CACHE_GB</code></td>
+<td>Previews the scheduler keeps, the same way</td>
+<td>2</td>
+</tr>
+</tbody>
+</table></div>
+<p>Past its cap, the least recently used go first, and are made again when next needed. After editing the env file, restart Lumiverb. On a Mac:</p>
+<div class="cmd"><pre><code>brew services restart lumiverb</code></pre></div>
+<p>On Linux:</p>
+<div class="cmd"><pre><code>sudo systemctl restart lumiverb-api lumiverb-scheduler</code></pre></div>
+<h2 id="what-frees-space">What frees space<a class="anchor" href="#what-frees-space" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>Emptying the trash, by hand or after the trash days, deletes each clip's previews, scene frames and face crops with it.</li>
+<li>A daily clean-up removes files Lumiverb no longer needs.</li>
+<li>Once a day, Whisper and search models no account uses any more are removed.</li>
+</ul>
+<p>Your originals are never touched by any of these.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="network.html"><span>Previous</span>Network, phones and HTTPS</a><a class="next" href="backups.html"><span>Next</span>Backups and restore</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/storage.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-lumiverb-keeps">What Lumiverb keeps</a></li><li><a href="#where-previews-live">Where previews live</a></li><li><a href="#moving-the-previews">Moving the previews</a></li><li><a href="#a-librarys-own-previews-folder">A library&#x27;s own previews folder</a></li><li><a href="#when-a-drive-is-unplugged">When a drive is unplugged</a></li><li><a href="#on-linux-folders-outside-the-data-folder">On Linux: folders outside the data folder</a></li><li><a href="#caches-and-their-caps">Caches and their caps</a></li><li><a href="#what-frees-space">What frees space</a></li></ul></nav>
+  </div>
+</body>
+</html>

@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Users and roles · Lumiverb docs</title>
+  <meta name="description" content="Everyone signs in with their own email and password, and has a role that says what they can do. This page covers inviting people, roles on the whole account and on one library, server admins, password">
+  <link rel="canonical" href="https://docs.lumiverb.io/users-and-roles.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html" aria-current="page">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html" aria-current="page">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Users and roles</h1>
+<p>Everyone signs in with their own email and password, and has a role that says what they can do. This page covers inviting people, roles on the whole account and on one library, server admins, passwords and API keys.</p>
+<h2 id="roles">Roles<a class="anchor" href="#roles" aria-label="Link to this section">#</a></h2>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Role</th>
+<th>Can</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Viewer</td>
+<td>Browse, search and play what they can see, and keep their own ratings, favorites and saved searches</td>
+</tr>
+<tr>
+<td>Editor</td>
+<td>All of that, and change clips: descriptions, tags, locations, people's names, archive and trash. Make projects. Change a library's path filters, ask for a scan, move a library to the trash and restore it. Make API keys</td>
+</tr>
+<tr>
+<td>Admin</td>
+<td>All of that, and invite people and set their roles, add libraries, run every library, delete for good, make a library public, and change Settings › AI, Processing, Files, Playback, Devices and Plug-ins</td>
+</tr>
+</tbody>
+</table></div>
+<p>An admin here is the account's admin. A <strong>server admin</strong> looks after the install itself: see <a href="#server-admins">Server admins</a>.</p>
+<h2 id="inviting-someone">Inviting someone<a class="anchor" href="#inviting-someone" aria-label="Link to this section">#</a></h2>
+<p>Only an admin invites people.</p>
+<ol>
+<li>Open <strong>Admin</strong>, then <strong>Manage users</strong>.</li>
+<li>Under <strong>Invite someone</strong>, type their <strong>Email</strong> and choose a <strong>Role</strong>.</li>
+<li>To have them see only the libraries you give them, tick <strong>Only the libraries they're given a role on</strong>.</li>
+<li>Click <strong>Make invite link</strong>.</li>
+<li>Click <strong>Copy</strong> and send them the link yourself, by message or email.</li>
+</ol>
+<p>The link works once, for 7 days. Opening it, they choose their own password (at least 12 characters) and are signed in. If the first link doesn't open on their device, send the second one shown: the same link at the computer's network address instead of its name.</p>
+<p>On a Mac, the link opens only on that Mac until Settings › Network lets other devices use Lumiverb. See <a href="network.html">Network, phones and HTTPS</a>.</p>
+<p>Lost the link, or it ran out? In the users list, click <strong>New link</strong> beside them. The old one stops working. Once they've signed in, there's no link to make: they use Forgot password.</p>
+<p>From the command line, an admin's key can do the same:</p>
+<div class="cmd"><pre><code>lumiverb user create --email them@example.com --role editor</code></pre></div>
+<div class="cmd"><pre><code>lumiverb user invite --email them@example.com</code></pre></div>
+<h2 id="changing-or-removing-someone">Changing or removing someone<a class="anchor" href="#changing-or-removing-someone" aria-label="Link to this section">#</a></h2>
+<p>In <strong>Admin › Manage users</strong>:</p>
+<ul>
+<li><strong>Role</strong>: choose another. You can't change your own, and the last admin can't be made anything else. API keys they made with a higher role than their new one stop working.</li>
+<li><strong>Libraries</strong>: <strong>Every library</strong>, or <strong>Only those given</strong> (see <a href="#seeing-only-what-theyre-given">Seeing only what they're given</a>).</li>
+<li><strong>Remove</strong>: they can no longer sign in. Their ratings, saved searches and API keys go with them. You can't remove yourself or the last admin.</li>
+</ul>
+<h2 id="roles-on-one-library">Roles on one library<a class="anchor" href="#roles-on-one-library" aria-label="Link to this section">#</a></h2>
+<p>A person's account role holds on every library unless that library says otherwise. Its admin sets that in <strong>Library settings › People</strong>. An account admin is every library's admin.</p>
+<p>Each person has a <strong>Role here</strong>:</p>
+<ul>
+<li><strong>Default</strong>: what they'd have without a choice (shown in brackets).</li>
+<li><strong>Admin</strong>: runs this library: its settings, its folder, who reads it, pausing its scans, location guesses, who sees it.</li>
+<li><strong>Editor</strong> or <strong>Viewer</strong>: as in the account, on this library only.</li>
+<li><strong>No access</strong>: they don't see it.</li>
+</ul>
+<p>So an editor on one library can be a viewer everywhere else, or a viewer can be given one library to edit. The <strong>Why</strong> column says where each person's role comes from.</p>
+<p><strong>Private</strong> makes the library visible only to account admins and the people given a role on it. A public link is separate: anyone with it sees the library either way.</p>
+<p>From the command line, with the library's name:</p>
+<div class="cmd"><pre><code>lumiverb library role --name "Family" --email them@example.com --role editor</code></pre></div>
+<div class="cmd"><pre><code>lumiverb library private --name "Family" --on</code></pre></div>
+<h2 id="seeing-only-what-theyre-given">Seeing only what they're given<a class="anchor" href="#seeing-only-what-theyre-given" aria-label="Link to this section">#</a></h2>
+<p>Someone set to <strong>Only those given</strong> sees no library until a library's admin gives them a role on it. It suits a client or a relative who should see one library and nothing else. Admins always see every library.</p>
+<div class="cmd"><pre><code>lumiverb user libraries --email them@example.com --only-given</code></pre></div>
+<h2 id="server-admins">Server admins<a class="anchor" href="#server-admins" aria-label="Link to this section">#</a></h2>
+<p>What belongs to the whole install rather than one account is a server admin's: the accounts on it, where previews are kept (Settings › Storage), the network (Settings › Network), backups (Settings › Backups) and the log (Admin › Logs). The admin made when Lumiverb was set up is one.</p>
+<p>A server admin adds others in <strong>Admin › Accounts</strong>, under <strong>Server admins</strong>: type the email of someone who signs in here and click <strong>Make server admin</strong>. <strong>Remove</strong> takes it away; the last one can't be removed there.</p>
+<p>On the computer Lumiverb is installed on, the command line lists them, and adds or removes one even when there's none left. On a Mac:</p>
+<div class="cmd"><pre><code>lumiverb-server server-admins add you@example.com --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
+<p>On Linux:</p>
+<div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server server-admins add you@example.com --env /etc/lumiverb/env</code></pre></div>
+<p><strong>Admin › Accounts</strong> also makes a new account, with its own libraries, people and settings. Its first admin gets an invite link.</p>
+<h2 id="passwords">Passwords<a class="anchor" href="#passwords" aria-label="Link to this section">#</a></h2>
+<p>A password has at least 12 characters.</p>
+<p><strong>Forgot password?</strong> on the sign-in page works three ways:</p>
+<ul>
+<li>On a Mac, on that Mac itself: type your email and click <strong>Continue</strong>, and you go straight to choosing a new password. No email is needed.</li>
+<li>Where the install's env file has its <code>SMTP_*</code> lines filled in, it emails a reset link.</li>
+<li>Otherwise it says password reset isn't set up here.</li>
+</ul>
+<p>Whoever looks after the install can always set a new password on the machine. It asks for the new password twice. On a Mac:</p>
+<div class="cmd"><pre><code>lumiverb-server reset-password --env "$(brew --prefix)/etc/lumiverb/env" --email them@example.com</code></pre></div>
+<p>On Linux:</p>
+<div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server reset-password --env /etc/lumiverb/env --email them@example.com</code></pre></div>
+<p>A new password signs that person out everywhere, stops the API keys they made, and voids any reset or invite link they hadn't used.</p>
+<p>To change your own password, sign out and use <strong>Forgot password?</strong> on the sign-in page.</p>
+<h2 id="api-keys">API keys<a class="anchor" href="#api-keys" aria-label="Link to this section">#</a></h2>
+<p>The command line and scripts sign in with an API key instead of a password. Editors and admins make them in <strong>Settings › API Keys</strong>:</p>
+<ol>
+<li>Under <strong>Create key</strong>, give it a <strong>Label</strong> (where it's used) and a <strong>Role</strong>, at most your own.</li>
+<li>Copy the key it shows. It isn't shown again.</li>
+</ol>
+<p>Then give it to the command line (it asks you to paste the key):</p>
+<div class="cmd"><pre><code>lumiverb config set --api-url http://your-server:6464 --api-key -</code></pre></div>
+<p>The list shows when each key was last used. <strong>Revoke</strong> stops one. A key also stops when the person who made it gets a new password, is given a lower role, or is removed.</p>
+<p>An admin can end keys nobody uses: under <strong>Unused keys</strong>, tick <strong>End keys not used for</strong> a number of days, then <strong>Save</strong>. If some keys would end at once, it names them and asks first. Keys Lumiverb makes for itself, devices' keys and the last admin key are never ended this way.</p>
+<p>More in <a href="command-line.html">The command line</a>.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="ai-machines.html"><span>Previous</span>AI machines</a><a class="next" href="network.html"><span>Next</span>Network, phones and HTTPS</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/users-and-roles.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#roles">Roles</a></li><li><a href="#inviting-someone">Inviting someone</a></li><li><a href="#changing-or-removing-someone">Changing or removing someone</a></li><li><a href="#roles-on-one-library">Roles on one library</a></li><li><a href="#seeing-only-what-theyre-given">Seeing only what they&#x27;re given</a></li><li><a href="#server-admins">Server admins</a></li><li><a href="#passwords">Passwords</a></li><li><a href="#api-keys">API keys</a></li></ul></nav>
+  </div>
+</body>
+</html>

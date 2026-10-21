@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Plug-ins · Lumiverb docs</title>
+  <meta name="description" content="Plug-ins add to what Lumiverb knows about your photos and videos, such as the town and landmark where each was taken. The server admin installs them on the server; each account&#x27;s admin turns them on o">
+  <link rel="canonical" href="https://docs.lumiverb.io/plugins.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html" aria-current="page">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html" aria-current="page">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Plug-ins</h1>
+<p>Plug-ins add to what Lumiverb knows about your photos and videos, such as the town and landmark where each was taken. The server admin installs them on the server; each account's admin turns them on or off in Settings › Plug-ins.</p>
+<h2 id="what-a-plug-in-is">What a plug-in is<a class="anchor" href="#what-a-plug-in-is" aria-label="Link to this section">#</a></h2>
+<p>A plug-in is a program of its own, in any language, that Lumiverb runs outside itself. It comes as a folder with a <code>lumiverb-plugin.json</code> that says what it reads, what it downloads, whether it uses the internet, and its settings. Lumiverb shows you all of that before you install it.</p>
+<p>Each plug-in runs in a process of its own, below Lumiverb's priority, given none of Lumiverb's settings or keys, and held to its own memory and disk. If it stops, it's started again; one that keeps stopping is left stopped, and Settings › Plug-ins says why.</p>
+<p>What a plug-in can do:</p>
+<ul>
+<li><strong>Work on each photo and video.</strong> It's handed only what it asks for (where a clip was taken, when, its size and camera, a photo's preview) and gives back short facts. They show in the clip's details in the Lightbox, under the plug-in's name, and search finds a clip by the ones the plug-in marks searchable.</li>
+<li><strong>Find places by name</strong> for Set location.</li>
+</ul>
+<h2 id="turn-one-on">Turn one on<a class="anchor" href="#turn-one-on" aria-label="Link to this section">#</a></h2>
+<p>Account admins, in <strong>Settings › Plug-ins</strong>. Each plug-in installed on the server is listed with what it does, its version and who made it, whether it's running, and <strong>What it reads and reaches</strong>: what it reads of your clips, what it downloads and from where, and whether it uses the internet.</p>
+<p>Tick its switch to turn it on. If it asks you to accept something, such as a license, the whole text opens: <strong>OK</strong> accepts it and turns the plug-in on, <strong>Cancel</strong> leaves it off. The row then says who accepted it and when. If a later version asks for its new text to be accepted, the plug-in turns off and says so, until an admin turns it on and accepts it.</p>
+<p>Soon after it's turned on, a plug-in that works on clips starts on every one in the account. Its work has its own row in Settings › Processing, with its counts and why anything waits (<a href="processing.html">Processing</a>).</p>
+<p>Below the switch are its settings: <strong>Its settings</strong>, for this account, and <strong>For the whole server</strong>, for every account. A setting marked &quot;Changing it asks what becomes of what it made&quot; asks, when saved, whether to keep what was made (<strong>New ones only</strong>) or make it again (<strong>Also remake them</strong>).</p>
+<h2 id="place-names-geonames">Place names (GeoNames)<a class="anchor" href="#place-names-geonames" aria-label="Link to this section">#</a></h2>
+<p>Place names is one of Lumiverb's own plug-ins. It comes installed, off until an account's admin turns it on and accepts GeoNames' license (Creative Commons Attribution 4.0).</p>
+<p>Turned on, it downloads about 600 MB of lists from GeoNames once for the server, and builds its own list of the world's towns of 1,000 people or more and its landmarks (parks, museums, monuments, mountains and more). Settings › Plug-ins shows how far it has got. Nothing about your photos, videos or account is sent to GeoNames.</p>
+<p>Then, for every photo and video with a location, it names the landmark it was taken at and the nearest town. They show in the clip's details, and search finds clips by either: a search for &quot;Magic Kingdom&quot; finds the photos taken there. In Set location, <strong>Place</strong> finds places by name. See <a href="places.html">Places</a>.</p>
+<p>Its settings:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Nearest town within</td>
+<td>How far away, in km, a town can be and still name where a clip was (25 to begin with)</td>
+</tr>
+<tr>
+<td>Download from</td>
+<td>Advanced, for the whole server: a copy of GeoNames' download folder to use when the server can't reach GeoNames itself</td>
+</tr>
+</tbody>
+</table></div>
+<p>A Linux install needs <code>DATA_DIR</code> in its env file for any plug-in to run, Place names included.</p>
+<h2 id="install-one">Install one<a class="anchor" href="#install-one" aria-label="Link to this section">#</a></h2>
+<p>The server admin installs plug-ins on the server machine itself. The commands below are a Mac's; on a Linux server the command is <code>/opt/lumiverb/.venv/bin/lumiverb-server</code>, with <code>--env /etc/lumiverb/env</code>.</p>
+<p>To see what's installed, Lumiverb's own included:</p>
+<div class="cmd"><pre><code>lumiverb-server plugins --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
+<p>To install one:</p>
+<div class="cmd"><pre><code>lumiverb-server plugins install FOLDER --off --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
+<p><code>FOLDER</code> is the plug-in's folder, a <code>.zip</code> of it, or an <code>https</code> URL to a <code>.zip</code>. With a download, <code>--sha256 HASH</code> installs it only if it's the file you meant. It first shows what the plug-in reads and reaches, and asks before installing.</p>
+<p>The first time, say whether it's on or off by default:</p>
+<ul>
+<li><code>--off</code>: off until each account's admin turns it on.</li>
+<li><code>--on</code>: on in every account that hasn't turned it off. If it asks for a license to be accepted, you accept it for those accounts.</li>
+</ul>
+<p>Installing a newer version is the same command; it says what the new version reads or reaches that the old one didn't. To change the default later:</p>
+<div class="cmd"><pre><code>lumiverb-server plugins default ID off --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
+<h2 id="try-the-example">Try the example<a class="anchor" href="#try-the-example" aria-label="Link to this section">#</a></h2>
+<p>Lumiverb comes with an example plug-in. It gives each photo and video a caption you choose, when it was taken and its shape, finds a few famous places in Set location, and has one setting of every kind. <code>lumiverb-server plugins</code> prints the command that installs it.</p>
+<h2 id="uninstall-one">Uninstall one<a class="anchor" href="#uninstall-one" aria-label="Link to this section">#</a></h2>
+<div class="cmd"><pre><code>lumiverb-server plugins uninstall ID --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
+<p>It first says what the plug-in has in each account and what stops working without it, then asks what becomes of what it made:</p>
+<ul>
+<li><strong>Keep</strong> (<code>--keep</code>): its facts are still shown and searched. Installing it again picks it all up.</li>
+<li><strong>Trash</strong> (<code>--trash</code>): hidden, and deleted after 30 days unless it's installed again.</li>
+<li><strong>Delete</strong> (<code>--delete</code>): what it made, its settings and its own data, deleted from every account now.</li>
+</ul>
+<p>A plug-in uninstalled with its facts kept is listed in Settings › Plug-ins under <strong>Uninstalled, facts kept</strong>, where an account admin can <strong>Delete its facts here</strong> for that account. One of Lumiverb's own that you uninstall stays uninstalled through updates.</p>
+<h2 id="when-one-isnt-working">When one isn't working<a class="anchor" href="#when-one-isnt-working" aria-label="Link to this section">#</a></h2>
+<p>Settings › Plug-ins says what each is doing: <strong>Running</strong> (with its memory), <strong>Starting…</strong>, <strong>Getting ready</strong>, <strong>Not running</strong>, <strong>Not working</strong> with why, or <strong>Stopped</strong> with why. Admin › Logs shows its lines under Plug-ins. On Linux they're in its journal too:</p>
+<div class="cmd"><pre><code>journalctl -u lumiverb-plugins -f</code></pre></div>
+<p>Server admins also see a row for Lumiverb's own plug-ins on the Admin page, red when one couldn't be installed.</p>
+<h2 id="write-one">Write one<a class="anchor" href="#write-one" aria-label="Link to this section">#</a></h2>
+<p><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in</a> is a plug-in's whole contract: the manifest, how it's run, and every request it answers.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="ai-worker.html"><span>Previous</span>A second machine for search and faces</a><a class="next" href="command-line.html"><span>Next</span>The command line</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/plugins.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-a-plug-in-is">What a plug-in is</a></li><li><a href="#turn-one-on">Turn one on</a></li><li><a href="#place-names-geonames">Place names (GeoNames)</a></li><li><a href="#install-one">Install one</a></li><li><a href="#try-the-example">Try the example</a></li><li><a href="#uninstall-one">Uninstall one</a></li><li><a href="#when-one-isnt-working">When one isn&#x27;t working</a></li><li><a href="#write-one">Write one</a></li></ul></nav>
+  </div>
+</body>
+</html>

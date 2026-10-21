@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Backups and restore · Lumiverb docs</title>
+  <meta name="description" content="Lumiverb backs up its databases every night: everything only it holds. This page says what&#x27;s in a backup, where backups go, and how to put one back.">
+  <link rel="canonical" href="https://docs.lumiverb.io/backups.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html" aria-current="page">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html" aria-current="page">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Backups and restore</h1>
+<p>Lumiverb backs up its databases every night: everything only it holds. This page says what's in a backup, where backups go, and how to put one back.</p>
+<h2 id="whats-in-a-backup">What's in a backup<a class="anchor" href="#whats-in-a-backup" aria-label="Link to this section">#</a></h2>
+<p>Every database, as PostgreSQL's own tools save them:</p>
+<ul>
+<li>The install's: who signs in, the accounts, API keys, server admins.</li>
+<li>Each account's: libraries, clips, descriptions, tags, text read in photos, transcripts, people and faces, names, ratings, notes, places, projects, settings, and search.</li>
+</ul>
+<p>Search is in the databases, so a restored backup searches as before with nothing to make again.</p>
+<p>Not in a backup:</p>
+<ul>
+<li><strong>Your originals.</strong> Lumiverb never writes to them, and doesn't back them up either. Back them up however you back up your files.</li>
+<li><strong>Previews</strong>, thumbnails, copies of videos for analysis, face crops and AI models. They're made again from the originals and the databases.</li>
+</ul>
+<p>A backup holds password hashes, so its files are readable only by the user Lumiverb runs as.</p>
+<h2 id="when-backups-are-made">When backups are made<a class="anchor" href="#when-backups-are-made" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Nightly</strong>: after 03:00 each night. A Mac asleep then makes it when it wakes.</li>
+<li><strong>Before an upgrade</strong>: a Mac's service backs up before an upgrade changes its databases. A Linux update does too, when the new version has database changes.</li>
+<li><strong>By hand</strong>: <strong>Back up now</strong> in Settings › Backups, or the command line (below).</li>
+<li><strong>Before a restore</strong>: a restore backs up what's there first, so it can be undone.</li>
+</ul>
+<p>Kept: every backup from the last 7 days, one a week for 4 weeks, and the last 3 before an upgrade and before a restore. The newest is always kept. Only folders Lumiverb made are ever removed from the backups folder.</p>
+<h2 id="settings--backups">Settings › Backups<a class="anchor" href="#settings--backups" aria-label="Link to this section">#</a></h2>
+<p>A server admin sees <strong>Settings › Backups</strong>:</p>
+<ul>
+<li>When the last backup was made and how big it was, and when the next is due.</li>
+<li><strong>Back up now</strong>, with how far it has got while it runs.</li>
+<li>If the last one failed, why.</li>
+<li><strong>Made</strong>: each backup, its kind and size, with <strong>Restore…</strong>.</li>
+</ul>
+<p>Settings shows a dot beside Backups when the last one failed, when none was made for two days, or when the folder can't be written to. The Admin page's Backups row turns red for the last two, and yellow when the last one failed.</p>
+<h2 id="where-backups-go">Where backups go<a class="anchor" href="#where-backups-go" aria-label="Link to this section">#</a></h2>
+<p>By default, <code>backups</code> in the data folder, on the same drive as Lumiverb's data. A folder on another drive keeps them if that drive fails. To choose one, a server admin, on the computer Lumiverb is installed on:</p>
+<ol>
+<li>In <strong>Settings › Backups</strong>, under Folder, click <strong>Change</strong>.</li>
+<li>Type the folder, such as <code>/Volumes/Backup/Lumiverb</code>, and click <strong>Save</strong>. If it isn't there yet, click <strong>Make it</strong>.</li>
+</ol>
+<p>It applies from now on: backups made already stay where they are. <strong>Use the default</strong> goes back. A folder on a drive that isn't plugged in is refused. On Linux, a folder outside the data folder needs the API's service allowed to write there first: see <a href="storage.html#on-linux-folders-outside-the-data-folder">Storage</a>.</p>
+<h2 id="keep-a-copy-of-the-env-file">Keep a copy of the env file<a class="anchor" href="#keep-a-copy-of-the-env-file" aria-label="Link to this section">#</a></h2>
+<p>The databases keep AI machines' keys and plug-ins' secret settings sealed, with a key that's in the install's env file, <code>LUMIVERB_SECRETS_KEY</code>. A backup on its own can't open them. Keep a copy of the env file with your backups, somewhere safe: it holds that key and others.</p>
+<ul>
+<li>On a Mac: <code>$(brew --prefix)/etc/lumiverb/env</code></li>
+<li>On Linux: <code>/etc/lumiverb/env</code> (readable by root only)</li>
+</ul>
+<p>Restored without that key, everything else comes back, and Settings › AI and Settings › Plug-ins ask for those keys and settings again.</p>
+<h2 id="backing-up-from-the-command-line">Backing up from the command line<a class="anchor" href="#backing-up-from-the-command-line" aria-label="Link to this section">#</a></h2>
+<p>On a Mac:</p>
+<div class="cmd"><pre><code>lumiverb-server backup --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
+<p>On Linux:</p>
+<div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server backup --env /etc/lumiverb/env</code></pre></div>
+<h2 id="restoring-a-backup">Restoring a backup<a class="anchor" href="#restoring-a-backup" aria-label="Link to this section">#</a></h2>
+<p>A restore replaces everything since that backup with what the backup holds. Lumiverb has to be stopped. In <strong>Settings › Backups</strong>, click <strong>Restore…</strong> beside the backup: it gives the three commands for that backup, to run in a terminal on the computer Lumiverb is installed on. They're the ones below, with the backup's folder in place of <code>BACKUP_FOLDER</code>.</p>
+<p>On a Mac:</p>
+<div class="cmd"><pre><code>brew services stop lumiverb</code></pre></div>
+<div class="cmd"><pre><code>lumiverb-server restore --env "$(brew --prefix)/etc/lumiverb/env" BACKUP_FOLDER</code></pre></div>
+<div class="cmd"><pre><code>brew services start lumiverb</code></pre></div>
+<p>On Linux:</p>
+<div class="cmd"><pre><code>sudo systemctl stop lumiverb-scheduler lumiverb-api</code></pre></div>
+<div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server restore --env /etc/lumiverb/env BACKUP_FOLDER</code></pre></div>
+<div class="cmd"><pre><code>sudo systemctl start lumiverb-api lumiverb-scheduler</code></pre></div>
+<p>The restore asks before it starts (<code>--yes</code> skips the question). It checks the backup is whole, backs up what's there now, then puts each database back beside the live one and swaps it in only once it's complete, so a restore that fails changes nothing. Then it brings the databases up to this version of Lumiverb, so a backup from an older version restores too.</p>
+<p>If it says Lumiverb is still running, it names what's still connected to the databases. Stop that first and run it again. On Linux, that can be the plug-in runner:</p>
+<div class="cmd"><pre><code>sudo systemctl stop lumiverb-plugins</code></pre></div>
+<p>Start it again with the others afterwards:</p>
+<div class="cmd"><pre><code>sudo systemctl start lumiverb-plugins</code></pre></div>
+<p>To undo a restore, restore the backup it made first: it's listed as &quot;Before a restore&quot;.</p>
+<h2 id="restoring-on-another-computer">Restoring on another computer<a class="anchor" href="#restoring-on-another-computer" aria-label="Link to this section">#</a></h2>
+<p>To move Lumiverb to a new computer, or recover after losing one:</p>
+<ol>
+<li>Install Lumiverb on the new computer and start it once. There's no need to create an account there. See <a href="install-mac.html">Install on a Mac</a> or <a href="install-linux.html">Install on a Linux server</a>.</li>
+<li>Copy the backup's folder to it, somewhere the user Lumiverb runs as can read (on Linux, the <code>lumiverb</code> user).</li>
+<li>Stop Lumiverb there, and in its env file, put the <code>LUMIVERB_SECRETS_KEY</code> line from your copy of the old env file in place of its own.</li>
+<li>Restore as above, then start Lumiverb.</li>
+</ol>
+<p>Everyone signs in again. Libraries keep the folders they had: if the originals are somewhere else on the new computer, change each library's folder in its settings (see <a href="libraries.html#who-reads-it">Libraries</a>). Previews are made again from the originals.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="storage.html"><span>Previous</span>Storage</a><a class="next" href="processing.html"><span>Next</span>Processing</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/backups.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#whats-in-a-backup">What&#x27;s in a backup</a></li><li><a href="#when-backups-are-made">When backups are made</a></li><li><a href="#settings--backups">Settings › Backups</a></li><li><a href="#where-backups-go">Where backups go</a></li><li><a href="#keep-a-copy-of-the-env-file">Keep a copy of the env file</a></li><li><a href="#backing-up-from-the-command-line">Backing up from the command line</a></li><li><a href="#restoring-a-backup">Restoring a backup</a></li><li><a href="#restoring-on-another-computer">Restoring on another computer</a></li></ul></nav>
+  </div>
+</body>
+</html>
