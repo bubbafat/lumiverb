@@ -1493,3 +1493,105 @@ def test_upkeep_waits_for_an_api_still_starting_and_an_update_writes_the_same():
     assert len(deploy) == 2 and deploy == update
     assert all("--retry 12 --retry-delay 5 --retry-connrefused" in call for call in deploy)
 
+
+
+def _install_checks(tmp_path: Path, *, fstab: str = "", mounted: tuple[str, ...] = (), disks: str = "[]",
+                    meminfo: str = "MemTotal: 16000000 kB\nSwapTotal: 0 kB\n", other_disk: tuple[str, ...] = (),
+                    calls: str = "") -> tuple[int, str]:
+    """deploy-api.sh's checks before anything's made, with the machine stubbed: fstab's lines, the mount points
+    mounted, lsblk's disks (its JSON "blockdevices"), /proc/meminfo, folders on another disk than /."""
+    (tmp_path / "fstab").write_text(fstab)
+    (tmp_path / "meminfo").write_text(meminfo)
+    text = DEPLOY_API.read_text()
+    block = text.split("# Before anything's made: where the data goes, and memory\n", 1)[1].split(
+        '\n# ---------------------------------------------------------------------------\n\ndata_dir_check', 1)[0]
+    script = (
+        'fail() { echo "fail: $1"; exit 1; }; warn() { echo "warn: $1"; }\n'
+        + block
+        + f'\nFSTAB="{tmp_path}/fstab"; MEMINFO="{tmp_path}/meminfo"\n'
+        + f'mountpoint() {{ case "$2" in {"|".join(mounted) or "''"}) return 0 ;; *) return 1 ;; esac; }}\n'
+        + f"lsblk() {{ echo '{{\"blockdevices\": {disks}}}'; }}\n"
+        + f'stat() {{ case "${{@: -1}}" in {"|".join(other_disk) or "''"}) echo 2 ;; *) echo 1 ;; esac; }}\n'
+        + calls
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    return out.returncode, out.stdout + out.stderr
+
+
+SDA = '[{"name": "/dev/vda", "type": "disk", "size": "25G", "children": [{"name": "/dev/vda1", "type": "part", ' \
+      '"size": "25G", "mountpoint": "/"}]}, {"name": "/dev/sda", "type": "disk", "size": "100G", "mountpoint": null}]'
+
+
+def test_a_data_dir_whose_drive_fstab_lists_isnt_mounted_is_refused(tmp_path):
+    # The demo server's install: a Volume meant for the data, not mounted, would have put everything on the root disk.
+    fstab = "# comment /mnt/demo\nUUID=1 / ext4 defaults 0 1\n/dev/sda /mnt/demo ext4 defaults,nofail 0 2\n"
+    rc, out = _install_checks(tmp_path, fstab=fstab, calls='data_dir_check /mnt/demo/lumiverb false\n')
+    assert rc == 1 and "fail: There's no drive at /mnt/demo (/etc/fstab mounts one there)" in out, out
+    assert _install_checks(tmp_path, fstab=fstab, mounted=("/mnt/demo",),
+                           calls='data_dir_check /mnt/demo/lumiverb/ false\n') == (0, "")
+    # The deepest mount point holding it; a name that only starts the same isn't under it.
+    nested = fstab + "/dev/sdb /mnt ext4 defaults 0 2\n"
+    rc, out = _install_checks(tmp_path, fstab=nested, mounted=("/mnt",), calls='data_dir_check /mnt/demo/x false\n')
+    assert rc == 1 and "at /mnt/demo " in out, out
+    assert _install_checks(tmp_path, fstab=fstab, calls='data_dir_check /mnt/demolition/x false\n') == (0, "")
+
+
+def test_a_new_data_dir_on_the_system_disk_beside_an_unmounted_disk_is_refused_until_made(tmp_path):
+    data = tmp_path / "lumiverb"
+    rc, out = _install_checks(tmp_path, disks=SDA, calls=f'data_dir_check {data} true\n')
+    assert rc == 1 and f"fail: {data} would be a new folder on the system disk" in out and "/dev/sda (100G)" in out
+    assert f"sudo mkdir -p {data}" in out, "how to keep it there"
+    data.mkdir()
+    assert _install_checks(tmp_path, disks=SDA, calls=f'data_dir_check {data} true\n') == (0, ""), "made first: meant"
+    other = tmp_path / "elsewhere"
+    assert _install_checks(tmp_path, disks=SDA, calls=f'data_dir_check {other} false\n') == (0, ""), "the default"
+    assert _install_checks(tmp_path, disks=SDA, other_disk=(str(tmp_path),),
+                           calls=f'data_dir_check {other} true\n') == (0, ""), "on another disk already"
+    used = SDA.replace('"mountpoint": null', '"mountpoint": "[SWAP]"')
+    assert _install_checks(tmp_path, disks=used, calls=f'data_dir_check {other} true\n') == (0, ""), "swap is use"
+
+
+def test_little_memory_and_no_swap_is_said(tmp_path):
+    small = "MemTotal:        3995000 kB\nMemFree: 1 kB\nSwapTotal:             0 kB\n"
+    rc, out = _install_checks(tmp_path, meminfo=small, calls='memory_check\necho "$LOW_MEMORY"\n')
+    assert rc == 0 and out.startswith("warn: This machine has 3.8 GB of memory and no swap."), out
+    assert "add swap or memory" in out and "DigitalOcean" not in out
+    swapped = small.replace("SwapTotal:             0", "SwapTotal: 4194300")
+    assert _install_checks(tmp_path, meminfo=swapped, calls='memory_check\n') == (0, "")
+    assert _install_checks(tmp_path, calls='memory_check\n') == (0, ""), "16 GB"
+    text = DEPLOY_API.read_text()
+    assert text.index("memory_check\n") < text.index('mkdir -p "$DATA_DIR"'), "said before anything's made"
+    assert text.count('warn "$LOW_MEMORY"') == 2, "and again at the end"
+
+
+def _points_here(tmp_path: Path, resolved: list[str], mine: list[str]) -> tuple[int, str]:
+    """deploy-web.sh's domain check, DNS (getent) and this machine's addresses (ip) stubbed."""
+    text = DEPLOY_WEB.read_text()
+    block = text.split("# Whether the domain points here", 1)[1].split("# Said first too", 1)[0]
+    getent = "".join(f"echo '{a}       STREAM try.example.org'\n" for a in resolved) or ":"
+    ip = "".join(f"echo '2: eth0    inet {a}/20 brd x scope global eth0'\n" for a in mine) or ":"
+    script = (
+        'warn() { echo "warn: $1"; }\n' + block
+        + f"getent() {{ {getent}\n}}\nip() {{ {ip}\n}}\n"
+        + 'domain_points_here try.example.org\n'
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    return out.returncode, out.stdout + out.stderr
+
+
+def test_the_domain_is_checked_before_lets_encrypt_is_asked(tmp_path):
+    public, home = "167.99.234.121", "192.168.86.166"
+    rc, out = _points_here(tmp_path, [], [public, "10.10.0.5"])
+    assert rc == 1 and out.strip() == (
+        "warn: try.example.org doesn't resolve yet: add an A record for it pointing at 167.99.234.121"), out
+    assert _points_here(tmp_path, [public], [public]) == (0, "")
+    rc, out = _points_here(tmp_path, ["203.0.113.9"], [public])
+    assert rc == 1 and "Its A record points at 203.0.113.9: change it to 167.99.234.121." in out, out
+    assert _points_here(tmp_path, ["203.0.113.9"], [home]) == (0, ""), "behind a router: can't tell"
+    rc, out = _points_here(tmp_path, [public, "2001:db8::9"], [public, "2604:a880::1"])
+    assert rc == 1 and "Its AAAA record points at 2001:db8::9: change it to 2604:a880::1, or remove it." in out
+    assert _points_here(tmp_path, [public, "2001:db8::9"], [public]) == (0, ""), "no IPv6 here"
+    assert _points_here(tmp_path, ["127.0.1.1"], [public]) == (0, ""), "/etc/hosts names this machine"
+    text = DEPLOY_WEB.read_text()
+    assert text.index('if ! domain_points_here "$DOMAIN"; then\n    warn "Not asked for yet') < text.index(
+        'certbot "${certbot_args[@]}"')

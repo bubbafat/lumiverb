@@ -176,6 +176,71 @@ if [[ "$DRY_RUN" == "true" ]]; then
 fi
 
 [[ "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"
+
+# ---------------------------------------------------------------------------
+# Before anything's made: where the data goes, and memory
+# ---------------------------------------------------------------------------
+FSTAB=/etc/fstab
+MEMINFO=/proc/meminfo
+
+# The deepest mount point /etc/fstab lists that holds the folder, but /.
+fstab_mount_of() {
+  local found="" device mount_point rest
+  [[ -r "$FSTAB" ]] || return 0
+  while read -r device mount_point rest; do
+    [[ "$device" == \#* || "$mount_point" != /* || "$mount_point" == / ]] && continue
+    if [[ "$1" == "$mount_point" || "$1" == "$mount_point"/* ]] && (( ${#mount_point} > ${#found} )); then
+      found="$mount_point"
+    fi
+  done < "$FSTAB"
+  echo "$found"
+}
+
+# Disks attached with nothing on them mounted (nor swap), and their sizes.
+unmounted_disks() {
+  lsblk -Jpo NAME,TYPE,SIZE,MOUNTPOINT 2>/dev/null | python3 -c '
+import json, sys
+def used(dev): return bool(dev.get("mountpoint")) or any(used(c) for c in dev.get("children") or [])
+for dev in json.load(sys.stdin).get("blockdevices", []):
+    if dev.get("type") == "disk" and not used(dev):
+        print("%s (%s)" % (dev["name"], dev.get("size") or "?"))
+' 2>/dev/null || true
+}
+
+# A drive that isn't there leaves a folder on the system disk in its place, and every preview, proxy and backup
+# would go there without a word: the rule src/server/drives.py applies to a folder chosen later.
+data_dir_check() {
+  local dir="${1%/}" chosen="$2" mount_point there disks
+  mount_point="$(fstab_mount_of "$dir")"
+  if [[ -n "$mount_point" ]] && ! mountpoint -q "$mount_point"; then
+    fail "There's no drive at ${mount_point} (/etc/fstab mounts one there). Mount it (sudo mount ${mount_point}) and run this again: otherwise the data folder ${dir} would be on the system disk."
+  fi
+  # A new folder chosen with --data-dir, on the system disk, while a disk sits unmounted: likely meant for it.
+  [[ "$chosen" == true && ! -e "$dir" ]] || return 0
+  there="$dir"
+  while [[ ! -d "$there" ]]; do there="$(dirname "$there")"; done
+  [[ "$(stat -c %d "$there")" == "$(stat -c %d /)" ]] || return 0
+  disks="$(unmounted_disks)"
+  disks="${disks//$'\n'/, }"
+  [[ -z "$disks" ]] || fail "${dir} would be a new folder on the system disk, while a disk with nothing mounted is attached: ${disks}. If the data should go there, format and mount it (with a line in /etc/fstab, nofail) and run this again. To keep it on the system disk, make the folder first (sudo mkdir -p ${dir})."
+}
+
+# Little memory and no swap: processing here can need more than there is, and the kernel stops what runs out.
+# Said first and again at the end.
+LOW_MEMORY=""
+memory_check() {
+  local mem_kb swap_kb
+  mem_kb="$(awk '/^MemTotal:/ { print $2 }' "$MEMINFO" 2>/dev/null || true)"
+  swap_kb="$(awk '/^SwapTotal:/ { print $2 }' "$MEMINFO" 2>/dev/null || true)"
+  if (( ${mem_kb:-0} > 0 && ${mem_kb:-0} < 4194304 && ${swap_kb:-0} == 0 )); then
+    LOW_MEMORY="This machine has $(awk -v kb="$mem_kb" 'BEGIN { printf "%.1f", kb / 1048576 }') GB of memory and no swap. Finding faces, CLIP and Whisper's transcripts can need more than that at once, and the kernel stops what runs out: add swap or memory."
+    warn "$LOW_MEMORY"
+  fi
+}
+# ---------------------------------------------------------------------------
+
+data_dir_check "$DATA_DIR" "$([[ -n "$DATA_DIR_OVERRIDE" ]] && echo true || echo false)"
+memory_check
 mkdir -p "$DATA_DIR" || fail "Cannot create data directory: $DATA_DIR"
 
 ARCH="$(uname -m)"
@@ -763,6 +828,7 @@ echo -e "${GREEN}${BOLD}Lumiverb API deployed.${NC}"
 echo ""
 echo "API listening on ${API_LISTEN_HOST}:${API_PORT}; people reach it at ${APP_HOST}"
 echo ""
+[[ -z "$LOW_MEMORY" ]] || { warn "$LOW_MEMORY"; echo ""; }
 echo "Next steps:"
 echo ""
 echo "  1. Create the first admin (while nobody can log in):"

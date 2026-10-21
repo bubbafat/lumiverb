@@ -122,6 +122,54 @@ NODE_MAJOR=20
 SVC_USER="lumiverb"
 
 # ---------------------------------------------------------------------------
+# Whether the domain points here: Let's Encrypt checks it on port 80 at the
+# address DNS gives it, so it's checked before asking, saying what record to
+# add and at what address rather than certbot's own error.
+# ---------------------------------------------------------------------------
+# A v4 address that isn't the internet's (a router's network, CGNAT and Tailscale, link-local, loopback).
+private_v4() {
+  [[ "$1" =~ ^(10|127)\. || "$1" =~ ^192\.168\. || "$1" =~ ^169\.254\. \
+    || "$1" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. || "$1" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\. ]]
+}
+
+# Says what's wrong and returns 1 when the domain doesn't resolve, or resolves somewhere this machine's public
+# address isn't. Behind a router (no public address of that family here) it can't tell, and lets it through.
+domain_points_here() {
+  local domain="$1" addr resolved mine public_v4="" public_v6="" elsewhere=""
+  resolved="$(getent ahosts "$domain" 2>/dev/null | awk '{ print $1 }' | sort -u || true)"
+  mine="$(ip -o addr show scope global 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $4 }' || true)"
+  for addr in $mine; do
+    if [[ "$addr" == *:* ]]; then
+      public_v6="${public_v6:-$addr}"
+    elif ! private_v4 "$addr"; then
+      public_v4="${public_v4:-$addr}"
+    fi
+  done
+  if [[ -z "$resolved" ]]; then
+    warn "${domain} doesn't resolve yet: add an A record for it pointing at ${public_v4:-the address the internet reaches this machine at}"
+    return 1
+  fi
+  for addr in $resolved; do
+    [[ "$addr" == 127.* || "$addr" == "::1" ]] && return 0  # /etc/hosts names this machine: DNS isn't asked
+    grep -qxF "$addr" <<<"$mine" && continue
+    if [[ "$addr" == *:* && -n "$public_v6" ]]; then
+      elsewhere+=" Its AAAA record points at ${addr}: change it to ${public_v6}, or remove it."
+    elif [[ "$addr" != *:* && -n "$public_v4" ]]; then
+      elsewhere+=" Its A record points at ${addr}: change it to ${public_v4}."
+    fi
+  done
+  if [[ -n "$elsewhere" ]]; then
+    warn "${domain} doesn't point at this machine.${elsewhere}"
+    return 1
+  fi
+}
+
+# Said first too, so a record added now has the install's few minutes to be seen.
+if [[ "$SKIP_CERTBOT" == "false" && -z "$CERTIFICATE_ARCHIVE" ]] && ! domain_points_here "$DOMAIN"; then
+  warn "It's checked again before the certificate is asked for"
+fi
+
+# ---------------------------------------------------------------------------
 # 1. System packages (web-only: nginx, Node.js, git)
 # ---------------------------------------------------------------------------
 step "Installing system packages"
@@ -341,7 +389,9 @@ elif [[ "$SKIP_CERTBOT" == "false" ]]; then
     certbot_args+=(--register-unsafely-without-email)
   fi
 
-  if certbot "${certbot_args[@]}"; then
+  if ! domain_points_here "$DOMAIN"; then
+    warn "Not asked for yet: the site serves HTTP only until ${DOMAIN} points here; then run this again"
+  elif certbot "${certbot_args[@]}"; then
     ok "TLS certificate obtained"
     TLS_ACTIVE=true
   else
