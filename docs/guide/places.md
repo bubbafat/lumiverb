@@ -22,7 +22,7 @@ Lumiverb has no map view of its own.
 
 ## Photos nearby and Has location
 
-- **Photos nearby**, under a clip's location in the viewer, shows every clip within 1 km of it. A "Within 1km" chip appears beside the search box; in **Filters**, **Radius** widens or narrows it (0.5, 1, 5, 10 or 50 km).
+- **Photos nearby**, under a clip's location in the viewer, shows every clip within 1 km of it. A "Within 1 km" chip appears beside the search box: choose another distance on the chip itself, from 0.2 to 500 km, or clear it with its **x**.
 - **Filters** › **Has location** shows only clips with a location from the file or a person.
 - **Filters** › **Includes guesses** counts guesses too, for both. It appears once there are guesses.
 

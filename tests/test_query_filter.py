@@ -401,7 +401,20 @@ class TestNearLocation:
         assert len(params) == 5
 
     def test_label(self):
-        assert "5" in NearLocation(lat=0, lon=0, radius_km=5).label()
+        assert NearLocation(lat=0, lon=0, radius_km=5).label() == "Within 5 km"
+        assert NearLocation(lat=0, lon=0, radius_km=0.5).label() == "Within 0.5 km"
+
+    @pytest.mark.parametrize("value", [
+        "48.85,2.35,0", "48.85,2.35,-5", "48.85,2.35,nan", "48.85,2.35,inf", "48.85,2.35,20001",
+        "91,2.35,1", "48.85,181,1", "nan,2.35,1",
+    ])
+    def test_a_place_off_the_earth_or_a_radius_that_isnt_one_is_refused(self, value):
+        with pytest.raises(ValueError):
+            NearLocation.from_url_value(value)
+
+    def test_any_radius_up_to_half_the_earth_is_taken(self):
+        assert NearLocation.from_url_value("48.85,2.35,0.2").radius_km == 0.2
+        assert NearLocation.from_url_value("-33.9,151.2,20000").radius_km == 20000.0
 
 
 # ---------------------------------------------------------------------------
