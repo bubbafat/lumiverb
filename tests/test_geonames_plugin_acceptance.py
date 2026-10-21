@@ -58,6 +58,7 @@ from src.producers.plugin_work import PluginWork
 from src.server.config import get_settings
 from src.server.database import get_tenant_session, tenant_database_url
 from src.server.lifecycle import cli
+from src.server.plugin_catalog import OnSomewhere, installed
 from src.server.plugin_producers import refresh
 from src.server.plugin_runner import HANDED_ON
 from tests.clips import make_clip
@@ -198,13 +199,24 @@ def test_part1_it_runs_while_any_account_has_it_on_under_this_machines_python(pr
     _until(f.runner, lambda: _running(f)["state"] == "off")
     assert f.runner.plugins["prober"].process is None
 
-    # On by default: running though nobody chose; this account turning it off leaves the other following it.
+    # On by default: running though nobody chose. A choice is the account's own: B chose off above, so the default
+    # isn't B's; A and a third account, C, never chose, and follow it.
+    r = f.client.post("/v1/admin/tenants", json={"name": "Third", "plan": "free"},
+                      headers={"Authorization": f"Bearer {INSTALL_KEY}"})
+    assert r.status_code == 200, r.text
+    make_database(f.control, r.json()["tenant_id"])
+    c = {"Authorization": f"Bearer {r.json()['api_key']}"}
     assert cli.main(["plugins", "default", "prober", "on", "--yes", "--env", str(f.env)]) == 0
     _until(f.runner, lambda: _running(f)["state"] == "ready")
+    assert [_listed(f.client, who)["prober"]["state"] for who in (f.a, f.b, c)] == ["on", "off", "on"]
+
+    # A choosing off leaves C following the default. The runner reads the accounts only every LIST_EVERY_SEC, so
+    # whether a few turns read them again is timing: what it reads is asked here, and running stays ready either way.
     _switch(f, f.a, False)
+    assert "prober" in OnSomewhere()(installed()), "C follows the default: still on somewhere"
     _turns(f)
-    assert _running(f)["state"] == "ready", "B follows the default: still on somewhere"
-    _switch(f, f.b, False)  # B never chose: its choosing off leaves it on nowhere
+    assert _running(f)["state"] == "ready"
+    _switch(f, c, False)  # the last account it was on in chooses off: on nowhere
     _until(f.runner, lambda: _running(f)["state"] == "off")
 
 
