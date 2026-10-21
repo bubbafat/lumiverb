@@ -18,7 +18,7 @@ class UnifiedBrowseRepository:
     """Cross-library browse — queries active_assets without library_id constraint."""
 
     SORTABLE_COLUMNS = {
-        "asset_id", "taken_at", "created_at", "file_size",
+        "asset_id", "taken_at", "created_at", "changed_at", "file_size",
         "iso", "exposure_time_us", "aperture", "focal_length", "rel_path",
     }
 
@@ -309,6 +309,15 @@ class UnifiedBrowseRepository:
         )
         assets_by_id = {a.asset_id: a for a in self._session.exec(stmt).all()}
         return [assets_by_id[aid] for aid in asset_ids if aid in assets_by_id]
+
+    def changed_at_of(self, asset_ids: list[str]) -> dict[str, object]:
+        """Each clip's last modified time: the most recent of every time related to it, which the database
+        keeps itself (assets.changed_at, tenant migration d9a3f5c1e7b4; not on the ORM model, never sent)."""
+        if not asset_ids:
+            return {}
+        rows = self._session.execute(text("SELECT asset_id, changed_at FROM assets WHERE asset_id = ANY(:ids)"),
+                                     {"ids": list(asset_ids)}).all()
+        return {asset_id: changed_at for asset_id, changed_at in rows}
 
     def facets(self, spec: "QuerySpec", candidate_ids: list[str] | None = None,
                rating_user_id: str | None = None):

@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/query", tags=["query"])
 
 SORT_COLUMNS = {
-    "taken_at", "created_at", "file_size", "iso",
+    "taken_at", "created_at", "changed_at", "file_size", "iso",
     "exposure_time_us", "aperture", "focal_length", "rel_path", "asset_id",
 }
 # A cursor carries the last row's sort value: a visitor's mustn't carry a file name or EXIF.
@@ -96,6 +96,8 @@ class QueryItem(BaseModel):
     thumbnail_key: str | None = None
     proxy_key: str | None = None
     created_at: str | None = None
+    # Its last modified time: the most recent of every time related to it (assets.changed_at).
+    changed_at: str | None = None
     search_context: SearchContext | None = None
 
 
@@ -383,6 +385,7 @@ def unified_query(
 
     # --- Build response ---
     sort_col = spec.sort if spec.sort in SORT_COLUMNS else "taken_at"
+    changed = browse_repo.changed_at_of([a.asset_id for a in assets])
 
     items = [
         QueryItem(
@@ -411,6 +414,7 @@ def unified_query(
             thumbnail_key=a.thumbnail_key,
             proxy_key=a.proxy_key,
             created_at=a.created_at.isoformat() if a.created_at else None,
+            changed_at=changed[a.asset_id].isoformat() if changed.get(a.asset_id) else None,
             search_context=search_contexts.get(a.asset_id),
         )
         for a in assets
@@ -422,7 +426,7 @@ def unified_query(
     next_cursor: str | None = None
     if len(assets) == limit:
         last = assets[-1]
-        sort_value = getattr(last, sort_col, None)
+        sort_value = changed.get(last.asset_id) if sort_col == "changed_at" else getattr(last, sort_col, None)
         if sort_value is not None and hasattr(sort_value, "isoformat"):
             sort_value = sort_value.isoformat()
         next_cursor = _encode_cursor(sort_col, sort_value, last.asset_id)

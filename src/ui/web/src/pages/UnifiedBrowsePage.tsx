@@ -273,6 +273,7 @@ export default function UnifiedBrowsePage() {
         gps_lat: item.gps_lat,
         gps_lon: item.gps_lon,
         created_at: item.created_at,
+        changed_at: item.changed_at ?? null,
       })),
     );
   }, [browseQuery.data]);
@@ -301,9 +302,11 @@ export default function UnifiedBrowsePage() {
 
   const browseCount = flatAssets.length;
 
+  // Grouped by the date it's sorted by; a text search's, ranked by relevance, by taken date as before.
+  const searching = filters.some((f) => f.type === "query");
   const groups = useMemo(
-    () => groupAssetsByDate(flatAssets),
-    [flatAssets],
+    () => groupAssetsByDate(flatAssets, searching ? undefined : browseSort),
+    [flatAssets, searching, browseSort],
   );
 
   const orderedAssets = useMemo(

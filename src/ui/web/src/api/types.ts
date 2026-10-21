@@ -248,6 +248,8 @@ export interface AssetPageItem {
   gps_lon: number | null;
   face_count?: number | null;
   created_at: string | null;
+  /** Its last modified time: the most recent of every time related to it (sort "changed_at"). */
+  changed_at?: string | null;
 }
 
 export interface AssetPageResponse {
