@@ -130,7 +130,17 @@ Through the tunnel, **Settings › AI › Add machine**: a name (OpenAI), the
 URL `https://api.openai.com/v1` (or Anthropic's, `https://api.anthropic.com/v1`, for Claude), your API key (typed there, never sent
 anywhere else: Lumiverb keeps it sealed with the install's own key),
 **Connect**, a vision model it lists (gpt-4.1-mini, say), tick
-**Descriptions & text**, 4 at once, **Add**. Each clip is one request: a
+**Descriptions & text**, 4 at once, **Add**. Or, in your SSH session, as
+the service user (it asks for the key, and never shows it):
+
+```bash
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb ai machines add OpenAI --url https://api.openai.com/v1 --jobs vision --at-once 4 --key
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb ai machines models OpenAI
+sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb ai model vision gpt-4.1-mini
+```
+
+(`lumiverb ai list` shows the machines and each job's model; `machines
+edit` and `machines remove` change or remove one.) Each clip is one request: a
 1280 px image and the prompt. Settings › Processing shows what's left;
 when nothing is, remove the machine (its key goes with it). Transcripts
 stay on the built-in Whisper (OpenAI's own API takes 25 MB a request: not

@@ -18,7 +18,6 @@ import math
 from pathlib import Path
 from typing import Annotated
 
-import click
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -26,6 +25,7 @@ from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
 from src.client.cli.commands.archive import library_id_for
+from src.client.cli.decisions import remake_or_not
 from src.client.cli.words import producers_listed, resolved, shown
 
 producers_app = typer.Typer(
@@ -344,17 +344,6 @@ def _yes_no(f: dict, raw: str) -> bool:
     return value
 
 
-def _remake_or_not(question: str | None) -> bool | None:
-    """The answer to the server's question: remake what the old settings
-    made too (True), new files only (False), or nothing changed (None). A
-    question of something dropped (location guesses) is yes or no."""
-    if question != "remake":
-        return True if typer.confirm("Go ahead?", default=False) else None
-    choice = typer.prompt("New files only (n), remake them too (r), or change nothing (c)?", default="n",
-                          type=click.Choice(["n", "r", "c"]), show_choices=False)
-    return {"n": False, "r": True}.get(choice)
-
-
 @producers_app.command("settings")
 def producers_settings(
     artifact: Annotated[str, typer.Argument(help="The producer, as the listing names it (e.g. video.transcript).")],
@@ -419,7 +408,7 @@ def producers_settings(
     r = client.raw("PUT", f"/v1/producers/{artifact}/settings", json={"settings": body, **answer})
     if r.status_code == 409 and ((r.json() or {}).get("error") or {}).get("code") == "redo_on_change":
         console.print(f"[yellow]{escape(_error(r))}[/yellow]")
-        redo = _remake_or_not(((r.json().get("error") or {}).get("details") or {}).get("question"))
+        redo = remake_or_not(((r.json().get("error") or {}).get("details") or {}).get("question"))
         if redo is None:
             console.print("Nothing changed.")
             raise typer.Exit(0)

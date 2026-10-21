@@ -151,7 +151,7 @@ def test_at_a_terminal_a_key_is_asked_for_hidden_and_enter_ends_it(config_file: 
         return "lv_pasted  "
 
     monkeypatch.setattr(getpass, "getpass", typed)
-    monkeypatch.setattr(importlib.import_module("src.client.cli.main"), "_at_a_terminal", lambda: True)
+    monkeypatch.setattr(importlib.import_module("src.client.cli.hidden"), "at_a_terminal", lambda: True)
     result = runner.invoke(app, ["config", "set", flag, "-"])
 
     assert result.exit_code == 0, result.output

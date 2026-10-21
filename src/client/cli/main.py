@@ -14,6 +14,7 @@ from rich.table import Table
 
 from src.client.cli.client import LumiverbAPIError, LumiverbClient
 from src.client.cli.config import ConfigError, get_admin_key, load_config, save_config
+from src.client.cli.commands.ai import ai_app
 from src.client.cli.commands.archive import archive_app
 from src.client.cli.commands.device import device_app
 from src.client.cli.commands.producers import producers_app
@@ -25,6 +26,7 @@ from src.client.cli.commands.settings import settings_app
 from src.client.cli.commands.trash import trash_app
 from src.client.cli.commands.users import user_app
 from src.client.cli.decisions import in_projects, send_until_decided
+from src.client.cli.hidden import key_typed
 from src.shared.io_utils import normalize_path_prefix
 from src.shared.logging_config import configure_logging
 
@@ -47,6 +49,7 @@ app.add_typer(trash_app, name="trash")
 app.add_typer(producers_app, name="producers")
 app.add_typer(device_app, name="device")
 app.add_typer(plugins_app, name="plugins")
+app.add_typer(ai_app, name="ai")
 
 from src.client.cli.commands.enrich import register as _register_enrich  # noqa: E402
 from src.client.cli.commands.pausing import register as _register_pausing  # noqa: E402
@@ -72,21 +75,6 @@ def _main() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _at_a_terminal() -> bool:
-    return sys.stdin.isatty()
-
-
-def _key_from_stdin(what: str) -> str:
-    """A key given as -: at a terminal, asked for and not shown (Enter ends
-    it, as a paste does); piped in, all of it. Kept off the command line,
-    so out of the shell's history."""
-    if _at_a_terminal():
-        import getpass
-
-        return getpass.getpass(f"{what} (not shown; paste it and press Enter): ").strip()
-    return sys.stdin.read().strip()
-
-
 @config_app.command("set")
 def config_set(
     api_url: Annotated[str | None, typer.Option("--api-url")] = None,
@@ -101,7 +89,7 @@ def config_set(
         console.print("[red]Only one key can come from stdin.[/red]")
         raise typer.Exit(1)
     if "-" in (api_key, admin_key):
-        key = _key_from_stdin("API key" if api_key == "-" else "Admin key")
+        key = key_typed("API key" if api_key == "-" else "Admin key")
         if not key:
             console.print("[red]No key on stdin.[/red]")
             raise typer.Exit(1)

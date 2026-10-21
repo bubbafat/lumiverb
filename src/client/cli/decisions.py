@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
+import click
 import httpx
 import typer
 from rich.console import Console
@@ -91,3 +92,15 @@ def in_projects(*, what: str, yes: bool) -> Answer:
 
     answer.sends = {"remove_from_projects": True}  # type: ignore[attr-defined]
     return answer
+
+
+def remake_or_not(question: str | None) -> bool | None:
+    """The answer to 409 redo_on_change (ADR-018 decision 6): remake what
+    the old settings or model made too (True), new files only (False), or
+    nothing changed (None). A question of something dropped (location
+    guesses) is yes or no."""
+    if question != "remake":
+        return True if typer.confirm("Go ahead?", default=False) else None
+    choice = typer.prompt("New files only (n), remake them too (r), or change nothing (c)?", default="n",
+                          type=click.Choice(["n", "r", "c"]), show_choices=False)
+    return {"n": False, "r": True}.get(choice)
