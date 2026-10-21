@@ -12,7 +12,8 @@
 - **Visual similarity** — find images that look like this one
 - **Privacy-first** — originals stay on your own storage, read in place and never modified or uploaded
 
-Supports JPEG, PNG, TIFF, HEIC, HEIF, WebP, RAW (CR2/CR3/NEF/ARW/DNG/ORF/RW2), and video (MP4/MOV/AVI/MKV/MTS/M2TS).
+Supports JPEG, PNG, WebP, BMP, TIFF, DNG, camera RAW (Canon CR2/CR3/CRW, Nikon NEF/NRW, Sony ARW/SR2/SRF,
+Fujifilm RAF, Olympus ORF, Panasonic RW2/RAW, Leica RWL), and video (MP4/MOV/MKV).
 
 ---
 
