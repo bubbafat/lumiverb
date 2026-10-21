@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   deleteLibraryFilter: vi.fn(),
   previewLibraryFilter: vi.fn(),
   getTenantSettings: vi.fn(),
+  getCurrentUser: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -25,7 +26,9 @@ const usage = {
 };
 
 beforeEach(() => {
-  api.listLibraries.mockResolvedValue([{ library_id: "lib_1", name: "Media", root_path: "/m", status: "active", is_public: false, last_scan_at: null }]);
+  api.listLibraries.mockResolvedValue([{ library_id: "lib_1", name: "Media", root_path: "/m", status: "active", is_public: false, last_scan_at: null,
+                                         role: "editor" }]);
+  api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "editor" });
   api.getLibraryFilters.mockResolvedValue({ includes: [], excludes: [] });
   api.previewLibraryFilter.mockResolvedValue({ matching_asset_count: 5 });
   api.getTenantSettings.mockResolvedValue({ trash_days: 30 });
@@ -92,5 +95,33 @@ describe("LibrarySettingsPage exclude filter errors", () => {
     expect(await screen.findByText("Invalid pattern")).toBeTruthy();
     const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
     expect(inputs.some((i) => i.value === "Rejects/**")).toBe(true);
+  });
+});
+
+describe("LibrarySettingsPage for someone who doesn't edit the library", () => {
+  it("shows a viewer no path filters, and doesn't ask for them", async () => {
+    // try.lumiverb.io, 10-21: a viewer saw Path Filters' error and an Add they couldn't use.
+    api.listLibraries.mockResolvedValue([{ library_id: "lib_1", name: "Media", root_path: "/m", status: "active",
+                                           is_public: false, last_scan_at: null, role: "viewer" }]);
+    api.getCurrentUser.mockResolvedValue({ email: "ana@b.c", role: "viewer" });
+    renderPage();
+    expect(await screen.findByText("Media")).toBeTruthy();
+    expect(screen.queryByText("Path Filters")).toBeNull();
+    expect(screen.queryAllByRole("button")).toHaveLength(0); // nothing to change
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
+    expect(api.getLibraryFilters).not.toHaveBeenCalled();
+  });
+
+  it("shows the demo's viewer the page, and no error", async () => {
+    api.listLibraries.mockResolvedValue([{ library_id: "lib_1", name: "Beach", root_path: "/b", status: "active",
+                                           is_public: false, last_scan_at: null, role: "viewer" }]);
+    api.getCurrentUser.mockResolvedValue({ email: "demo@b.c", role: "viewer", demo: true });
+    renderPage();
+    expect(await screen.findByText("Beach")).toBeTruthy();
+    await waitFor(() => expect(api.getCurrentUser).toHaveBeenCalled());
+    expect(screen.queryByText("Path Filters")).toBeNull();
+    expect(screen.queryByText("Not Found")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryAllByRole("button")).toHaveLength(0); // nothing to change
   });
 });

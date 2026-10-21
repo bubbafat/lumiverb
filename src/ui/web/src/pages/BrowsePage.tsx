@@ -740,12 +740,16 @@ export default function BrowsePage() {
               setParam("path", path);
               setDrawerOpen(false);
             }}
-            onExcludeFolder={(path) => {
-              setDrawerOpen(false);
-              navigate(
-                `/libraries/${libraryId}/settings?tab=filters&exclude=${encodeURIComponent(path + "/**")}`,
-              );
-            }}
+            onExcludeFolder={
+              canEdit
+                ? (path) => {
+                    setDrawerOpen(false);
+                    navigate(
+                      `/libraries/${libraryId}/settings?tab=filters&exclude=${encodeURIComponent(path + "/**")}`,
+                    );
+                  }
+                : undefined
+            }
             onArchiveFolder={
               canEdit
                 ? (path, count) => {
