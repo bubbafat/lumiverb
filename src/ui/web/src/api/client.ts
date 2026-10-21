@@ -1831,6 +1831,31 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   return apiFetch<CurrentUser>("/me");
 }
 
+/** A key of theirs a new password ends, said first (a 409 keys_end_with_password's details.keys). */
+export interface KeyThatEnds {
+  key_id: string;
+  label: string | null;
+  role: string;
+  /** A device's key: it stops reading its libraries until it's given a new one. */
+  device: boolean;
+  last_used_at: string | null;
+}
+
+/** Change your own password, signed in, with the one you have. Until endApiKeys, a person with API keys of their
+ * own gets the 409 keys_end_with_password naming them. Every other session ends; this browser keeps a new one. */
+export async function changePassword(
+  current: string,
+  next: string,
+  endApiKeys = false,
+): Promise<{ api_keys_revoked: number }> {
+  const changed = await apiFetch<{ access_token: string; api_keys_revoked: number }>("/me/password", {
+    method: "POST",
+    body: { current_password: current, new_password: next, ...(endApiKeys ? { end_api_keys: true } : {}) },
+  });
+  setApiKey(changed.access_token);
+  return { api_keys_revoked: changed.api_keys_revoked };
+}
+
 export async function listApiKeys(): Promise<ApiKeyItem[]> {
   const res = await apiFetch<{ keys: ApiKeyItem[] }>("/keys");
   return res.keys;

@@ -212,19 +212,25 @@ class ApiKeyRepository:
         self._session.refresh(api_key)
         return True
 
-    def revoke_created_by(self, tenant_id: str, user_id: str, roles: set[str] | None = None) -> int:
-        """Revoke the live keys a user minted (only those with one of
-        ``roles``, if given). Uncommitted: it goes with the caller's change
-        to the user. Returns how many."""
+    def live_made_by(self, tenant_id: str, user_id: str, roles: set[str] | None = None) -> list[ApiKey]:
+        """The live keys a user minted (only those with one of ``roles``, if
+        given), devices' keys included: what a new password of theirs ends."""
         stmt = (
             select(ApiKey)
             .where(ApiKey.tenant_id == tenant_id)
             .where(ApiKey.created_by_user_id == user_id)
             .where(ApiKey.revoked_at.is_(None))
+            .order_by(ApiKey.created_at)
         )
         if roles is not None:
             stmt = stmt.where(ApiKey.role.in_(roles))
-        keys = list(self._session.exec(stmt).all())
+        return list(self._session.exec(stmt).all())
+
+    def revoke_created_by(self, tenant_id: str, user_id: str, roles: set[str] | None = None) -> int:
+        """Revoke the live keys a user minted (only those with one of
+        ``roles``, if given). Uncommitted: it goes with the caller's change
+        to the user. Returns how many."""
+        keys = self.live_made_by(tenant_id, user_id, roles)
         for api_key in keys:
             api_key.revoked_at = utcnow()
             self._session.add(api_key)
