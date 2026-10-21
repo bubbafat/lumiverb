@@ -602,6 +602,8 @@ export interface QueryItem {
   thumbnail_key: string | null;
   proxy_key: string | null;
   created_at: string | null;
+  /** Its last modified time: the most recent of every time related to it (sort "changed_at"). */
+  changed_at?: string | null;
   search_context: {
     score: number;
     hit_type: string;

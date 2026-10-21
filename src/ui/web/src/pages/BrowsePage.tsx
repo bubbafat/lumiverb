@@ -369,6 +369,7 @@ export default function BrowsePage() {
         // Whether it has faces: the lightbox's faces button, and a video's People.
         face_count: item.face_count,
         created_at: item.created_at,
+        changed_at: item.changed_at ?? null,
       })),
     );
   }, [browseQuery.data]);
@@ -409,9 +410,11 @@ export default function BrowsePage() {
     ? parentDirNodes?.find((d) => d.path === pathPrefix)?.asset_count
     : undefined;
 
+  // Grouped by the date it's sorted by; a text search's, ranked by relevance, by taken date as before.
+  const searching = urlFilters.some((f) => f.type === "query");
   const groups = useMemo(
-    () => groupAssetsByDate(displayAssets),
-    [displayAssets],
+    () => groupAssetsByDate(displayAssets, searching ? undefined : browseSort),
+    [displayAssets, searching, browseSort],
   );
 
   const orderedAssets = useMemo(

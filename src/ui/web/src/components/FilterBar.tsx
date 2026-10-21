@@ -73,6 +73,7 @@ function formatDateChiclet(from: string, to: string): string {
 const SORT_OPTIONS = [
   { value: "taken_at", label: "Date Taken" },
   { value: "created_at", label: "Date Added" },
+  { value: "changed_at", label: "Last Modified" },
   { value: "file_size", label: "File Size" },
   { value: "iso", label: "ISO" },
   { value: "aperture", label: "Aperture" },
