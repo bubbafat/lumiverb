@@ -115,7 +115,7 @@ finds them.
 ### 7. Descriptions, once, with OpenAI
 
 Through the tunnel, **Settings › AI › Add machine**: a name (OpenAI), the
-URL `https://api.openai.com/v1`, your API key (typed there, never sent
+URL `https://api.openai.com/v1` (or Anthropic's, `https://api.anthropic.com/v1`, for Claude), your API key (typed there, never sent
 anywhere else: Lumiverb keeps it sealed with the install's own key),
 **Connect**, a vision model it lists (gpt-4.1-mini, say), tick
 **Descriptions & text**, 4 at once, **Add**. Each clip is one request: a

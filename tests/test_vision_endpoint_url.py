@@ -90,3 +90,17 @@ def test_a_host_that_doesnt_resolve_says_the_same():
             pytest.raises(VisionEndpointError) as e:
         list_models("http://nowhere.invalid/v1")
     assert str(e.value) == UNREACHABLE
+
+
+def test_anthropics_models_are_asked_for_with_its_api_version_and_the_key_it_reads():
+    # Its own /v1/models answered 400 without anthropic-version (Settings › AI › Connect failed); others are
+    # asked as before.
+    with _resolves_to("160.79.104.10"), _answers("claude-opus-4-6") as get:
+        assert list_models("https://api.anthropic.com/v1", "sk-ant-x") == ["claude-opus-4-6"]
+    assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-ant-x", "anthropic-version": "2023-06-01",
+                                               "x-api-key": "sk-ant-x"}
+    assert get.call_args.kwargs["params"] == {"limit": 1000}
+    with _resolves_to("10.0.0.7"), _answers("qwen3-vl:8b") as get:
+        list_models("http://10.0.0.7:11434/v1", "k")
+    assert get.call_args.kwargs["headers"] == {"Authorization": "Bearer k"} and get.call_args.kwargs["params"] == {}
+

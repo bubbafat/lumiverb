@@ -55,6 +55,9 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         # so what's recorded in lineage is what was sent. Defaults otherwise.
         self._vision = settings or effective_settings(DESCRIPTION)
         self._ocr = ocr_settings or effective_settings(TEXT)
+        # A machine that refuses any temperature (Claude 4.7 and later, OpenAI's reasoning models) is asked
+        # without one from then on: it answers with its own.
+        self._sends_temperature = True
 
     @property
     def provider_id(self) -> str:
@@ -495,6 +498,8 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             "max_tokens": int(settings["max_tokens"]),
             "temperature": float(settings["temperature"]),
         }
+        if not self._sends_temperature:
+            del payload["temperature"]
         headers = {}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -504,6 +509,11 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             headers=headers,
             timeout=60,
         )
+        if resp.status_code == 400 and "temperature" in payload and "temperature" in resp.text.lower():
+            logger.warning("%s won't take a temperature (%s): asking it without one from now on",
+                           self._base_url, resp.text[:200])
+            self._sends_temperature = False
+            return self._ask(content, settings)
         if not resp.ok:
             logger.warning("Error from AI Provider: %s: %s", resp.status_code, resp.text)
             if resp.status_code == 429:

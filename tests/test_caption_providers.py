@@ -353,3 +353,29 @@ def test_a_videos_scenes_are_described_as_text_alone_with_its_own_settings() -> 
         p.describe_text("1. (0:00) Waves.")
     assert caught.value.endpoint_fault
 
+
+@pytest.mark.fast
+def test_a_machine_that_refuses_a_temperature_is_asked_without_one_from_then_on() -> None:
+    """Claude 4.7 and later (through Anthropic's OpenAI-compatible endpoint) and OpenAI's reasoning models answer
+    400 to a temperature: asked again without one, and never sent one again; any other 400 is as it was."""
+    from unittest.mock import MagicMock, patch
+
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+
+    p = OpenAICompatibleCaptionProvider("https://api.anthropic.com/v1", "claude-opus-5-5", api_key="k")
+    refused = MagicMock(ok=False, status_code=400, text='{"error": {"message": "temperature is deprecated for this model"}}')
+    answered = MagicMock(ok=True, status_code=200)
+    answered.json.return_value = {"choices": [{"message": {"content": "A dog."}}]}
+    with patch("requests.post", side_effect=[refused, answered, answered]) as post:
+        assert p._chat("data:image/jpeg;base64,abc", "describe", p._vision) == "A dog."
+        assert p._chat("data:image/jpeg;base64,abc", "describe", p._vision) == "A dog."
+    sent = [c.kwargs["json"] for c in post.call_args_list]
+    assert ["temperature" in body for body in sent] == [True, False, False]
+
+    other = MagicMock(ok=False, status_code=400, text='{"error": {"message": "image too large"}}')
+    other.raise_for_status.side_effect = __import__("requests").HTTPError(response=other)
+    fresh = OpenAICompatibleCaptionProvider("http://10.0.0.7:11434/v1", "qwen")
+    with patch("requests.post", return_value=other) as post, pytest.raises(__import__("requests").HTTPError):
+        fresh._chat("data:image/jpeg;base64,abc", "describe", fresh._vision)
+    assert post.call_count == 1 and "temperature" in post.call_args.kwargs["json"]
+
