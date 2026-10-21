@@ -27,6 +27,7 @@ from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared serve
 from tests.test_archive_trash_safety import _key_with_role
 from tests.test_authz_hardening import _user
 from tests.test_lineage_api import _ingest_with, _sha
+from tests.test_system_health_api import _server_admin
 
 GAMING_PC = "http://172.18.0.6:11434/v1"
 STUDIO = "http://10.10.10.1:11434/v1"
@@ -149,6 +150,23 @@ def test_connect_says_the_same_whatever_went_wrong(env, none, answer, caplog):
     error = r.json()["error"]
     assert (error["code"], error["message"]) == ("machine_unreachable", "Couldn't reach the AI machine.")
     assert GAMING_PC in caplog.text
+
+
+@pytest.mark.slow
+def test_a_server_admin_is_told_why_connect_failed(env, none):
+    # Theirs is the log that says it (Admin › Logs); an account's admin, on an install with others, isn't told.
+    client, headers, *_ = env
+    fake, _ = _machines({GAMING_PC: 401})
+    with fake:
+        r = client.post("/v1/ai/connect", json={"api_url": GAMING_PC + "."}, headers=_server_admin(env))
+        theirs = client.post("/v1/ai/connect", json={"api_url": GAMING_PC}, headers=headers)
+    assert r.status_code == 502 and r.json()["error"] == {
+        "code": "machine_unreachable", "details": {"api_url": GAMING_PC},
+        "message": f"Couldn't reach the AI machine. {GAMING_PC}: /models answered HTTP 401"}, r.text
+    assert theirs.json()["error"]["message"] == "Couldn't reach the AI machine."
+    with fake:
+        added = _add(env, headers=_server_admin(env), name="Sent away")
+    assert added.status_code == 502 and GAMING_PC in added.json()["error"]["message"], "adding one says it too"
 
 
 @pytest.mark.slow

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 import socket
 from urllib.parse import urlsplit
 
@@ -19,7 +20,8 @@ logger = logging.getLogger(__name__)
 TIMEOUT_SEC = 10.0
 
 # Said for every way the endpoint can fail, so the answer can't map a
-# network; the detail goes to the log.
+# network; the detail goes to the log, and to whoever reads it (the error's
+# detail: the server admin's, src/server/api/routers/ai.py).
 UNREACHABLE = "Couldn't reach the AI machine."
 
 # Link-local and cloud metadata addresses are never an AI machine. Loopback
@@ -32,13 +34,18 @@ _BLOCKED = (
 
 
 class VisionEndpointError(Exception):
-    """The endpoint couldn't say which models it has; the message says why, plainly."""
+    """The endpoint couldn't say which models it has; the message says why, plainly. detail: what went wrong
+    there (its address and what it answered), for the install's operator alone."""
+
+    def __init__(self, message: str, detail: str | None = None) -> None:
+        super().__init__(message)
+        self.detail = detail
 
 
 def check_url(api_url: str) -> str:
     """The URL, trimmed, when it's a plain http(s) URL: no query, fragment
     or user info. Raises VisionEndpointError."""
-    url = api_url.strip().rstrip("/")
+    url = api_url.strip().rstrip("/.")  # a stray dot typed at the end too
     if not url.startswith(("http://", "https://")):
         raise VisionEndpointError("The URL must start with http:// or https://.")
     try:
@@ -66,7 +73,30 @@ def _blocked(host: str, port: int) -> bool:
 
 def _unreachable(url: str, why: str) -> VisionEndpointError:
     logger.warning("AI machine %s: %s", url, why)
-    return VisionEndpointError(UNREACHABLE)
+    return VisionEndpointError(UNREACHABLE, f"{url}: {why}")
+
+
+SAID_UP_TO = 200
+
+
+def _said(resp: requests.Response) -> str:
+    """What an answer that isn't a models list says went wrong, in a line: its error's message when it's
+    JSON (OpenAI's and Anthropic's error.message, others' message or detail), else its text."""
+    try:
+        body = resp.json()
+        error = body.get("error") if isinstance(body, dict) else None
+        said = (error.get("message") if isinstance(error, dict) else error) or body.get("message") or body.get(
+            "detail")
+    except (ValueError, AttributeError):
+        said = getattr(resp, "text", "")
+    said = " ".join(str(said or "").split())
+    return said[:SAID_UP_TO] + ("…" if len(said) > SAID_UP_TO else "")
+
+
+def _failed(e: requests.RequestException) -> str:
+    """Why a request failed, in a few words: the system's own (Connection refused, …), else its kind."""
+    found = re.search(r"\[Errno -?\d+\] ([^'\")\]]+)", str(e))
+    return f"{type(e).__name__}: {found.group(1).strip()}" if found else type(e).__name__
 
 
 # Anthropic's own models list wants its API version (and takes the key as x-api-key); its OpenAI-compatible
@@ -103,9 +133,10 @@ def list_models(api_url: str, api_key: str | None = None, *, timeout: float = TI
     except requests.Timeout:
         raise _unreachable(url, f"no answer within {timeout:.0f} seconds") from None
     except requests.RequestException as e:
-        raise _unreachable(url, type(e).__name__) from None
+        raise _unreachable(url, _failed(e)) from None
     if resp.status_code != 200:
-        raise _unreachable(url, f"/models answered HTTP {resp.status_code}")
+        said = _said(resp)
+        raise _unreachable(url, f"/models answered HTTP {resp.status_code}" + (f" ({said})" if said else ""))
     try:
         data = resp.json().get("data")
         models = sorted({str(m["id"]) for m in data if isinstance(m, dict) and m.get("id")})
