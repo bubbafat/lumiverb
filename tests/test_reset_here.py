@@ -135,13 +135,14 @@ def test_the_command_line_sets_a_new_one(admin, control, tmp_path, monkeypatch, 
 
 @pytest.mark.parametrize(("email", "typed", "says"), [
     ("nobody@example.com", [], "✗ There's no account with that email here"),
-    ("robert@example.com", [NEW, NEW + "!"], "✗ The passwords don't match"),
-    ("robert@example.com", ["short"], "✗ Use 12 to 72 characters"),
+    ("robert@example.com", [NEW, NEW + "!"] * 3, "✗ The passwords don't match"),  # asked again, three tries
+    ("robert@example.com", ["short"] * 3, "✗ Use 12 to 72 characters"),
 ])
 def test_the_command_line_refuses_what_won_t_do(admin, control, tmp_path, monkeypatch, capsys, email, typed, says):  # noqa: F811
     answers = iter(typed)
     monkeypatch.setattr(cli, "getpass", lambda _prompt: next(answers))
     assert cli.main(["reset-password", "--env", str(_env_file(tmp_path, control)), "--email", email]) == 1
-    assert capsys.readouterr().err.strip() == says
+    said = capsys.readouterr().err.strip().splitlines()
+    assert said[-1] == says and said.count(says) == (3 if typed else 1), said
     with TestClient(app, client=LAN) as client:
         assert _login(client, PASSWORD) == 200, "unchanged"
