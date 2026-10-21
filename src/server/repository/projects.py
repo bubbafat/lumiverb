@@ -233,12 +233,13 @@ class ProjectRepository:
     # Clips still linked to a project but hidden, in kinds that need
     # different actions: a person trashed them (restore), a person archived
     # them (unarchive), a scan found the file missing (back when the file
-    # is), or their library is in the trash (back with the library).
+    # is), or their library is in the trash (back with the library). A Live
+    # Photo's motion is none of these: it's part of its photo, which shows.
     _HIDDEN_CLIPS_SQL = (
         "SELECT"
         " count(*) FILTER (WHERE l.status <> 'trashed' AND a.deleted_reason = 'user') AS trashed,"
         " count(*) FILTER (WHERE l.status <> 'trashed'"
-        "   AND a.deleted_reason NOT IN ('user', 'archived')) AS missing,"
+        "   AND a.deleted_reason NOT IN ('user', 'archived', 'live_photo')) AS missing,"
         " count(*) FILTER (WHERE l.status = 'trashed') AS library_trashed,"
         " count(*) FILTER (WHERE l.status <> 'trashed' AND a.deleted_reason = 'archived') AS archived"
         " FROM project_assets pa"

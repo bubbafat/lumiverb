@@ -14,7 +14,7 @@ def test_one_producer_per_artifact_and_each_artifact_once():
     assert set(P.ARTIFACTS) == {
         "lumiverb.video.format", "lumiverb.capture_time", "lumiverb.preview", "lumiverb.video.preview", "lumiverb.video.analysis_proxy", "lumiverb.video.scenes", "lumiverb.video.scene_descriptions",
         "lumiverb.image.description", "lumiverb.image.text", "lumiverb.image.likeness", "lumiverb.image.faces", "lumiverb.video.faces", "lumiverb.video.transcript", "lumiverb.location.guess",
-        "lumiverb.video.description",
+        "lumiverb.video.description", "lumiverb.live_photo",
     }
     # A producer is named by what it makes (ADR-024): its artifact is its name.
     assert all(a == p.makes.name for a, p in P.PRODUCERS.items())
@@ -84,8 +84,9 @@ def test_the_prompts_are_the_ones_the_worker_sends():
     assert "Describe this image in 2-3 sentences" not in source
 
 
-def test_only_probe_capture_and_the_analysis_proxy_read_the_originals():
+def test_only_probe_capture_live_photos_and_the_analysis_proxy_read_the_originals():
     """Transcripts, scenes and their descriptions read the analysis proxy in
     this machine's cache: they run while the storage is away."""
-    assert {a for a, p in P.PRODUCERS.items() if p.storage} == {"lumiverb.video.format", "lumiverb.capture_time", "lumiverb.video.analysis_proxy"}
+    assert {a for a, p in P.PRODUCERS.items() if p.storage} == {
+        "lumiverb.video.format", "lumiverb.capture_time", "lumiverb.live_photo", "lumiverb.video.analysis_proxy"}
     assert not any(P.PRODUCERS[a].storage for a in ("lumiverb.video.transcript", "lumiverb.video.scenes", "lumiverb.video.scene_descriptions"))

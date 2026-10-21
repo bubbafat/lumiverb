@@ -175,6 +175,14 @@ REMOVED = """
     SELECT rel_path, content_hash, file_size, file_mtime, NULL, 'deleted' FROM ignored_files WHERE library_id = :library_id
 """
 
+# Live Photos' moving halves at their paths, out of sight as part of their photos
+# (src/server/repository/live_photos.py): never a person's removal, so a scan skips each while it's the
+# same file, force_add or not (its reason, live_photo), and takes a different file there as new.
+MOTIONS = """
+    SELECT rel_path, content_hash, file_size, file_mtime FROM assets
+    WHERE library_id = :library_id AND deleted_reason = 'live_photo'
+"""
+
 # Each found file's plan, as "action/reason". The clip in sight at the path
 # comes first (a removed file's path is never one a clip holds: that file is
 # the clip's). Settling and empty files, and those of another media type, are
@@ -212,6 +220,12 @@ _PLAN = f"""
         WHERE f.scan_id = :scan_id
         GROUP BY f.rel_path
     ),
+    motions AS (
+        SELECT f.rel_path, bool_or(m.file_size = f.file_size AND m.file_mtime = f.file_mtime) AS as_hidden
+        FROM scan_found f JOIN ({MOTIONS}) m ON m.rel_path = f.rel_path
+        WHERE f.scan_id = :scan_id
+        GROUP BY f.rel_path
+    ),
     planned AS (
         SELECT f.rel_path, a.asset_id,
                CASE
@@ -227,6 +241,8 @@ _PLAN = f"""
                                      WHEN {_REMAKE} THEN 'upload/remake'
                                      ELSE 'unchanged/' END
                        ELSE 'hash/changed' END
+                   WHEN mo.as_hidden THEN 'skipped/live_photo'
+                   WHEN mo.rel_path IS NOT NULL THEN 'hash/live_photo'
                    WHEN (r.unknown OR r.as_removed) AND NOT :force_add THEN 'skipped/removed'
                    WHEN r.rel_path IS NOT NULL THEN 'hash/removed'
                    WHEN :moves AND f.file_size IN (SELECT g.file_size FROM gone g WHERE g.content_hash IS NOT NULL)
@@ -236,6 +252,7 @@ _PLAN = f"""
         FROM scan_found f
         LEFT JOIN assets a ON a.library_id = :library_id AND a.rel_path = f.rel_path AND a.deleted_at IS NULL
         LEFT JOIN removed r ON r.rel_path = f.rel_path
+        LEFT JOIN motions mo ON mo.rel_path = f.rel_path
         WHERE f.scan_id = :scan_id
     )
     UPDATE scan_found f
@@ -271,6 +288,10 @@ _POSTED = f"""
                           JOIN posted q ON q.rel_path = r.rel_path
                                          AND (q.content_hash = r.content_hash OR r.content_hash IS NULL))
                AS removed,
+           -- A Live Photo's motion here, this content: out of sight as part of its photo.
+           p.rel_path IN (SELECT m.rel_path FROM ({MOTIONS}) m
+                          JOIN posted q ON q.rel_path = m.rel_path AND q.content_hash = m.content_hash)
+               AS motion,
            -- Its clip, when it's in the trash or archived: the latest removed.
            (SELECT c.asset_id FROM assets c
             WHERE c.library_id = :library_id AND c.rel_path = p.rel_path AND c.deleted_at IS NOT NULL
@@ -434,7 +455,8 @@ def decide(session: Session, scan: ScanSession, posted: list[Hashed], *,
     - at a path a clip holds: uploaded when its content differs (or the scan
       forces, or a preview the scan makes is missing), else unchanged, and its
       new size and time are recorded so the next scan's check matches;
-    - at a new path: skipped when a person removed this content here, unless
+    - at a new path: skipped when it's a Live Photo's motion, out of sight as
+      part of its photo (MOTIONS), or a person removed this content here, unless
       the scan adds them anyway (force_add): then restored, its clip in the
       trash or archived back in sight, or else uploaded, a new clip, and
       forgotten as deleted for good; moved when it's the content of a clip
@@ -478,6 +500,8 @@ def decide(session: Session, scan: ScanSession, posted: list[Hashed], *,
                 d.decision = "unchanged"
                 if r["stat_differs"]:
                     stats.append({"asset_id": r["asset_id"], "size": r["file_size"], "mtime": r["file_mtime"]})
+        elif r["motion"]:
+            d.decision = "skipped"
         elif r["removed"] and scan.force_add:
             adding.append(d)
             if r["removed_clip"] is not None:

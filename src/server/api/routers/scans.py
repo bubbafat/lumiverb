@@ -566,8 +566,8 @@ def finish_scan(
 ) -> FinishResponse:
     """Archive what's gone as missing, as DELETE /v1/assets does (its guard
     against taking most of a library, and the handover to an empty newer copy
-    of a file), and close the scan, in one transaction. A dry run archives
-    nothing. Sent again (its answer lost), the answer the first one got.
+    of a file), pair any Live Photos left, and close the scan, in one
+    transaction. A dry run archives and pairs nothing. Sent again (its answer lost), the answer the first one got.
     409 not_the_reader once the library has another reader: nothing changes."""
     scan = _held(session, scan_id, planned=True, finished=True)
     if scan.finished_at is not None:
@@ -609,6 +609,13 @@ def finish_scan(
             handed_over = hand_over_to_copies(session, request, scans.with_newer_copies(session, trashed),
                                               after=after)
         archived = len(trashed) - len(handed_over)
+    if not scan.dry_run:
+        # Any Live Photo left unpaired, each video with its preview a photo's motion, out of sight as part of it.
+        # The scan's own uploads come after this and pair as they arrive (src/server/repository/live_photos.py).
+        from src.server.repository.live_photos import LivePhotoRepository
+
+        if LivePhotoRepository(session).pair(scan.library_id):
+            LibraryRepository(session).bump_revision(scan.library_id)
     answer = FinishResponse(
         archived=archived, moved=totals["moved"] + len(handed_over), handed_over=len(handed_over),
         unchanged=totals["unchanged"], skipped=totals["skipped"],

@@ -7,7 +7,8 @@ every audio track), or the 10-second preview scan makes until the proxy
 exists. When the account caps playback at N seconds, the server serves only
 the first N, cut without re-encoding and kept for the next request. Public
 pages have their own cap (10 seconds unless an admin changes it), and their
-transcripts stop where it does.
+transcripts stop where it does. A Live Photo's link plays its motion, the
+few seconds around it (_what_plays), as the photo's.
 """
 
 from __future__ import annotations
@@ -499,11 +500,12 @@ def get_playback(
         if public_library_id and public_project_id:
             raise HTTPException(status_code=400, detail="Give a public library or a public project, not both")
         _check_public(session, asset, public_library_id, public_project_id)
-    if not asset.media_type.startswith("video"):
-        raise HTTPException(status_code=422, detail="Playback is only for videos")
+    plays = _what_plays(session, asset)
+    if plays is None:
+        raise HTTPException(status_code=422, detail="Playback is only for videos and Live Photos")
 
     store = get_store()
-    playable = _playable(asset, store)
+    playable = _playable(plays, store)
     if playable is None:
         raise ApiError(404, "nothing_to_play", "This video has no preview or proxy yet")
     public = bool(public_library_id or public_project_id)
@@ -526,8 +528,19 @@ def get_playback(
         source=source,
         max_seconds=max_seconds,
         ready=ready,
-        whole=whole_clip(source, asset.duration_sec),
+        whole=whole_clip(source, plays.duration_sec),
     )
+
+
+def _what_plays(session: Session, asset: Asset) -> Asset | None:
+    """What a clip's playback plays: a video itself; a Live Photo its motion, the few seconds around it
+    (src/server/repository/live_photos.py), out of sight as part of it, so the photo's own access is the
+    link's; anything else nothing."""
+    if asset.media_type.startswith("video"):
+        return asset
+    from src.server.repository.live_photos import LivePhotoRepository
+
+    return LivePhotoRepository(session).motion_of(asset)
 
 
 def _still_theirs(session: Session, claims: dict, tenant_id: str, asset: Asset) -> bool:
@@ -601,7 +614,8 @@ def stream(token: str, request: Request) -> StreamingResponse:
         elif not _still_theirs(session, claims, tenant_id, asset):
             raise ApiError(403, "invalid_link", "This link is invalid or expired")
         store = get_store()
-        playable = _playable(asset, store)
+        plays = _what_plays(session, asset)
+        playable = _playable(plays, store) if plays is not None else None
         if playable is None:
             raise HTTPException(status_code=404, detail="Nothing to play")
         source, key, version = playable

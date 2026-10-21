@@ -74,6 +74,7 @@ from src.processing.proxy.proxy_cache import ProxyCache
 from src.processing.video.probe import probe_video
 from src.producers.names import (
     CAPTURE_TIME,
+    LIVE_PHOTO,
     PREVIEW,
     VIDEO_FORMAT,
     VIDEO_PREVIEW,
@@ -153,6 +154,8 @@ class _Work:
     candidates: list[dict] = field(default_factory=list)
     # Files a person removed.
     skipped: int = 0
+    # Live Photos' moving halves, part of their photos (the plan's reason live_photo): skipped, no one removed them.
+    motions: int = 0
     # Files a person removed, added anyway (force_add): their clips back in
     # sight, or deleted for good and new clips (also in new).
     restored: int = 0
@@ -299,9 +302,10 @@ def _scan_one(
             }
             if f.get("file_mtime") is not None:
                 data["file_mtime"] = f["file_mtime"].isoformat()
-            # The capture facts (taken_at, its zone, GPS accuracy) came with the EXIF.
+            # The capture facts (taken_at, its zone, GPS accuracy) and its Live Photo came with the EXIF.
             data["lineage"] = json.dumps({PREVIEW: previews.lineage(PREVIEW, f.get("content_hash")),
-                                          CAPTURE_TIME: previews.lineage(CAPTURE_TIME, f.get("content_hash"))})
+                                          CAPTURE_TIME: previews.lineage(CAPTURE_TIME, f.get("content_hash")),
+                                          LIVE_PHOTO: previews.lineage(LIVE_PHOTO, f.get("content_hash"))})
 
             resp = client.post("/v1/ingest", files=upload, data=data)
             result = resp.json()
@@ -389,7 +393,8 @@ def _scan_one_video(
             # Frame rate, timecode, audio layout for editor exports. A failed
             # probe doesn't block ingest: the scheduler's probe makes it.
             made = {PREVIEW: previews.lineage(PREVIEW, f.get("content_hash")),
-                    CAPTURE_TIME: previews.lineage(CAPTURE_TIME, f.get("content_hash"))}
+                    CAPTURE_TIME: previews.lineage(CAPTURE_TIME, f.get("content_hash")),
+                    LIVE_PHOTO: previews.lineage(LIVE_PHOTO, f.get("content_hash"))}
             try:
                 data["video_facet"] = json.dumps(probe_video(source_path).to_dict())
                 made[VIDEO_FORMAT] = previews.lineage(VIDEO_FORMAT, f.get("content_hash"))
@@ -693,16 +698,18 @@ def _unread(f: dict, work: _Work, stats: ScanStats, refused: bool = False) -> No
     """A file the plan asked about that couldn't be read: it was found, so
     it's neither changed nor gone, and no hash is sent. Counted as before the
     server compared: unchanged where a clip is, skipped where a person
-    removed a file, else tried as new (failing, it's tried again later).
+    removed a file or a Live Photo's motion is, else tried as new (failing, it's tried again later).
     refused: the system wouldn't let it be read (its permissions): it's
     unreadable, and a new one fails now, as reading it to upload would."""
     planned = f["_plan"]
-    if refused and planned["reason"] != "removed":
+    if refused and planned["reason"] not in ("removed", "live_photo"):
         _refused(f["rel_path"], stats)
     if planned["asset_id"]:
         f["asset_id"] = planned["asset_id"]
         work.unchanged.append(f)
         stats.unchanged += 1
+    elif planned["reason"] == "live_photo":
+        work.motions += 1
     elif planned["reason"] == "removed":
         work.skipped += 1
     elif refused:
@@ -763,6 +770,8 @@ def _take(f: dict, d: dict, work: _Work, stats: ScanStats) -> None:
         work.moved_files.append(d)
     elif decision == "move_candidate":
         work.candidates.append(d)
+    elif decision == "skipped" and f["_plan"]["reason"] == "live_photo":
+        work.motions += 1
     elif decision == "skipped":
         work.skipped += 1
     # move_skipped: a person said to skip it; it takes no part.
@@ -1186,6 +1195,8 @@ def _run(
         elif action == "unchanged":
             f["asset_id"] = planned["asset_id"]
             work.unchanged.append(f)
+        elif action == "skipped" and planned["reason"] == "live_photo":
+            work.motions += 1
         elif action == "skipped":
             work.skipped += 1
     # Previews made another way than now are remade after everything else (ADR-018 decision 6).

@@ -63,7 +63,7 @@ def _build_exif_payload(source_path: Path, media_type: str, *, content_hash: str
     The whole file's "sha256" goes beside an fp1 (previous_hash) when it's
     known or whole_too asks for it (its scan's plan: legacy,
     src/shared/content_hash.py)."""
-    from src.processing.workers.exif_extract import capture_facts, parse_duration
+    from src.processing.workers.exif_extract import capture_facts, live_photo_id, parse_duration
 
     exif_data = extract_exif(source_path)
     content_hash = content_hash or _content_hash(source_path)
@@ -90,6 +90,7 @@ def _build_exif_payload(source_path: Path, media_type: str, *, content_hash: str
         "lens_model": parse_lens_model(exif_data),
         "flash_fired": parse_flash_fired(exif_data),
         "orientation": parse_orientation(exif_data),
+        "live_photo_id": live_photo_id(exif_data),  # read: None when it has none
     }
 
 

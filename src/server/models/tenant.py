@@ -290,6 +290,8 @@ class Asset(SQLModel, table=True):
     lens_model: str | None = Field(default=None, nullable=True)
     flash_fired: bool | None = Field(default=None, nullable=True)
     orientation: int | None = Field(default=None, nullable=True)
+    # live_photo_id (tenant migration b5d1f7a3c9e2), as changed_at, isn't on the model, so a clip made at an older
+    # migration never names it: read and written by src/server/repository/live_photos.py.
     availability: str = Field(default="online", nullable=False)
     status: str = Field(default="pending", nullable=False)
     video_indexed: bool = Field(default=False, nullable=False)

@@ -74,9 +74,11 @@ def test_the_migration_s_mapping_is_the_names_history():
     assert {was["artifact"]: was["producer"] for was in WAS.values() if "artifact" in was} == m.PRODUCERS
     assert {was["kind"]: name for name, was in WAS.items() if "kind" in was} == m.KINDS
     assert set(m._POOLS) == {p.pool.name for p in registry().values() if p.pool and not p.plugin} | {"scan"}
-    assert m._RESERVED == RESERVED
+    # Its own, as RESERVED was then: since, only the first word of a name added after it (Live Photos), which no
+    # plug-in's id could be (an id has no underscore).
+    assert m._RESERVED <= RESERVED and RESERVED - m._RESERVED == {"live_photo"}
     # Down: a word no plug-in may have stays, every way; one that could be a plug-in's id is its work.
-    for word in sorted(RESERVED):
+    for word in sorted(m._RESERVED):
         assert (m._work_down(word), m._kind_down(word), m._pool_down(word)) == (word, word, word), word
     assert (m._work_down("my-facts"), m._kind_down("redo:my-facts")) == ("plugin_my_facts", "redo_plugin_my_facts")
     # And this file's own, which outlives both.

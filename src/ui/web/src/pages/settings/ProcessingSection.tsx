@@ -442,6 +442,7 @@ const KIND_LABELS: Record<string, [string, string]> = {
   "lumiverb.video.transcript": ["transcript", "transcripts"],
   "lumiverb.video.scenes": ["scene detection", "scene detections"],
   "lumiverb.capture_time": ["capture time read", "capture times read"],
+  "lumiverb.live_photo": ["Live Photo read", "Live Photos read"],
   "lumiverb.location.guess": ["location guess", "location guesses"],
   "lumiverb.video.faces": ["video's faces", "videos' faces"],
 };

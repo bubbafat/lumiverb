@@ -31,7 +31,7 @@ def test_every_producer_declares_what_the_rest_needs():
     producers = registry()
     # Each by the name of what it makes (ADR-024).
     assert list(producers) == [
-        "lumiverb.video.format", "lumiverb.capture_time", "lumiverb.preview", "lumiverb.video.preview",
+        "lumiverb.video.format", "lumiverb.capture_time", "lumiverb.live_photo", "lumiverb.preview", "lumiverb.video.preview",
         "lumiverb.video.analysis_proxy", "lumiverb.video.scenes", "lumiverb.video.scene_descriptions",
         "lumiverb.video.description", "lumiverb.image.description", "lumiverb.image.text", "lumiverb.image.likeness", "lumiverb.image.faces",
         "lumiverb.video.faces", "lumiverb.video.transcript", "lumiverb.location.guess"]
