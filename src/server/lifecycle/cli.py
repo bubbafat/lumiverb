@@ -31,10 +31,10 @@ names it; what it left (its index, the config init wrote) goes at start
 
 setup: the install's first admin, asking for their email and password; the
 same as the web app's setup page (src/server/setup.py), while nobody can
-log in yet.
+log in yet. A new password, here and in reset-password, is asked for twice,
+its rule said first, each entry checked as it's typed, three tries.
 
-reset-password: someone's new password, asked for twice, signing them out
-everywhere and revoking the API keys they made, and voiding their unused
+reset-password: someone's new password, signing them out everywhere and revoking the API keys they made, and voiding their unused
 reset and invite links: what Forgot password on a Mac itself does (no email
 needed), on any install. The env file is the operator's, so this needs no
 other proof.
@@ -580,13 +580,40 @@ def _env_option(parser: argparse.ArgumentParser, default: object) -> None:
                         help="the install's env file (or $LUMIVERB_ENV_FILE); none is assumed")
 
 
+PASSWORD_TRIES = 3
+
+
+def _new_password(prompt: str) -> str | None:
+    """A new password, typed twice: the rule said before it's asked for, each entry checked as it's typed, and
+    asked again for one too short or long or not the same twice, up to PASSWORD_TRIES times. None when it's
+    still not right."""
+    from src.server.api.routers.auth import MAX_PASSWORD_BYTES, MIN_PASSWORD_LENGTH
+
+    print(f"At least {MIN_PASSWORD_LENGTH} characters, at most {MAX_PASSWORD_BYTES}.", file=sys.stderr)
+    for _ in range(PASSWORD_TRIES):
+        password = getpass(f"{prompt}: ")
+        if len(password) < MIN_PASSWORD_LENGTH or len(password.encode()) > MAX_PASSWORD_BYTES:
+            print(f"✗ Use {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_BYTES} characters", file=sys.stderr)
+        elif getpass(f"{prompt} again: ") != password:
+            print("✗ The passwords don't match", file=sys.stderr)
+        else:
+            return password
+    return None
+
+
 def _setup(args: argparse.Namespace) -> int:
     from sqlalchemy.exc import SQLAlchemyError
 
     from src.server.accounts import AccountError
     from src.server.config import get_settings
     from src.server.database import get_control_session
-    from src.server.setup import ALREADY_SET_UP, SetupError, create_first_admin, setup_needed
+    from src.server.setup import (
+        ALREADY_SET_UP,
+        SetupError,
+        checked_email,
+        create_first_admin,
+        setup_needed,
+    )
 
     env, _ = _env_and_url(args, server=True)
     os.environ.update(env)  # the server's settings are the environment's (src/server/config.py)
@@ -598,10 +625,9 @@ def _setup(args: argparse.Namespace) -> int:
         if not needed:
             print(f"✗ {ALREADY_SET_UP}", file=sys.stderr)
             return 1
-        email = args.email or input("Email: ")
-        password = getpass("Password: ")
-        if getpass("Password again: ") != password:
-            print("✗ The passwords don't match", file=sys.stderr)
+        email = checked_email(args.email or input("Email: "))  # before the password's asked for
+        password = _new_password("Password")
+        if password is None:
             return 1
         user = create_first_admin(email, password, account_name=args.account_name)
     except (SetupError, AccountError) as exc:
@@ -620,7 +646,6 @@ def _reset_password(args: argparse.Namespace) -> int:
     import bcrypt
     from sqlalchemy.exc import SQLAlchemyError
 
-    from src.server.api.routers.auth import MAX_PASSWORD_BYTES, MIN_PASSWORD_LENGTH
     from src.server.config import get_settings
     from src.server.database import get_control_session
     from src.server.repository.control_plane import UserRepository
@@ -635,12 +660,8 @@ def _reset_password(args: argparse.Namespace) -> int:
         if user is None:
             print("✗ There's no account with that email here", file=sys.stderr)
             return 1
-        password = getpass("New password: ")
-        if len(password) < MIN_PASSWORD_LENGTH or len(password.encode()) > MAX_PASSWORD_BYTES:
-            print(f"✗ Use {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_BYTES} characters", file=sys.stderr)
-            return 1
-        if getpass("New password again: ") != password:
-            print("✗ The passwords don't match", file=sys.stderr)
+        password = _new_password("New password")
+        if password is None:
             return 1
         password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
         with get_control_session() as session:

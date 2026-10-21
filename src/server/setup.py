@@ -39,10 +39,15 @@ def setup_needed(session: Session) -> bool:
     return session.exec(select(User.user_id).limit(1)).first() is None
 
 
-def _checked(email: str, password: str) -> str:
+def checked_email(email: str) -> str:
     email = email.strip()
     if "@" not in email or email.startswith("@") or email.endswith("@"):
         raise SetupError(400, "invalid_email", "Enter your email address.")
+    return email
+
+
+def _checked(email: str, password: str) -> str:
+    email = checked_email(email)
     if len(password) < MIN_PASSWORD_LENGTH:
         raise SetupError(400, "password_too_short", f"Use at least {MIN_PASSWORD_LENGTH} characters.")
     if len(password.encode()) > MAX_PASSWORD_BYTES:

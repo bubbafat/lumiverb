@@ -108,9 +108,9 @@ def _operator_key(client: TestClient, tenant_id: str) -> str:
     return made.json()["api_key"]
 
 
-def _operator_resets(tmp_path, control, monkeypatch, email: str) -> int:  # noqa: F811
-    typed = iter([NEW, NEW])
-    monkeypatch.setattr(cli, "getpass", lambda _prompt: next(typed))
+def _operator_resets(tmp_path, control, monkeypatch, email: str, typed=(NEW, NEW)) -> int:  # noqa: F811
+    typing = iter(typed)
+    monkeypatch.setattr(cli, "getpass", lambda _prompt: next(typing))
     return cli.main(["reset-password", "--env", str(_env_file(tmp_path, control)), "--email", email])
 
 
@@ -212,3 +212,18 @@ def test_the_command_line_voids_an_unused_invite(install, control, tmp_path, mon
         "✓ A new password for carol@example.com; they're signed out everywhere else"), "no keys: nothing more said"
     assert _join(client, invite).status_code == 400
     assert _login(client, "carol@example.com", NEW)
+
+
+def test_the_command_line_asks_again_for_a_password_that_will_not_do(install, control, tmp_path, monkeypatch, capsys):  # noqa: F811
+    client, _, robert = install
+    typed = ["too short", NEW, NEW + "!", NEW, NEW]
+    assert _operator_resets(tmp_path, control, monkeypatch, ROBERT, typed) == 0
+    said = capsys.readouterr().err.splitlines()
+    assert said == ["At least 12 characters, at most 72.", "✗ Use 12 to 72 characters", "✗ The passwords don't match"]
+    assert _login(client, ROBERT, NEW)
+
+    # Three tries, then nothing changed: their sessions and old password stand.
+    robert = _login(client, ROBERT, NEW)
+    assert _operator_resets(tmp_path, control, monkeypatch, ROBERT, ["short"] * 3) == 1
+    assert capsys.readouterr().err.splitlines()[1:] == ["✗ Use 12 to 72 characters"] * 3
+    assert _works(client, robert) == 200 and _login(client, ROBERT, NEW)
