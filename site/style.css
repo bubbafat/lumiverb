@@ -185,7 +185,8 @@ p {
     gap: 14px;
   }
 
-  .top nav a[href="#features"] {
+  .top nav a[href="#features"],
+  .top nav .demo-link {
     display: none;
   }
 }

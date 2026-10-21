@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Serve lumiverb.io's front page (this checkout's site/) with the nginx already on this machine.
+# Serve one of this checkout's static sites with the nginx already on this machine: lumiverb.io's
+# front page (site/, the default) or docs.lumiverb.io's guide (--folder docs-site, built from
+# docs/guide by scripts/build_docs.py and kept built in the repository).
 #
 # Made for the demo server (docs/demo-server.md), beside its web app: a site of its own in nginx,
-# whose files are the checkout's site/ folder as they are (no build), so each update (update.sh)
-# brings the page's changes with Lumiverb's. A certificate from Let's Encrypt for the names that
+# whose files are the checkout's folder as they are (no build here), so each update (update.sh)
+# brings the site's changes with Lumiverb's. A certificate from Let's Encrypt for the names that
 # point here, as deploy-web.sh gets one.
 #
 # Usage:
-#   sudo bash /opt/lumiverb/scripts/deploy-site.sh --domain lumiverb.io --domain www.lumiverb.io \
-#     --email you@example.com
+#   sudo bash /opt/lumiverb/scripts/deploy-site.sh --domain lumiverb.io --domain www.lumiverb.io
+#   sudo bash /opt/lumiverb/scripts/deploy-site.sh --folder docs-site --domain docs.lumiverb.io
 #
 # Safe to run again: a name whose DNS record was added since gets its certificate then.
 #
@@ -28,6 +30,7 @@ fail()  { echo -e "${RED}  ✗ $1${NC}" >&2; exit 1; }
 trap 'echo -e "${RED}  ✗ Stopped at line ${LINENO}: ${BASH_COMMAND}${NC}" >&2' ERR
 
 DOMAINS=()
+FOLDER="site"
 CERTBOT_EMAIL=""
 SKIP_CERTBOT=false
 DRY_RUN=false
@@ -35,11 +38,13 @@ DRY_RUN=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --domain)       DOMAINS+=("${2:?Missing value for --domain}"); shift 2 ;;
+    --folder)       FOLDER="${2:?Missing value for --folder}"; shift 2 ;;
     --email)        CERTBOT_EMAIL="${2:?Missing value for --email}"; shift 2 ;;
     --skip-certbot) SKIP_CERTBOT=true; shift ;;
     --dry-run)      DRY_RUN=true; shift ;;
     -h|--help)
-      echo "Usage: $0 --domain <name> [--domain <name> ...] [--email <certbot-email>] [--skip-certbot] [--dry-run]"
+      echo "Usage: $0 [--folder site|docs-site] --domain <name> [--domain <name> ...] [--email <certbot-email>] [--skip-certbot] [--dry-run]"
+      echo "  --folder      The checkout's folder to serve: site (lumiverb.io, the default) or docs-site (docs.lumiverb.io)"
       echo "  --domain      A name the site answers to; once for each (lumiverb.io, www.lumiverb.io)"
       echo "  --dry-run     Print the nginx site it would write, and change nothing"
       exit 0
@@ -56,13 +61,16 @@ for d in "${DOMAINS[@]}"; do
   [[ "$d" != *"example.com" ]] || fail "Replace example.com with your actual domain"
 done
 
+# Its name goes into paths and nginx's config: a folder's name, nothing else.
+[[ "$FOLDER" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || fail "Not a folder of this checkout: ${FOLDER}"
 APP_DIR="${LUMIVERB_APP_DIR:-/opt/lumiverb}"
-SITE_DIR="${APP_DIR}/site"
-SITE_CONF="${LUMIVERB_SITE_CONF:-/etc/nginx/sites-available/lumiverb-site}"
-SITE_LINK="${LUMIVERB_SITE_LINK:-/etc/nginx/sites-enabled/lumiverb-site}"
+SITE_DIR="${APP_DIR}/${FOLDER}"
+SITE_CONF="${LUMIVERB_SITE_CONF:-/etc/nginx/sites-available/lumiverb-${FOLDER}}"
+SITE_LINK="${LUMIVERB_SITE_LINK:-/etc/nginx/sites-enabled/lumiverb-${FOLDER}}"
 [[ -f "${SITE_DIR}/index.html" ]] || fail "No site in ${SITE_DIR}: update the checkout first (scripts/update.sh)"
 
-# The page loads only its own files (its own Content-Security-Policy says the same: tests/test_deploy_site.py).
+# Its pages load only their own files (each page's own Content-Security-Policy says the same:
+# tests/test_deploy_site.py).
 CSP="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 # Only the site/ folder is served (never the checkout around it), each file as it is, and nothing else: a
@@ -231,6 +239,6 @@ else
 fi
 
 echo ""
-echo -e "${GREEN}${BOLD}lumiverb.io's page is served from ${SITE_DIR}${NC}"
+echo -e "${GREEN}${BOLD}${DOMAINS[*]} served from ${SITE_DIR}${NC}"
 echo ""
-echo "It changes when this checkout does: each update (scripts/update.sh) brings the page's changes with Lumiverb's."
+echo "It changes when this checkout does: each update (scripts/update.sh) brings the site's changes with Lumiverb's."

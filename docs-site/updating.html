@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Updating · Lumiverb docs</title>
+  <meta name="description" content="An update is one command. Lumiverb backs up its databases before any update that changes them, and never remakeswhat it already made without an admin&#x27;s say.">
+  <link rel="canonical" href="https://docs.lumiverb.io/updating.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html" aria-current="page">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html" aria-current="page">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Updating</h1>
+<p>An update is one command. Lumiverb backs up its databases before any update that changes them, and never remakes
+what it already made without an admin's say.</p>
+<h2 id="on-a-mac">On a Mac<a class="anchor" href="#on-a-mac" aria-label="Link to this section">#</a></h2>
+<div class="cmd"><pre><code>brew upgrade lumiverb</code></pre></div>
+<p>Lumiverb restarts itself into the new version: there's no need to restart the service. It's away for a few
+seconds while it does. When the new version changes the database, it backs it up first.</p>
+<h2 id="on-a-linux-server">On a Linux server<a class="anchor" href="#on-a-linux-server" aria-label="Link to this section">#</a></h2>
+<div class="cmd"><pre><code>sudo bash /opt/lumiverb/scripts/update.sh</code></pre></div>
+<p>It brings the code up to date from GitHub, then installs what's new, backs up the databases when the update
+changes them, updates them, and restarts the services. One update runs at a time.</p>
+<p>Everything it does is shown and also written to <code>/var/log/lumiverb/update-latest.log</code>, which ends with
+<code>Result: OK</code> or <code>Result: FAILED</code>. It keeps the settings in <code>/etc/lumiverb/env</code> and any changes you made to nginx's
+site.</p>
+<h2 id="what-an-update-never-does-on-its-own">What an update never does on its own<a class="anchor" href="#what-an-update-never-does-on-its-own" aria-label="Link to this section">#</a></h2>
+<p>Sometimes a new version makes something better: a newer face model, a better way to write descriptions. What was
+already made the old way isn't made again on its own, since that can take days, or cost money on an AI provider
+that charges for each picture. Settings › Processing says so for each kind of work:</p>
+<pre><code class="language-text">A new version of Descriptions and tags is ready: 12,480 made before it are made again once an admin resumes it.</code></pre>
+<p>New photos and videos get the new version at once. An admin resumes the rest when it suits them, or leaves the
+old ones as they are. More in <a href="processing.html">Processing</a>.</p>
+<h2 id="if-an-update-goes-wrong">If an update goes wrong<a class="anchor" href="#if-an-update-goes-wrong" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>The log says what failed: Admin › Logs, or on a Mac <code>$(brew --prefix)/var/log/lumiverb.log</code>, or on Linux
+<code>/var/log/lumiverb/update-latest.log</code>. See <a href="troubleshooting.html">Troubleshooting</a>.</li>
+<li>The backup made before the update is kept, among the last three made before an upgrade, and can be restored:
+<a href="backups.html">Backups and restore</a>.</li>
+</ul>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="first-steps.html"><span>Previous</span>First steps</a><a class="next" href="browse-and-search.html"><span>Next</span>Browse and search</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/updating.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#on-a-mac">On a Mac</a></li><li><a href="#on-a-linux-server">On a Linux server</a></li><li><a href="#what-an-update-never-does-on-its-own">What an update never does on its own</a></li><li><a href="#if-an-update-goes-wrong">If an update goes wrong</a></li></ul></nav>
+  </div>
+</body>
+</html>

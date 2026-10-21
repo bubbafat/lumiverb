@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Troubleshooting · Lumiverb docs</title>
+  <meta name="description" content="When something isn&#x27;t right, start with the Admin page and the log: between them they usually say what&#x27;s wrong. This page also covers the problems people meet most.">
+  <link rel="canonical" href="https://docs.lumiverb.io/troubleshooting.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html" aria-current="page">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html" aria-current="page">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Troubleshooting</h1>
+<p>When something isn't right, start with the Admin page and the log: between them they usually say what's wrong. This page also covers the problems people meet most.</p>
+<h2 id="the-admin-page">The Admin page<a class="anchor" href="#the-admin-page" aria-label="Link to this section">#</a></h2>
+<p>Admins have <strong>Admin</strong> in the sidebar, with a dot when something needs a look. Under <strong>System health</strong>, each row is green, yellow or red, with one line saying why and a link to where it's fixed. It refreshes every 10 seconds.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Row</th>
+<th>When it isn't green</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Website</td>
+<td>The database isn't answering</td>
+</tr>
+<tr>
+<td>Processing</td>
+<td>Paused, clips failed in the last day, or the scheduler (Lumiverb's processing) has stopped reporting</td>
+</tr>
+<tr>
+<td>AI machines</td>
+<td>A machine is offline, or no machine can do a job that has work</td>
+</tr>
+<tr>
+<td>Search</td>
+<td>Many clips aren't searchable yet; they're added within minutes</td>
+</tr>
+<tr>
+<td>Storage</td>
+<td>A library's folder can't be reached</td>
+</tr>
+<tr>
+<td>Disk</td>
+<td>Server admins: the data disk or the previews' drive is nearly full or not there</td>
+</tr>
+<tr>
+<td>Backups</td>
+<td>Server admins: no backup for 2 days, or the last one failed</td>
+</tr>
+<tr>
+<td>Lumiverb's own plug-ins</td>
+<td>Server admins: one couldn't be installed</td>
+</tr>
+</tbody>
+</table></div>
+<p>Under <strong>Libraries</strong>, each library says whether its files can be reached: Reachable, Can't be reached, or Not checked lately.</p>
+<h2 id="the-log">The log<a class="anchor" href="#the-log" aria-label="Link to this section">#</a></h2>
+<p>Server admins see <strong>Admin › Logs</strong>: newest first, filtered by part (API, Processing, Plug-ins and more), with <strong>Search</strong>, <strong>Problems only</strong>, <strong>Follow</strong>, and <strong>Download these lines</strong> to send to someone helping you. On a server with more than one account, it shows only on the machine Lumiverb runs on.</p>
+<p>On a Mac the log is one file, kept to the latest 50 MB:</p>
+<div class="cmd"><pre><code>tail -f "$(brew --prefix)/var/log/lumiverb.log"</code></pre></div>
+<p>On Linux it's in the system journal:</p>
+<div class="cmd"><pre><code>journalctl -u lumiverb-api -u lumiverb-scheduler -f</code></pre></div>
+<p>Admin › Logs can show the journal once Lumiverb's service user may read it. Lumiverb doesn't do this for you, because it lets Lumiverb read the whole system journal (every service, and the commands people ran with sudo), not only its own lines:</p>
+<div class="cmd"><pre><code>sudo usermod -aG systemd-journal lumiverb</code></pre></div>
+<div class="cmd"><pre><code>sudo systemctl restart lumiverb-api</code></pre></div>
+<h2 id="restart-lumiverb">Restart Lumiverb<a class="anchor" href="#restart-lumiverb" aria-label="Link to this section">#</a></h2>
+<p>On a Mac:</p>
+<div class="cmd"><pre><code>brew services restart lumiverb</code></pre></div>
+<p>On Linux:</p>
+<div class="cmd"><pre><code>sudo systemctl restart lumiverb-api lumiverb-scheduler lumiverb-plugins</code></pre></div>
+<h2 id="nothing-is-being-processed">Nothing is being processed<a class="anchor" href="#nothing-is-being-processed" aria-label="Link to this section">#</a></h2>
+<p>Settings › Processing says &quot;The scheduler isn't running&quot;, or the Processing row is red.</p>
+<ul>
+<li>If it says <strong>Paused</strong>, an admin paused everything: turn <strong>All processing</strong> back on (<a href="processing.html#pausing">Processing</a>).</li>
+<li>Otherwise restart Lumiverb, and look at the log's Processing lines for why it stopped.</li>
+<li>On Linux, processing runs only on a server installed with <code>--worker</code>, as <code>lumiverb-scheduler</code>.</li>
+</ul>
+<h2 id="work-waits">Work waits<a class="anchor" href="#work-waits" aria-label="Link to this section">#</a></h2>
+<p>Each row in Settings › Processing says why its work waits, in a sentence, amber when someone has to act. <a href="processing.html#why-work-waits">Why work waits</a> lists them.</p>
+<h2 id="a-forgotten-password">A forgotten password<a class="anchor" href="#a-forgotten-password" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>At the Mac Lumiverb is installed on</strong>: on the sign-in page, click <strong>Forgot password?</strong>, type your email and click <strong>Continue</strong>. It goes straight to setting a new password.</li>
+<li><strong>Anywhere else</strong>: Forgot password emails a link if the server has email set up (on Linux, the <code>SMTP_</code> lines in <code>/etc/lumiverb/env</code>). If not, the page says so.</li>
+<li><strong>On the server itself, any install</strong>: set a new one. It asks for the email, then the new password twice, and signs that person out everywhere. On a Mac:</li>
+</ul>
+<div class="cmd"><pre><code>lumiverb-server reset-password --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
+<p>On Linux:</p>
+<div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server reset-password --env /etc/lumiverb/env</code></pre></div>
+<h2 id="a-phone-or-another-computer-cant-reach-lumiverb">A phone or another computer can't reach Lumiverb<a class="anchor" href="#a-phone-or-another-computer-cant-reach-lumiverb" aria-label="Link to this section">#</a></h2>
+<p>A page that says &quot;Load failed&quot; or &quot;Couldn't reach the server&quot; got no answer at all.</p>
+<ul>
+<li><strong>Lumiverb on a Mac</strong> is for that Mac only until a server admin, on that Mac, turns on <strong>Let other devices on my network use Lumiverb</strong> in Settings › Network. Then open one of the addresses listed under &quot;On another device, open:&quot;.</li>
+<li>If the Mac asks whether nginx may accept incoming network connections, choose <strong>Allow</strong>.</li>
+<li>The phone must be on the same network, and the Mac awake.</li>
+<li>After a change of ports or HTTPS in Settings › Network, use the new address.</li>
+<li>If one browser on the phone fails and another works, use the one that works.</li>
+</ul>
+<p>More in <a href="network.html">Network, phones and HTTPS</a>.</p>
+<h2 id="a-librarys-drive-is-unplugged">A library's drive is unplugged<a class="anchor" href="#a-librarys-drive-is-unplugged" aria-label="Link to this section">#</a></h2>
+<p>The Storage row says &quot;Can't reach Photos&quot;, and rows in Settings › Processing say &quot;… in Photos wait for its drive: it can't be reached since …&quot;. Lumiverb looks at each library's folder about every 30 seconds. An empty folder counts as not there, so nothing is marked missing while the drive is away. Browsing and search go on, and so does work made from the previews; only work that needs the original files waits. Plug the drive back in, or mount the share, and Lumiverb carries on by itself.</p>
+<p>If the previews are on a drive of their own, the Disk row says &quot;The previews folder isn't there&quot; until it's back (<a href="storage.html">Storage</a>).</p>
+<p>If a scan finds most of a library gone while its drive is there, Lumiverb asks before archiving anything, and archives nothing. The log names the library and gives the command to run if the files really are gone.</p>
+<h2 id="files-that-cant-be-read">Files that can't be read<a class="anchor" href="#files-that-cant-be-read" aria-label="Link to this section">#</a></h2>
+<p>Under the library in Settings › Processing › Scans: &quot;12 files in Photos can't be read: the lumiverb user isn't allowed to read them (…). Make them readable and the next scan takes them in.&quot; Give the user it names permission to read those files and their folders. On Linux that's the <code>lumiverb</code> user; on a Mac, the user Lumiverb runs as.</p>
+<h2 id="an-ai-machine-isnt-working">An AI machine isn't working<a class="anchor" href="#an-ai-machine-isnt-working" aria-label="Link to this section">#</a></h2>
+<p>Settings › AI shows each machine as &quot;Online&quot; or &quot;Offline:&quot; with why. When no machine can do a job, a red box says so: &quot;The work waits until it's fixed; no clip is marked as failed for it.&quot;</p>
+<ul>
+<li><strong>Edit</strong>, then <strong>Connect</strong>, asks the machine for its models now, and says why when it can't.</li>
+<li><strong>Test</strong> sends it a picture Lumiverb draws and a video's scenes, with the account's settings and the Descriptions &amp; text model, and shows each answer, or what's wrong with it. It needs that model chosen first.</li>
+<li>Common causes: Ollama not listening on the network, the model not pulled there, or a model that thinks before it answers and leaves the answer empty. See <a href="ai-machines.html">AI machines</a>.</li>
+</ul>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="command-line.html"><span>Previous</span>The command line</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/troubleshooting.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#the-admin-page">The Admin page</a></li><li><a href="#the-log">The log</a></li><li><a href="#restart-lumiverb">Restart Lumiverb</a></li><li><a href="#nothing-is-being-processed">Nothing is being processed</a></li><li><a href="#work-waits">Work waits</a></li><li><a href="#a-forgotten-password">A forgotten password</a></li><li><a href="#a-phone-or-another-computer-cant-reach-lumiverb">A phone or another computer can&#x27;t reach Lumiverb</a></li><li><a href="#a-librarys-drive-is-unplugged">A library&#x27;s drive is unplugged</a></li><li><a href="#files-that-cant-be-read">Files that can&#x27;t be read</a></li><li><a href="#an-ai-machine-isnt-working">An AI machine isn&#x27;t working</a></li></ul></nav>
+  </div>
+</body>
+</html>

@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>First steps · Lumiverb docs</title>
+  <meta name="description" content="Once your account exists, Lumiverb walks you through setting it up, one step at a time, ending with your firstlibrary. Each step says what skipping it costs, and you can leave and pick it up again lat">
+  <link rel="canonical" href="https://docs.lumiverb.io/first-steps.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html" aria-current="page">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html" aria-current="page">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>First steps</h1>
+<p>Once your account exists, Lumiverb walks you through setting it up, one step at a time, ending with your first
+library. Each step says what skipping it costs, and you can leave and pick it up again later.</p>
+<h2 id="sign-in">Sign in<a class="anchor" href="#sign-in" aria-label="Link to this section">#</a></h2>
+<p>Open Lumiverb in a browser (on a Mac, <a href="http://localhost:6464">http://localhost:6464</a>; on a server, its address)
+and sign in with the email and password you chose. The first time, an admin is taken to <strong>Set up Lumiverb</strong>.</p>
+<h2 id="set-up-lumiverb">Set up Lumiverb<a class="anchor" href="#set-up-lumiverb" aria-label="Link to this section">#</a></h2>
+<p>The steps come in the order that matters: what's hardest to change later comes first. Each says what skipping it
+leaves undone. <strong>Continue</strong> moves on, whether you changed anything or not; <strong>I'll finish later</strong> leaves it for
+another time.</p>
+<ol>
+<li><strong>Where previews live.</strong> Previews grow with your libraries: about 15 GB per 100,000 photos, and up to 1 GB per
+hour of video. Moving them later copies them all, so choose a drive with room now. The same step chooses the
+folder for backups of the database: one on another drive keeps them if this one fails. Skipped, both stay on
+the computer's own drive. More in <a href="storage.html">Storage</a> and <a href="backups.html">Backups and restore</a>.</li>
+<li><strong>Who can open it.</strong> On a Mac, only the Mac itself can open Lumiverb at first. Let the devices on your network
+use it so your phone, other computers and the people you invite can reach it. On a Linux server this was
+decided by the install. More in <a href="network.html">Network, phones and HTTPS</a>.</li>
+<li><strong>What to find.</strong> How hard Lumiverb looks for faces, in photos and in videos: Off, Low, Normal or High. Set this
+before your first library, since faces are found as it's scanned. Skipped, faces are found at Normal in photos
+and Low in videos. More in <a href="people.html">People and faces</a>.</li>
+<li><strong>AI machines.</strong> Most of Lumiverb needs nothing more. Descriptions, tags and the text in photos need an AI
+machine: a computer running Ollama with a vision model, or a provider you have a key for. Skipped, those wait,
+and catch up on everything once a machine is added. More in <a href="ai-machines.html">AI machines</a>.</li>
+<li><strong>People.</strong> Invite the people you share with: each gets a link and chooses their own password. Viewers browse;
+editors can also rate, name and organize; admins can change everything. More in
+<a href="users-and-roles.html">Users and roles</a>.</li>
+<li><strong>Your first library.</strong> A name, and the folder its photos and videos are in. Lumiverb reads it and never
+changes it. <strong>Guess places</strong> places the photos and videos that have no location from those taken around the
+same time. More in <a href="libraries.html">Libraries</a> and <a href="places.html">Places</a>.</li>
+</ol>
+<p>The first two steps are the install's, so only a server admin sees them (the person who created the first account
+is one). Until every step is done, the Admin page offers <strong>Continue setting up</strong>, or <strong>Don't show this again</strong>.</p>
+<h2 id="your-first-library">Your first library<a class="anchor" href="#your-first-library" aria-label="Link to this section">#</a></h2>
+<p>A library is a folder of photos and videos, and everything in the folders inside it. On a Mac, the folder is a
+path such as <code>/Volumes/Photos/Family</code> or <code>/Users/you/Pictures/Archive</code>, and it can be chosen only on the Mac
+itself. On a Linux server, it's a path on the server, inside a folder the install lists
+(<a href="install-linux.html#the-folders-it-may-read">The folders it may read</a>).</p>
+<p>More libraries are added at <strong>Manage libraries › Add library</strong>. Make one for each part of your collection that
+you'd browse or share on its own: family photos, a client's shoots, a film's footage. A library can be kept
+private to some people (<a href="users-and-roles.html">Users and roles</a>).</p>
+<h2 id="what-happens-next">What happens next<a class="anchor" href="#what-happens-next" aria-label="Link to this section">#</a></h2>
+<p>Lumiverb starts on the library at once:</p>
+<ol>
+<li><strong>The scan</strong> finds every photo and video and makes its preview, so the library fills in as you watch.</li>
+<li><strong>Then the rest</strong>, clip by clip: faces, copies of videos to analyze, scenes and transcripts, similar-photo
+search, and, with an AI machine, descriptions, tags and the text in photos.</li>
+</ol>
+<p>A large library takes a while, and video longest. You can browse and search what's done at any time. Settings › Processing shows what's left of each kind of work, and why
+anything is waiting (<a href="processing.html">Processing</a>).</p>
+<p>After that, Lumiverb looks for new and changed files in every library every 15 minutes, and works through them
+the same way. Nothing in your folders is ever changed. A file you move is followed to its new place; a file you
+delete there is archived in Lumiverb as missing, with what Lumiverb knew about it.</p>
+<h2 id="next">Next<a class="anchor" href="#next" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a>: finding things.</li>
+<li><a href="ai-machines.html">AI machines</a>, if you skipped that step.</li>
+<li><a href="users-and-roles.html">Users and roles</a>: inviting people.</li>
+</ul>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="install-linux.html"><span>Previous</span>Install on a Linux server</a><a class="next" href="updating.html"><span>Next</span>Updating</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/first-steps.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#sign-in">Sign in</a></li><li><a href="#set-up-lumiverb">Set up Lumiverb</a></li><li><a href="#your-first-library">Your first library</a></li><li><a href="#what-happens-next">What happens next</a></li><li><a href="#next">Next</a></li></ul></nav>
+  </div>
+</body>
+</html>

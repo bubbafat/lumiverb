@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Install on a Mac · Lumiverb docs</title>
+  <meta name="description" content="On a Mac, Lumiverb installs with Homebrew and runs as one service that starts again at login.It reads your libraries where they are: on the Mac itself or on drives connected to it.">
+  <link rel="canonical" href="https://docs.lumiverb.io/install-mac.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html" aria-current="page">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html" aria-current="page">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Install on a Mac</h1>
+<p>On a Mac, Lumiverb installs with <a href="https://brew.sh">Homebrew</a> and runs as one service that starts again at login.
+It reads your libraries where they are: on the Mac itself or on drives connected to it.</p>
+<h2 id="install">Install<a class="anchor" href="#install" aria-label="Link to this section">#</a></h2>
+<p>Homebrew installs from a tap that isn't its own only once you trust it, so the first command trusts Lumiverb's tap
+and installs it:</p>
+<div class="cmd"><pre><code>brew trust --tap bubbafat/lumiverb &amp;&amp; brew install bubbafat/lumiverb/lumiverb</code></pre></div>
+<p>Then start it:</p>
+<div class="cmd"><pre><code>brew services start lumiverb</code></pre></div>
+<p>Lumiverb brings everything it needs: its own PostgreSQL database (not shared with any other you run), its own web
+server, and the tools it makes previews with (ffmpeg, exiftool, libvips). Its first start takes a minute while it
+makes its database.</p>
+<h2 id="create-your-account">Create your account<a class="anchor" href="#create-your-account" aria-label="Link to this section">#</a></h2>
+<p>Open <a href="http://localhost:6464">http://localhost:6464</a> on that Mac. While nobody has an account, Lumiverb asks for
+yours: an email address and a password of 12 characters or more. You look after this Lumiverb, and can invite
+other people later.</p>
+<p>This page works only on the Mac itself, so nobody else on your network can create the first account. You can
+also do it in Terminal:</p>
+<div class="cmd"><pre><code>lumiverb-server setup --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
+<p>Then <a href="first-steps.html">First steps</a> walks you through the setup that follows and your first library.</p>
+<h2 id="using-it-from-other-devices">Using it from other devices<a class="anchor" href="#using-it-from-other-devices" aria-label="Link to this section">#</a></h2>
+<p>At first, only that Mac can open Lumiverb. To use it from a phone or another computer, an admin turns on
+Settings › Network › Let other devices on my network use Lumiverb, on the Mac. It shows the addresses to open,
+such as <code>http://your-mac.local:6464</code>. See <a href="network.html">Network, phones and HTTPS</a> for HTTPS and other ports.</p>
+<p>Don't put a tunnel or proxy in front of Lumiverb (Tailscale Serve, Cloudflare Tunnel, ngrok) before your account
+exists. Their requests arrive from the Mac itself, so whoever reaches them could create the first account, choose
+library folders, or reset a password with Forgot password.</p>
+<h2 id="where-things-are">Where things are<a class="anchor" href="#where-things-are" aria-label="Link to this section">#</a></h2>
+<div class="table"><table>
+<thead>
+<tr>
+<th>What</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Settings</td>
+<td><code>$(brew --prefix)/etc/lumiverb/env</code> (keep a copy with your backups)</td>
+</tr>
+<tr>
+<td>What Lumiverb makes, and its database</td>
+<td><code>$(brew --prefix)/var/lumiverb</code> (previews can move to another drive: <a href="storage.html">Storage</a>)</td>
+</tr>
+<tr>
+<td>The log</td>
+<td><code>$(brew --prefix)/var/log/lumiverb.log</code>, also shown at Admin › Logs</td>
+</tr>
+</tbody>
+</table></div>
+<p>Ports, all chosen to stay clear of other software you may run:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Port</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>6464</td>
+<td>The web app, over HTTP</td>
+</tr>
+<tr>
+<td>6465</td>
+<td>The web app over HTTPS, once it's turned on</td>
+</tr>
+<tr>
+<td>6364</td>
+<td>Lumiverb's API, for this Mac only</td>
+</tr>
+<tr>
+<td>6468</td>
+<td>Lumiverb's own PostgreSQL, for this Mac only</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="stopping-and-starting">Stopping and starting<a class="anchor" href="#stopping-and-starting" aria-label="Link to this section">#</a></h2>
+<p>Lumiverb stops and starts as one service:</p>
+<div class="cmd"><pre><code>brew services stop lumiverb</code></pre></div>
+<div class="cmd"><pre><code>brew services start lumiverb</code></pre></div>
+<p>Stopping it stops everything: its database, web server and the processing. Your libraries are untouched.</p>
+<p>To update to a new version, see <a href="updating.html">Updating</a>.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="index.html"><span>Previous</span>Lumiverb</a><a class="next" href="install-linux.html"><span>Next</span>Install on a Linux server</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/install-mac.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#install">Install</a></li><li><a href="#create-your-account">Create your account</a></li><li><a href="#using-it-from-other-devices">Using it from other devices</a></li><li><a href="#where-things-are">Where things are</a></li><li><a href="#stopping-and-starting">Stopping and starting</a></li></ul></nav>
+  </div>
+</body>
+</html>

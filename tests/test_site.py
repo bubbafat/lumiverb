@@ -21,6 +21,7 @@ pytestmark = pytest.mark.fast
 REPO = Path(__file__).resolve().parents[1]
 SITE = REPO / "site"
 GITHUB = "https://github.com/bubbafat/lumiverb"
+DOCS = "https://docs.lumiverb.io/"
 HOME = "https://lumiverb.io/"
 
 
@@ -162,3 +163,11 @@ def test_its_links_into_the_repository_lead_somewhere():
             assert address.split("#", 1)[1] in anchors, f"{address}: no such heading in the README"
         elif address.startswith("#"):
             assert address[1:] in ids, f"{address}: nothing on the page has that id"
+        elif address.startswith(DOCS):
+            # The guide's pages as built in docs-site/ (tests/test_docs_site.py holds them to docs/guide/).
+            page_name, _, anchor = (address[len(DOCS) :] or "index.html").partition("#")
+            built = REPO / "docs-site" / page_name
+            assert built.is_file(), f"{address}: no {page_name} in the guide"
+            assert not anchor or f'id="{anchor}"' in built.read_text(encoding="utf-8"), (
+                f"{address}: no such heading on {page_name}"
+            )

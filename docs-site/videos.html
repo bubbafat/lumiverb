@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Videos · Lumiverb docs</title>
+  <meta name="description" content="Lumiverb plays your videos in the browser, cuts them into scenes and describes them, transcribes what&#x27;s said, and finds the people in them. Your video files are only read, never changed.">
+  <link rel="canonical" href="https://docs.lumiverb.io/videos.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html" aria-current="page">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html" aria-current="page">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Videos</h1>
+<p>Lumiverb plays your videos in the browser, cuts them into scenes and describes them, transcribes what's said, and finds the people in them. Your video files are only read, never changed.</p>
+<h2 id="what-lumiverb-makes-for-a-video">What Lumiverb makes for a video<a class="anchor" href="#what-lumiverb-makes-for-a-video" aria-label="Link to this section">#</a></h2>
+<p>Once a video is scanned, Lumiverb makes these for it in the background, each when what it needs is ready:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>What</th>
+<th>Made by</th>
+<th>Where you see it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A 10-second preview</td>
+<td>the scan</td>
+<td>The grid, when you hover; the viewer, until the analysis copy is ready</td>
+</tr>
+<tr>
+<td>An analysis copy</td>
+<td>the server</td>
+<td>The video the viewer plays. Scenes, faces and the transcript are made from it</td>
+</tr>
+<tr>
+<td>Scenes</td>
+<td>the server</td>
+<td>Nowhere directly: they're what gets described</td>
+</tr>
+<tr>
+<td>Scene descriptions and tags</td>
+<td>an AI machine</td>
+<td>Search</td>
+</tr>
+<tr>
+<td>The video's description and tags</td>
+<td>an AI machine, from its scene descriptions</td>
+<td>The viewer's <strong>Description</strong> and <strong>Tags</strong></td>
+</tr>
+<tr>
+<td>A transcript</td>
+<td>the server</td>
+<td>The viewer's <strong>Transcript</strong></td>
+</tr>
+<tr>
+<td>Faces</td>
+<td>the server</td>
+<td>The viewer's <strong>People</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>The analysis copy is a smaller copy that every browser plays: full length, every audio track, 960 pixels on its longest side unless an admin changes it in <strong>Settings › Processing</strong> (<strong>Analysis proxies</strong>).</p>
+<p>Descriptions need an AI machine doing <strong>Descriptions &amp; text</strong> in <strong>Settings › AI</strong> (see <a href="ai-machines.html">AI machines</a>). Until there is one, they wait, and the rest carries on. <strong>Settings › Processing</strong> shows how far each has got and why anything waits (see <a href="processing.html">Processing</a>).</p>
+<h2 id="playing-a-video">Playing a video<a class="anchor" href="#playing-a-video" aria-label="Link to this section">#</a></h2>
+<p>Click a video to open it in the viewer. A colored frame around the player says how much of it plays:</p>
+<ul>
+<li>Amber, &quot;Short preview: first 10 seconds.&quot;: the analysis copy isn't ready yet. &quot;The full video plays once it's processed.&quot;</li>
+<li>Green, &quot;Full video&quot;: the whole video. Or &quot;Plays the first … seconds&quot; when your account limits playback.</li>
+</ul>
+<p>If the video moves to the full copy while you watch, it carries on from the same moment. Press <strong>Shift+F</strong> for full screen; the other viewer keys are in <a href="browse-and-search.html#the-viewer">Browse and search</a>.</p>
+<p>How much plays is the account's choice, in <strong>Settings › Playback</strong>. Everyone sees it there; an admin changes it:</p>
+<ul>
+<li><strong>Signed in</strong>: <strong>Whole video</strong>, or the <strong>First</strong> so many seconds.</li>
+<li><strong>Public pages</strong>: <strong>Show the first</strong> so many seconds (10 unless an admin changes it), or <strong>Show the whole video</strong>. A public page never plays more than signed-in people get.</li>
+</ul>
+<h2 id="scenes-and-descriptions">Scenes and descriptions<a class="anchor" href="#scenes-and-descriptions" aria-label="Link to this section">#</a></h2>
+<p>Lumiverb cuts each video into scenes where the picture changes, then joins neighbouring scenes that look alike, so a talking head is one scene. How finely is the <strong>Detail</strong> of the <strong>Scene descriptions</strong> row in <strong>Settings › Processing</strong>: <strong>Low</strong>, <strong>Normal</strong> (the default) or <strong>High</strong>. An admin changes it. A new Detail applies to videos from then on; the row then counts the videos made at a lower one, and an admin can click <strong>Redo</strong> for them.</p>
+<p>An AI machine describes each scene and tags it. Once every scene of a video is described, it writes the video's own description and tags from them, in order. That's what the viewer shows as the video's <strong>Description</strong> and <strong>Tags</strong>, and editors and admins correct it the same way as a photo's (<strong>Edit</strong>, marked <strong>Edited</strong>).</p>
+<p>The web app doesn't list a video's scenes. Their descriptions are what search reads, and what the video's description is written from.</p>
+<h2 id="transcripts">Transcripts<a class="anchor" href="#transcripts" aria-label="Link to this section">#</a></h2>
+<p>The server transcribes what's said in each video with Whisper, built into Lumiverb, skipping the silences. Nothing to set up. An admin can choose another Whisper model, or a machine of your own, for <strong>Transcripts</strong> in <strong>Settings › AI</strong> (see <a href="ai-machines.html">AI machines</a>).</p>
+<p>The viewer's <strong>Transcript</strong> shows each line with its start time, and the language heard. Click a line to jump the video there; this works once the whole video plays, and only within what your account plays.</p>
+<ul>
+<li><strong>Download</strong> saves it as an <code>.srt</code> file.</li>
+<li><strong>Replace</strong> (editors and admins) uploads an <code>.srt</code> of your own. It's shown instead, and the machine never writes over it.</li>
+<li><strong>Remove</strong> (editors and admins) takes your transcript away, and the machine makes one again; or removes the machine's for good.</li>
+<li>A video with no transcript offers editors and admins <strong>Upload SRT</strong>.</li>
+</ul>
+<p>On a public page, the transcript stops where playback does.</p>
+<h2 id="search-inside-videos">Search inside videos<a class="anchor" href="#search-inside-videos" aria-label="Link to this section">#</a></h2>
+<p>A search finds a video when its words match: its description and tags, its scenes' descriptions and tags, or what's said in it. Put a phrase in quotes to find words said together. See <a href="browse-and-search.html#search">Browse and search</a> for how words match.</p>
+<p>The web app opens a video it found at the start. The command line's search also lists the scene that matched, with its start and end:</p>
+<div class="cmd"><pre><code>lumiverb search --library Family --query "blowing out candles"</code></pre></div>
+<h2 id="people-in-videos">People in videos<a class="anchor" href="#people-in-videos" aria-label="Link to this section">#</a></h2>
+<p>Each person seen in a video is one face, with every time they're seen. The viewer's <strong>People</strong> section lists them, and clicking a time plays from there. How many frames are looked at is the <strong>Videos</strong> level of the <strong>Faces</strong> row in <strong>Settings › Processing</strong>: <strong>Low</strong> (the default) looks at one frame from each scene. See <a href="people.html#people-in-a-video">People and faces</a>.</p>
+<h2 id="sending-videos-to-an-editing-app">Sending videos to an editing app<a class="anchor" href="#sending-videos-to-an-editing-app" aria-label="Link to this section">#</a></h2>
+<p>Put the clips in a project and export it for DaVinci Resolve, Premiere Pro or Final Cut Pro: see <a href="ratings-projects-sharing.html#send-to-an-editing-app">Send to an editing app</a>.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="people.html"><span>Previous</span>People and faces</a><a class="next" href="places.html"><span>Next</span>Places</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/videos.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-lumiverb-makes-for-a-video">What Lumiverb makes for a video</a></li><li><a href="#playing-a-video">Playing a video</a></li><li><a href="#scenes-and-descriptions">Scenes and descriptions</a></li><li><a href="#transcripts">Transcripts</a></li><li><a href="#search-inside-videos">Search inside videos</a></li><li><a href="#people-in-videos">People in videos</a></li><li><a href="#sending-videos-to-an-editing-app">Sending videos to an editing app</a></li></ul></nav>
+  </div>
+</body>
+</html>

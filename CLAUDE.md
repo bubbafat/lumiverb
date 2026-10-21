@@ -51,6 +51,11 @@ site/         lumiverb.io's front page: static, no build, nothing loaded from an
               and links held to the README and the code by tests/test_site.py; its screenshots are the demo's;
               served as it is by the demo server's nginx (scripts/deploy-site.sh, docs/demo-server.md step 10;
               tests/test_deploy_site.py tries its site on a real nginx)
+docs/guide/   docs.lumiverb.io's source: the user guide, Markdown, its order in nav.txt. Built by
+              scripts/build_docs.py (theme: scripts/docs_theme/) into docs-site/, kept built in the repository
+              and served as it is (deploy-site.sh --folder docs-site). tests/test_docs_site.py: docs-site/ is the
+              guide as built now (rebuild after any change), every link and heading leads somewhere, and every
+              lumiverb / lumiverb-server command it gives is one their own parsers take
 ```
 
 ---

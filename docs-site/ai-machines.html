@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>AI machines · Lumiverb docs</title>
+  <meta name="description" content="Some of Lumiverb&#x27;s work is done by an AI model on a machine you choose: a computer running Ollama, or a cloud service. This page covers adding machines, choosing models, and what it costs.">
+  <link rel="canonical" href="https://docs.lumiverb.io/ai-machines.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html" aria-current="page">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html" aria-current="page">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>AI machines</h1>
+<p>Some of Lumiverb's work is done by an AI model on a machine you choose: a computer running Ollama, or a cloud service. This page covers adding machines, choosing models, and what it costs.</p>
+<h2 id="what-needs-a-machine">What needs a machine<a class="anchor" href="#what-needs-a-machine" aria-label="Link to this section">#</a></h2>
+<p>Lumiverb's AI work is four jobs, each with one model for the whole account:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Job</th>
+<th>What it makes</th>
+<th>Out of the box</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Descriptions &amp; text</td>
+<td>Photos' descriptions and tags, text in photos (signs, screens, documents), descriptions of video scenes, and each video's description</td>
+<td>Off: needs a machine and a model</td>
+</tr>
+<tr>
+<td>Transcripts</td>
+<td>What's said in videos</td>
+<td>The Built in machine, model <code>small</code></td>
+</tr>
+<tr>
+<td>Visual search (CLIP)</td>
+<td>Search by what's in a photo, and similar photos</td>
+<td>The Built in machine</td>
+</tr>
+<tr>
+<td>Faces</td>
+<td>Faces in photos and videos</td>
+<td>The Built in machine</td>
+</tr>
+</tbody>
+</table></div>
+<p>Until Descriptions &amp; text has a machine and a model, that work waits. Nothing fails, and once you add one it catches up on everything.</p>
+<p>Everyone can see Settings › AI. Only an admin changes it.</p>
+<h2 id="the-built-in-machine">The Built in machine<a class="anchor" href="#the-built-in-machine" aria-label="Link to this section">#</a></h2>
+<p>Every account has a machine called <strong>Built in</strong>: the server's own computer, doing transcripts, visual search and faces with nothing to set up. <strong>Edit</strong> renames it, changes its <strong>Requests at once</strong>, unticks jobs, or turns it off (<strong>Use this machine</strong>). It can't be removed.</p>
+<p>On a Mac, its transcripts run on the processor, not the GPU. To transcribe faster, run an OpenAI-compatible Whisper server (such as <a href="https://speaches.ai">speaches</a>) on a computer with an NVIDIA GPU, download the job's model into it, and add it as a machine doing <strong>Transcripts</strong>. For visual search and faces on another computer, see <a href="ai-worker.html">A second machine for search and faces</a>.</p>
+<h2 id="adding-a-machine">Adding a machine<a class="anchor" href="#adding-a-machine" aria-label="Link to this section">#</a></h2>
+<ol>
+<li>Open <strong>Settings › AI</strong> and click <strong>Add machine</strong>.</li>
+<li>Under <strong>Where</strong>, choose Ollama on this computer, Ollama on another computer, OpenAI, Anthropic (Claude), Google Gemini, or Custom URL (any other OpenAI-compatible server). It fills in the <strong>Endpoint URL</strong> and <strong>Name</strong>, and says whether it needs a key.</li>
+<li>Paste the <strong>API key</strong>, if it needs one.</li>
+<li>Click <strong>Connect</strong>. It lists the models the machine offers.</li>
+<li>Under <strong>Does</strong>, tick its jobs. Those whose model it offers are ticked already.</li>
+<li>Set <strong>Requests at once</strong>: how many it works on together. More needs more memory there.</li>
+<li>If it shares a GPU with Lumiverb on the same computer, tick <strong>Shares the GPU with video work here</strong>: it gets fewer requests while videos are decoded.</li>
+<li>Click <strong>Add</strong>.</li>
+</ol>
+<p>Then choose the job's model under <strong>Models</strong> (below). Work is spread across every machine online and doing the job.</p>
+<h2 id="ollama">Ollama<a class="anchor" href="#ollama" aria-label="Link to this section">#</a></h2>
+<p><a href="https://ollama.com">Ollama</a> runs models on your own computer, so your photos stay on your network. The model to use is <code>qwen3-vl:8b-instruct</code>: a 6 GB download, which used about 10 GB of memory on a Mac Studio. Take the <code>-instruct</code> one: plain <code>qwen3-vl:8b</code> thinks before it answers, and most descriptions come back empty. <code>qwen3-vl:4b-instruct</code> is smaller, but hasn't been tested.</p>
+<p>On a Mac:</p>
+<div class="cmd"><pre><code>brew install ollama</code></pre></div>
+<div class="cmd"><pre><code>brew services start ollama</code></pre></div>
+<div class="cmd"><pre><code>ollama pull qwen3-vl:8b-instruct</code></pre></div>
+<p>On Linux, install the NVIDIA driver first (<code>nvidia-smi</code> should work): without it, Ollama runs on the processor and a photo takes minutes. Then:</p>
+<div class="cmd"><pre><code>curl -fsSL https://ollama.com/install.sh | sh</code></pre></div>
+<div class="cmd"><pre><code>ollama pull qwen3-vl:8b-instruct</code></pre></div>
+<p>In Settings › AI, add it with <strong>Ollama on this computer</strong> (<code>http://localhost:11434/v1</code>), tick <strong>Descriptions &amp; text</strong>, then choose <code>qwen3-vl:8b-instruct</code> under Models.</p>
+<p>For Ollama on another computer, choose <strong>Ollama on another computer</strong> and put that computer's address in the URL. Ollama there must listen on the network, and has no password: do this only on a network you trust. On Linux, add <code>Environment=&quot;OLLAMA_HOST=0.0.0.0&quot;</code> under <code>[Service]</code> in:</p>
+<div class="cmd"><pre><code>sudo systemctl edit ollama.service</code></pre></div>
+<div class="cmd"><pre><code>sudo systemctl restart ollama</code></pre></div>
+<p>On a Mac, see <a href="https://docs.ollama.com/faq">Ollama's FAQ</a>.</p>
+<p>Leave <strong>Requests at once</strong> at 1 unless that Ollama is set to run several requests in parallel (<code>OLLAMA_NUM_PARALLEL</code>).</p>
+<h2 id="cloud-services">Cloud services<a class="anchor" href="#cloud-services" aria-label="Link to this section">#</a></h2>
+<p>OpenAI, Anthropic and Google Gemini each need an API key from their own site. Settings › AI says where:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Where</th>
+<th>Key from</th>
+<th>Works for descriptions &amp; text</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OpenAI</td>
+<td>platform.openai.com › API keys</td>
+<td><code>gpt-4.1-mini</code></td>
+</tr>
+<tr>
+<td>Anthropic (Claude)</td>
+<td>console.anthropic.com › API keys</td>
+<td><code>claude-haiku-4-5-20251001</code></td>
+</tr>
+<tr>
+<td>Google Gemini</td>
+<td>aistudio.google.com › API keys</td>
+<td>One that doesn't think before it answers (a lite one). Its models are listed as <code>models/…</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>A cloud machine is sent a preview of every photo, and frames of every video's scenes, to describe them. They leave your network.</p>
+<h2 id="choosing-each-jobs-model">Choosing each job's model<a class="anchor" href="#choosing-each-jobs-model" aria-label="Link to this section">#</a></h2>
+<p>Under <strong>Models</strong>, each job shows its model (or off) and how many of its machines offer it. Click <strong>Change</strong>, pick a model, and click <strong>Save</strong>. Only models a machine doing that job offers are listed. Visual search and Faces have a fixed model.</p>
+<p>Changing a model that has already made things asks what becomes of them:</p>
+<ul>
+<li><strong>New files only</strong>: what the old model made stays as it is; the new model is for what's new. You can remake the rest later from Settings › Processing.</li>
+<li><strong>Also remake N clips</strong>: everything is made again with the new model, after all other work. Until that's done, results mix the two. Settings › Processing shows how far it has got, and can stop it.</li>
+</ul>
+<p><strong>Turn off descriptions &amp; text</strong> (or another job) stops that job, and remakes nothing.</p>
+<h2 id="testing-a-machine">Testing a machine<a class="anchor" href="#testing-a-machine" aria-label="Link to this section">#</a></h2>
+<p>Click a machine's <strong>Test</strong> before it gets real work. It's sent what descriptions &amp; text sends, with the job's model: a picture Lumiverb draws (none of your photos) and a video's scenes. Each request shows <strong>Answered as the work needs it</strong> or what went wrong, how long it took and the room its answer used; <strong>Its answer</strong> shows what came back. A model that thinks first, or refuses Lumiverb's settings, shows up here.</p>
+<h2 id="when-a-machine-is-offline">When a machine is offline<a class="anchor" href="#when-a-machine-is-offline" aria-label="Link to this section">#</a></h2>
+<p>Lumiverb checks every machine each minute. Each shows <strong>Online</strong>, or <strong>Offline</strong> with the reason; an offline one's work goes to the others. With no machine for a job online, Settings › AI shows the job as paused, with a dot beside AI in Settings. The work waits until it's fixed, and no clip is marked as failed for it.</p>
+<h2 id="keys-stay-sealed">Keys stay sealed<a class="anchor" href="#keys-stay-sealed" aria-label="Link to this section">#</a></h2>
+<p>A machine's key is never shown again once saved, to anyone. Editing a machine, leave the key blank to keep it, or tick <strong>Remove the saved key</strong>. Keys are sealed in the database with a key from the install's env file, so a backup alone can't read them: keep a copy of the env file with your backups (see <a href="backups.html#keep-a-copy-of-the-env-file">Backups and restore</a>). Restored without it, a machine says its saved key can't be read here: enter it again.</p>
+<h2 id="costs">Costs<a class="anchor" href="#costs" aria-label="Link to this section">#</a></h2>
+<p>A cloud service charges for each request. Each photo is two requests (its description, and its text). Each video is one request per scene, and one for its description. In a big library that adds up: try <strong>Test</strong> first, and watch Settings › Processing, where work can be paused (see <a href="processing.html">Processing</a>).</p>
+<p>An update to Lumiverb never makes your machines redo work on its own. When a new version would make something differently, what was made before is held until an admin chooses <strong>Remake</strong> for it in Settings › Processing.</p>
+<h2 id="from-the-command-line">From the command line<a class="anchor" href="#from-the-command-line" aria-label="Link to this section">#</a></h2>
+<p>On a server with no screen, with an admin's key:</p>
+<div class="cmd"><pre><code>lumiverb ai list</code></pre></div>
+<div class="cmd"><pre><code>lumiverb ai machines add Ollama --url http://localhost:11434/v1 --jobs vision</code></pre></div>
+<div class="cmd"><pre><code>lumiverb ai model vision qwen3-vl:8b-instruct</code></pre></div>
+<div class="cmd"><pre><code>lumiverb ai machines test Ollama</code></pre></div>
+<p>The jobs are called <code>vision</code> (descriptions &amp; text), <code>transcripts</code>, <code>clip</code> and <code>faces</code>. <code>--key</code> asks for a machine's key at a prompt, so it never appears on the command line. More in <a href="command-line.html">The command line</a>.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="libraries.html"><span>Previous</span>Libraries</a><a class="next" href="users-and-roles.html"><span>Next</span>Users and roles</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/ai-machines.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-needs-a-machine">What needs a machine</a></li><li><a href="#the-built-in-machine">The Built in machine</a></li><li><a href="#adding-a-machine">Adding a machine</a></li><li><a href="#ollama">Ollama</a></li><li><a href="#cloud-services">Cloud services</a></li><li><a href="#choosing-each-jobs-model">Choosing each job&#x27;s model</a></li><li><a href="#testing-a-machine">Testing a machine</a></li><li><a href="#when-a-machine-is-offline">When a machine is offline</a></li><li><a href="#keys-stay-sealed">Keys stay sealed</a></li><li><a href="#costs">Costs</a></li><li><a href="#from-the-command-line">From the command line</a></li></ul></nav>
+  </div>
+</body>
+</html>

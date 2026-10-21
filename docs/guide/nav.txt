@@ -1,0 +1,32 @@
+# docs.lumiverb.io's contents, in order: a section's name at the start of a line, its pages indented below it
+# (each a file here), or a link elsewhere as "Title | URL". scripts/build_docs.py builds them; every page here
+# must be listed.
+Start
+  index.md
+  install-mac.md
+  install-linux.md
+  first-steps.md
+  updating.md
+Using Lumiverb
+  browse-and-search.md
+  people.md
+  videos.md
+  places.md
+  ratings-projects-sharing.md
+Running Lumiverb
+  libraries.md
+  ai-machines.md
+  users-and-roles.md
+  network.md
+  storage.md
+  backups.md
+  processing.md
+  devices.md
+  ai-worker.md
+  plugins.md
+  command-line.md
+  troubleshooting.md
+For developers
+  The API | https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md
+  Writing a plug-in | https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md
+  How it's built | https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md

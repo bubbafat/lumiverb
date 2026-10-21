@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>The command line · Lumiverb docs</title>
+  <meta name="description" content="Lumiverb has two commands. lumiverb talks to a Lumiverb server over the network, as you, the way the web app does. lumiverb-server looks after the install itself, on the server machine.">
+  <link rel="canonical" href="https://docs.lumiverb.io/command-line.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html" aria-current="page">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html" aria-current="page">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>The command line</h1>
+<p>Lumiverb has two commands. <code>lumiverb</code> talks to a Lumiverb server over the network, as you, the way the web app does. <code>lumiverb-server</code> looks after the install itself, on the server machine.</p>
+<h2 id="where-they-are">Where they are<a class="anchor" href="#where-they-are" aria-label="Link to this section">#</a></h2>
+<p>On a Mac, Homebrew puts both on your path when it installs Lumiverb. On a Linux server they're <code>/opt/lumiverb/.venv/bin/lumiverb</code> and <code>/opt/lumiverb/.venv/bin/lumiverb-server</code>.</p>
+<p>Every command has its own help:</p>
+<div class="cmd"><pre><code>lumiverb --help</code></pre></div>
+<div class="cmd"><pre><code>lumiverb producers --help</code></pre></div>
+<h2 id="point-lumiverb-at-a-server">Point lumiverb at a server<a class="anchor" href="#point-lumiverb-at-a-server" aria-label="Link to this section">#</a></h2>
+<p><code>lumiverb</code> needs the server's address and an API key.</p>
+<p><strong>Get a key.</strong> In the web app, <strong>Settings › API Keys</strong> (editors and admins), under <strong>Create key</strong>: a <strong>Label</strong> to know it by, and a <strong>Role</strong> no higher than your own. Click <strong>Create key</strong> and copy the key: it's shown once. The key acts as you, at its role.</p>
+<p><strong>Set it.</strong> Paste the key when asked; it isn't shown, and stays out of your shell's history:</p>
+<div class="cmd"><pre><code>lumiverb config set --api-url http://your-server:6464 --api-key -</code></pre></div>
+<p>It's saved in <code>~/.lumiverb/config.json</code>, readable by you alone. With no address set, <code>lumiverb</code> uses <code>http://localhost:6464</code>, a Mac install on the same Mac. To see what's set:</p>
+<div class="cmd"><pre><code>lumiverb config show</code></pre></div>
+<p>A device uses its device key the same way (<a href="devices.html">Libraries on another computer</a>).</p>
+<h2 id="useful-lumiverb-commands">Useful lumiverb commands<a class="anchor" href="#useful-lumiverb-commands" aria-label="Link to this section">#</a></h2>
+<p>What a command can do is what the key's role can do in the web app.</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lumiverb library list</code></td>
+<td>Your libraries, their folders and last scan</td>
+</tr>
+<tr>
+<td><code>lumiverb library create --name NAME --path FOLDER</code></td>
+<td>A new library (admins)</td>
+</tr>
+<tr>
+<td><code>lumiverb library report-changes PATH</code></td>
+<td>Tell the server files changed, so it scans them now rather than at the next full scan</td>
+</tr>
+<tr>
+<td><code>lumiverb library people --name NAME</code></td>
+<td>Who can see and edit a library, and their role on it</td>
+</tr>
+<tr>
+<td><code>lumiverb library role --name NAME --email EMAIL --role editor</code></td>
+<td>Someone's role on one library (<code>default</code> puts their account role back)</td>
+</tr>
+<tr>
+<td><code>lumiverb scan --library NAME --explain</code></td>
+<td>For a library the server reads, on a computer that sees its folder: every difference between the disk and Lumiverb, and why. Changes nothing</td>
+</tr>
+<tr>
+<td><code>lumiverb search --library NAME --query &quot;beach at sunset&quot;</code></td>
+<td>Search a library</td>
+</tr>
+<tr>
+<td><code>lumiverb similar --library NAME --image photo.jpg</code></td>
+<td>Clips that look like a picture</td>
+</tr>
+<tr>
+<td><code>lumiverb download --library NAME --path PATH --output FILE</code></td>
+<td>A clip's preview (<code>--size preview.thumbnail</code> for its thumbnail)</td>
+</tr>
+<tr>
+<td><code>lumiverb user list</code></td>
+<td>The account's people and roles</td>
+</tr>
+<tr>
+<td><code>lumiverb user create --email EMAIL --role viewer</code></td>
+<td>Invite someone: prints the link they set their password at</td>
+</tr>
+<tr>
+<td><code>lumiverb producers</code></td>
+<td>What's made, missing and failing, as Settings › Processing shows it</td>
+</tr>
+<tr>
+<td><code>lumiverb producers failures</code></td>
+<td>Failing clips, their errors and next tries</td>
+</tr>
+<tr>
+<td><code>lumiverb producers retry image.faces --all</code></td>
+<td>Try failing clips again now (editors and admins)</td>
+</tr>
+<tr>
+<td><code>lumiverb producers settings video.transcript</code></td>
+<td>A kind of work's settings; <code>KEY=VALUE</code> changes one (admins)</td>
+</tr>
+<tr>
+<td><code>lumiverb pause image.description</code></td>
+<td>Pause a kind of work, <code>scans</code>, <code>upkeep</code> or <code>all</code> (admins); <code>resume</code> undoes it</td>
+</tr>
+<tr>
+<td><code>lumiverb enrich image.faces --library NAME</code></td>
+<td>Ask for that work in a library now; <code>--redo</code> makes it again (admins)</td>
+</tr>
+<tr>
+<td><code>lumiverb ai list</code></td>
+<td>AI machines and each job's model, as Settings › AI shows them</td>
+</tr>
+<tr>
+<td><code>lumiverb ai machines add Ollama --url http://localhost:11434/v1 --jobs vision</code></td>
+<td>Add an AI machine (admins); <code>--key</code> asks for its key</td>
+</tr>
+<tr>
+<td><code>lumiverb ai machines test Ollama</code></td>
+<td>Send a machine a test picture and video scenes, and show its answers</td>
+</tr>
+<tr>
+<td><code>lumiverb ai model vision qwen3-vl:8b-instruct</code></td>
+<td>Choose a job's model (admins)</td>
+</tr>
+<tr>
+<td><code>lumiverb plugins list</code></td>
+<td>Plug-ins, and whether each is on here; <code>enable ID</code>, <code>disable ID</code> (admins)</td>
+</tr>
+<tr>
+<td><code>lumiverb project list</code></td>
+<td>Your projects</td>
+</tr>
+<tr>
+<td><code>lumiverb project export --id ID --format fcp7</code></td>
+<td>A project as a bin for DaVinci Resolve or Premiere Pro (<code>fcpxml</code> for Final Cut Pro)</td>
+</tr>
+<tr>
+<td><code>lumiverb trash list</code></td>
+<td>Clips in the trash, and when each is deleted for good</td>
+</tr>
+<tr>
+<td><code>lumiverb archive list --missing</code></td>
+<td>Clips whose files went missing</td>
+</tr>
+<tr>
+<td><code>lumiverb settings show</code></td>
+<td>The account's settings</td>
+</tr>
+<tr>
+<td><code>lumiverb device run</code></td>
+<td>Read libraries for a server elsewhere (<a href="devices.html">Libraries on another computer</a>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>A kind of work is named by what it makes, with or without <code>lumiverb.</code> in front: <code>image.description</code>, <code>image.text</code>, <code>image.likeness</code>, <code>image.faces</code>, <code>video.faces</code>, <code>video.transcript</code>, <code>video.scenes</code>, <code>video.scene_descriptions</code>, <code>video.description</code>, <code>video.analysis_proxy</code>, <code>video.format</code>, <code>capture_time</code>, <code>location.guess</code>. A plug-in's work is named by its id. <code>lumiverb producers</code> shows each name in parentheses after its title.</p>
+<h2 id="lumiverb-server">lumiverb-server<a class="anchor" href="#lumiverb-server" aria-label="Link to this section">#</a></h2>
+<p><code>lumiverb-server</code> runs on the server machine and reads the install's env file, which you always name with <code>--env</code>. On a Mac:</p>
+<div class="cmd"><pre><code>lumiverb-server server-admins --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
+<p>On Linux, with <code>sudo</code>, as the env file is root's:</p>
+<div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server server-admins --env /etc/lumiverb/env</code></pre></div>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>setup</code></td>
+<td>Make the first admin, while nobody can sign in yet (<code>--email</code>, <code>--account-name</code>)</td>
+</tr>
+<tr>
+<td><code>reset-password --email EMAIL</code></td>
+<td>Set someone's new password, typed twice. It signs them out everywhere and ends the API keys they made</td>
+</tr>
+<tr>
+<td><code>server-admins</code></td>
+<td>Who looks after the install: its accounts, network, backups and log. <code>add EMAIL</code> or <code>remove EMAIL</code> changes that</td>
+</tr>
+<tr>
+<td><code>pause NAME</code>, <code>resume NAME</code></td>
+<td>Pause or resume processing in every account, as Settings › Processing does: <code>all</code>, <code>scans</code> (<code>--library NAME</code>), <code>upkeep</code> or a kind of work. <code>--account NAME</code> for one account</td>
+</tr>
+<tr>
+<td><code>backup</code></td>
+<td>Back up every database now (<a href="backups.html">Backups and restore</a>)</td>
+</tr>
+<tr>
+<td><code>restore BACKUP</code></td>
+<td>Put every database back from a backup, with Lumiverb stopped. What's there is backed up first</td>
+</tr>
+<tr>
+<td><code>migrate</code></td>
+<td>Bring the databases up to this version. Updates do it for you (<a href="updating.html">Updating</a>)</td>
+</tr>
+<tr>
+<td><code>plugins</code></td>
+<td>Plug-ins: <code>install</code>, <code>default</code>, <code>uninstall</code> (<a href="plugins.html">Plug-ins</a>)</td>
+</tr>
+<tr>
+<td><code>ai-worker</code></td>
+<td>Run this machine as an AI worker for another server (<a href="ai-worker.html">A second machine for search and faces</a>)</td>
+</tr>
+<tr>
+<td><code>run</code></td>
+<td>A Mac's whole Lumiverb service. Homebrew starts it; you don't run it yourself</td>
+</tr>
+</tbody>
+</table></div>
+<p>For example, to give someone a new password on a Mac:</p>
+<div class="cmd"><pre><code>lumiverb-server reset-password --email you@example.com --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
+<p>To make someone a server admin on Linux:</p>
+<div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server server-admins add you@example.com --env /etc/lumiverb/env</code></pre></div>
+<p><code>lumiverb-server</code> needs no API key: being on the machine, able to read its env file, is what lets it in.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="plugins.html"><span>Previous</span>Plug-ins</a><a class="next" href="troubleshooting.html"><span>Next</span>Troubleshooting</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/command-line.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#where-they-are">Where they are</a></li><li><a href="#point-lumiverb-at-a-server">Point lumiverb at a server</a></li><li><a href="#useful-lumiverb-commands">Useful lumiverb commands</a></li><li><a href="#lumiverb-server">lumiverb-server</a></li></ul></nav>
+  </div>
+</body>
+</html>

@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Libraries on another computer · Lumiverb docs</title>
+  <meta name="description" content="A library&#x27;s files can stay on the computer they&#x27;re on, with Lumiverb running on another. That computer becomes a device: it reads the library for the server, and the original files never leave it.">
+  <link rel="canonical" href="https://docs.lumiverb.io/devices.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html" aria-current="page">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html">Processing</a></li>
+<li><a href="devices.html" aria-current="page">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Libraries on another computer</h1>
+<p>A library's files can stay on the computer they're on, with Lumiverb running on another. That computer becomes a <strong>device</strong>: it reads the library for the server, and the original files never leave it.</p>
+<h2 id="what-a-device-does">What a device does<a class="anchor" href="#what-a-device-does" aria-label="Link to this section">#</a></h2>
+<p>A device scans the libraries it reads (new, changed, moved and gone files) and sends the server what can only be made from the original files:</p>
+<ul>
+<li>the previews and thumbnails, and each video's short preview;</li>
+<li>video facts and capture times;</li>
+<li>each video's analysis proxy, the smaller copy that plays in the browser.</li>
+</ul>
+<p>The server does everything else from those: search, faces, descriptions, scenes and transcripts. A library is read by the server or by one device, never both.</p>
+<h2 id="set-it-up">Set it up<a class="anchor" href="#set-it-up" aria-label="Link to this section">#</a></h2>
+<p>You need an account admin for the web app steps, and Lumiverb installed on the device. On a Mac that's the same Homebrew install as a server, without starting its service:</p>
+<div class="cmd"><pre><code>brew trust --tap bubbafat/lumiverb</code></pre></div>
+<div class="cmd"><pre><code>brew install bubbafat/lumiverb/lumiverb</code></pre></div>
+<p><strong>Register it.</strong> In the web app, <strong>Settings › Devices</strong>, under <strong>Register a device</strong>, type a name (such as &quot;Studio Mac&quot;) and click <strong>Register</strong>. Its key appears once: click <strong>Copy</strong>. The panel also shows the next two commands with your server's address filled in.</p>
+<p><strong>Connect it.</strong> On the device, tell Lumiverb where the server is, and paste the key when it asks (it isn't shown, and stays out of your shell's history):</p>
+<div class="cmd"><pre><code>lumiverb config set --api-url http://your-server:6464 --api-key -</code></pre></div>
+<p>Then start it reading:</p>
+<div class="cmd"><pre><code>lumiverb device run</code></pre></div>
+<p><strong>Give it the library.</strong> In the web app, open the library's settings. Under <strong>Who reads it</strong>, set <strong>Read by</strong> to the device, and <strong>Its folder as Studio Mac sees it</strong> to the library's folder on that computer, such as <code>/Volumes/Photos</code>. Click <strong>Save</strong>. The device takes over at its next check-in, within a minute, and the server stops reading it.</p>
+<p>A new library can be given to a device from the start: once a device is registered, <strong>Add library</strong> has a <strong>Read by</strong> choice too.</p>
+<p>The device has to reach the server. When Lumiverb runs on a Mac, a server admin turns on <strong>Let other devices on my network use Lumiverb</strong> in Settings › Network first (<a href="network.html">Network, phones and HTTPS</a>).</p>
+<h2 id="keep-it-running">Keep it running<a class="anchor" href="#keep-it-running" aria-label="Link to this section">#</a></h2>
+<p><code>lumiverb device run</code> checks in every minute and keeps going until you stop it with Ctrl-C, which lets it finish the clip in hand. It runs in that terminal window, so leave the window open. Each pass, it scans what's due (each library in full every 15 minutes, any change it was told of, and <strong>Scan now</strong>), sends new and changed files with their previews, then makes the video facts, capture times and analysis proxies the server asks for, video renders last.</p>
+<p>Its options:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--once</code></td>
+<td>One pass, then stop</td>
+</tr>
+<tr>
+<td><code>--full-scan-every-min N</code></td>
+<td>Scan each library in full every N minutes instead of 15</td>
+</tr>
+<tr>
+<td><code>--name NAME</code></td>
+<td>The name its check-ins use, instead of the computer's</td>
+</tr>
+</tbody>
+</table></div>
+<p>Paused scans stay paused on a device too: a library whose scans are paused isn't scanned.</p>
+<h2 id="on-battery-or-a-metered-network">On battery or a metered network<a class="anchor" href="#on-battery-or-a-metered-network" aria-label="Link to this section">#</a></h2>
+<p>Remakes (clips made again after an admin changes a quality setting, or after an update) wait while the device runs on battery, or on a network that's metered; new files go on as usual. A Mac's battery is noticed. A metered network is noticed only on Linux, where NetworkManager says so; a Mac's network is never treated as metered.</p>
+<h2 id="see-how-its-doing">See how it's doing<a class="anchor" href="#see-how-its-doing" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Settings › Devices</strong> lists each device, the libraries it reads, and when its key was last used.</li>
+<li><strong>Settings › Processing</strong>, under Scans, shows each library's reader: &quot;Read by Studio Mac · scanning · 212 files (14 GB) to upload · checked in 1 minute ago&quot;. It turns amber when the device hasn't been heard from for a while, or can't reach the library's folder, and says when remakes wait for mains power.</li>
+<li>Library settings › Scans says when the device last checked in, and when it last scanned the library in full.</li>
+<li>Work that needs the originals says so on its row: &quot;40 videos in Footage wait for Studio Mac, which reads it (last checked in 2 hours ago).&quot;</li>
+<li>The Admin page's Libraries list shows whether each library's files can be reached, from its device's check-ins.</li>
+</ul>
+<h2 id="the-devices-key">The device's key<a class="anchor" href="#the-devices-key" aria-label="Link to this section">#</a></h2>
+<p>The key only scans the libraries that choose that device; it can do nothing else. In Settings › Devices, an admin can:</p>
+<ul>
+<li><strong>Rename</strong> the device.</li>
+<li><strong>New key</strong>: the old key stops at once. Set the new one on the device with <code>lumiverb config set --api-key -</code>.</li>
+<li><strong>End key</strong>: the device does nothing until it gets a new one.</li>
+<li><strong>Remove</strong>: the device and its key. Give its libraries another reader first.</li>
+</ul>
+<h2 id="updating">Updating<a class="anchor" href="#updating" aria-label="Link to this section">#</a></h2>
+<p>Update Lumiverb on the device when you update the server (on a Mac, <code>brew upgrade lumiverb</code>), then stop <code>lumiverb device run</code> and start it again. A device too old for the server is turned away until it's updated.</p>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="processing.html"><span>Previous</span>Processing</a><a class="next" href="ai-worker.html"><span>Next</span>A second machine for search and faces</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/devices.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-a-device-does">What a device does</a></li><li><a href="#set-it-up">Set it up</a></li><li><a href="#keep-it-running">Keep it running</a></li><li><a href="#on-battery-or-a-metered-network">On battery or a metered network</a></li><li><a href="#see-how-its-doing">See how it&#x27;s doing</a></li><li><a href="#the-devices-key">The device&#x27;s key</a></li><li><a href="#updating">Updating</a></li></ul></nav>
+  </div>
+</body>
+</html>

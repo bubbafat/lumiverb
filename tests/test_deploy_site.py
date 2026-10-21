@@ -37,8 +37,9 @@ def _run(
     )
 
 
-def _site(*names: str) -> str:
-    out = _run(*[a for n in names for a in ("--domain", n)], "--dry-run")
+def _site(*names: str, folder: str | None = None) -> str:
+    chosen = ["--folder", folder] if folder else []
+    out = _run(*chosen, *[a for n in names for a in ("--domain", n)], "--dry-run")
     assert out.returncode == 0, out.stderr
     return out.stdout
 
@@ -54,9 +55,22 @@ def test_it_serves_the_checkout_s_site_folder_and_nothing_around_it():
     assert "try_files $uri $uri/ =404;" in site, "a missing file is a 404, not the page"
 
 
-def test_its_policy_is_the_page_s_own():
-    page = (REPO / "site" / "index.html").read_text(encoding="utf-8")
-    [meta] = re.findall(r'http-equiv="Content-Security-Policy" content="([^"]+)"', page)
+def test_the_docs_are_their_own_folder():
+    site = _site("docs.lumiverb.io", folder="docs-site")
+    assert "server_name docs.lumiverb.io;" in site
+    assert f"root {REPO}/docs-site;" in site
+
+
+@pytest.mark.parametrize("folder", ["../etc", "site/..", "Site", "docs_site", "-x", "a;b"])
+def test_a_folder_goes_into_nginx_only_as_a_folder_s_name(folder):
+    out = _run("--folder", folder, "--domain", "lumiverb.io", "--dry-run")
+    assert out.returncode == 1 and f"Not a folder of this checkout: {folder}" in out.stderr, out.stderr
+
+
+@pytest.mark.parametrize("page", ["site/index.html", "docs-site/index.html", "scripts/docs_theme/page.html"])
+def test_its_policy_is_the_pages_own(page):
+    text = (REPO / page).read_text(encoding="utf-8")
+    [meta] = re.findall(r'http-equiv="Content-Security-Policy" content="([^"]+)"', text)
     [header] = re.findall(r'add_header Content-Security-Policy "([^"]+)"', _site("lumiverb.io"))
     # frame-ancestors is a header's alone: a page's own policy can't say it.
     assert _directives(header) == _directives(meta) | {"frame-ancestors 'none'"}

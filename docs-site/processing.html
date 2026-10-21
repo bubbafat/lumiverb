@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Processing · Lumiverb docs</title>
+  <meta name="description" content="Everything Lumiverb knows about a photo or video it works out on the server, in the background, after a scan finds the file. This page says what it makes and in what order, how to pause it or change h">
+  <link rel="canonical" href="https://docs.lumiverb.io/processing.html">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="docs.css">
+  <script src="docs.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to the page</a>
+
+  <header class="top">
+    <div class="top-row">
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb <span class="brand-docs">docs</span></span>
+      </a>
+      <nav class="top-links" aria-label="Lumiverb">
+        <a href="https://lumiverb.io/">lumiverb.io</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <details class="menu">
+    <summary>Contents</summary>
+    <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html" aria-current="page">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+    </nav>
+  </details>
+
+  <div class="layout">
+    <aside class="side">
+      <nav aria-label="Guide">
+<p class="nav-section">Start</p>
+<ul>
+<li><a href="index.html">Lumiverb</a></li>
+<li><a href="install-mac.html">Install on a Mac</a></li>
+<li><a href="install-linux.html">Install on a Linux server</a></li>
+<li><a href="first-steps.html">First steps</a></li>
+<li><a href="updating.html">Updating</a></li>
+</ul>
+<p class="nav-section">Using Lumiverb</p>
+<ul>
+<li><a href="browse-and-search.html">Browse and search</a></li>
+<li><a href="people.html">People and faces</a></li>
+<li><a href="videos.html">Videos</a></li>
+<li><a href="places.html">Places</a></li>
+<li><a href="ratings-projects-sharing.html">Ratings, projects and sharing</a></li>
+</ul>
+<p class="nav-section">Running Lumiverb</p>
+<ul>
+<li><a href="libraries.html">Libraries</a></li>
+<li><a href="ai-machines.html">AI machines</a></li>
+<li><a href="users-and-roles.html">Users and roles</a></li>
+<li><a href="network.html">Network, phones and HTTPS</a></li>
+<li><a href="storage.html">Storage</a></li>
+<li><a href="backups.html">Backups and restore</a></li>
+<li><a href="processing.html" aria-current="page">Processing</a></li>
+<li><a href="devices.html">Libraries on another computer</a></li>
+<li><a href="ai-worker.html">A second machine for search and faces</a></li>
+<li><a href="plugins.html">Plug-ins</a></li>
+<li><a href="command-line.html">The command line</a></li>
+<li><a href="troubleshooting.html">Troubleshooting</a></li>
+</ul>
+<p class="nav-section">For developers</p>
+<ul>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/cursor-api.md">The API <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/writing-a-plugin.md">Writing a plug-in <span aria-hidden="true">↗</span></a></li>
+<li><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/architecture.md">How it&#x27;s built <span aria-hidden="true">↗</span></a></li>
+</ul>
+      </nav>
+    </aside>
+
+    <main id="content" class="doc">
+      <article>
+<h1>Processing</h1>
+<p>Everything Lumiverb knows about a photo or video it works out on the server, in the background, after a scan finds the file. This page says what it makes and in what order, how to pause it or change how things are made, and how to see why something waits.</p>
+<h2 id="what-lumiverb-makes">What Lumiverb makes<a class="anchor" href="#what-lumiverb-makes" aria-label="Link to this section">#</a></h2>
+<p>Settings › Processing lists each thing Lumiverb makes, in this order:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>On the page</th>
+<th>For</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Video facts (probe)</td>
+<td>Videos</td>
+<td>Codecs, size, frame rate, timecode, audio</td>
+</tr>
+<tr>
+<td>Capture time and GPS accuracy</td>
+<td>All</td>
+<td>When it was taken</td>
+</tr>
+<tr>
+<td>Proxies and thumbnails</td>
+<td>All</td>
+<td>The pictures you browse</td>
+</tr>
+<tr>
+<td>Video previews</td>
+<td>Videos</td>
+<td>The first seconds, as a short video</td>
+</tr>
+<tr>
+<td>Analysis proxies</td>
+<td>Videos</td>
+<td>A smaller full-length copy that the browser plays and that scenes, faces and transcripts are made from</td>
+</tr>
+<tr>
+<td>Scene descriptions (with Scenes)</td>
+<td>Videos</td>
+<td>The video cut into scenes, each described</td>
+</tr>
+<tr>
+<td>Video descriptions</td>
+<td>Videos</td>
+<td>The whole video described</td>
+</tr>
+<tr>
+<td>Descriptions and tags</td>
+<td>Photos</td>
+<td>A photo described, with tags</td>
+</tr>
+<tr>
+<td>Text in images (OCR)</td>
+<td>Photos</td>
+<td>Signs, screens, documents</td>
+</tr>
+<tr>
+<td>Visual search (CLIP)</td>
+<td>Photos</td>
+<td>What search by content and Find similar compare</td>
+</tr>
+<tr>
+<td>Faces (with Faces in videos)</td>
+<td>All</td>
+<td>The faces found, for People</td>
+</tr>
+<tr>
+<td>Transcripts</td>
+<td>Videos</td>
+<td>What's said, with times</td>
+</tr>
+<tr>
+<td>Location guesses</td>
+<td>All</td>
+<td>Where a clip probably was, in libraries where Infer location is on</td>
+</tr>
+</tbody>
+</table></div>
+<p>A plug-in that's on adds its own row, such as Place names (<a href="plugins.html">Plug-ins</a>).</p>
+<p>Scans make the previews. Video facts, capture times and analysis proxies need the original files, so they wait while a library's drive is away; the rest is made from what Lumiverb keeps. Descriptions, text, scene descriptions and video descriptions need an AI machine doing Descriptions &amp; text; without one they wait, and nothing fails (<a href="ai-machines.html">AI machines</a>). Visual search, faces and transcripts run on the server itself, or on a machine you add (<a href="ai-worker.html">A second machine for search and faces</a>).</p>
+<h2 id="in-what-order">In what order<a class="anchor" href="#in-what-order" aria-label="Link to this section">#</a></h2>
+<p>Oldest clips first within each step:</p>
+<ol>
+<li>What lets you see a clip: scans (thumbnails and previews) and video facts.</li>
+<li>Analysis proxies and capture times.</li>
+<li>What makes clips findable: visual search, descriptions, text, faces, scenes, transcripts.</li>
+<li>Remakes: clips made with an older model, settings or version.</li>
+</ol>
+<p>Different kinds of work run side by side. Each library is scanned in full every 15 minutes; Library settings › Scans › <strong>Scan now</strong> asks for a scan within a minute.</p>
+<h2 id="reading-the-page">Reading the page<a class="anchor" href="#reading-the-page" aria-label="Link to this section">#</a></h2>
+<p>Anyone signed in can open it. The box at the top says when everything will be made (&quot;Caught up in about 2 h&quot;), what runs <strong>Now</strong> and what's <strong>Next</strong>. &quot;The scheduler isn't running&quot; means nothing is being made: see <a href="troubleshooting.html">Troubleshooting</a>.</p>
+<p><strong>Counts for</strong> picks the clips counted: all libraries, one library or one project. Each row counts what's current, missing, made another way (an older model, settings or version) and failing, and about how long is left.</p>
+<h2 id="pausing">Pausing<a class="anchor" href="#pausing" aria-label="Link to this section">#</a></h2>
+<p>Admins flip the switches; everyone sees them. What's running finishes; nothing more of it starts.</p>
+<ul>
+<li><strong>All processing</strong>, at the top: from Running or Partly paused it pauses everything, every library's scans too; from Paused it resumes everything.</li>
+<li><strong>Scans</strong>: each library has its own switch, with <strong>Pause every library</strong> and <strong>Resume every library</strong>. Paused scans find no new or changed files and make no thumbnails or video previews; everything else goes on. A library's admin can also use Library settings › Scans › <strong>Pause scans</strong>.</li>
+<li><strong>Upkeep</strong>: emptying the trash, cleaning up files, spreading face names.</li>
+<li><strong>Each kind of work</strong> has a switch on its row.</li>
+</ul>
+<p>Pausing never stops the nightly backup.</p>
+<p>On the server itself, the server admin can do the same without signing in. On a Mac:</p>
+<div class="cmd"><pre><code>lumiverb-server pause all --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
+<p>On Linux:</p>
+<div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server pause all --env /etc/lumiverb/env</code></pre></div>
+<p><code>resume</code> undoes it. In place of <code>all</code>: <code>scans</code> (<code>--library NAME</code> for one), <code>upkeep</code>, or one kind of work by what it makes, such as <code>image.description</code>, <code>image.text</code>, <code>image.faces</code>, <code>video.transcript</code> or <code>video.analysis_proxy</code> (a plug-in's work by its id). A name it doesn't know lists the ones it does. It acts in every account unless you add <code>--account NAME</code>.</p>
+<h2 id="levels">Levels<a class="anchor" href="#levels" aria-label="Link to this section">#</a></h2>
+<p>Faces have a level for photos and one for videos (Off, Low, Normal, High); scenes have a Detail (Low, Normal, High). An admin's pick is saved at once. Raising one finds nothing again by itself: the row counts what was made lower (&quot;120 photos below this&quot;), and <strong>Redo</strong> looks at them again. Off finds nothing new; what was found stays.</p>
+<h2 id="changing-settings">Changing settings<a class="anchor" href="#changing-settings" aria-label="Link to this section">#</a></h2>
+<p><strong>Settings · version N</strong> under a row opens its settings. Admins change those that can be changed (the others say why not) and <strong>Save</strong>; <strong>Back to defaults</strong> puts them back. Among them: the quality (Good, Better, Best) of analysis proxies, previews and video previews, and how faces are grouped on People.</p>
+<p>When a change would change what's already made, saving asks:</p>
+<ul>
+<li><strong>New files only</strong>: what was made stays. The row keeps a <strong>Remake</strong> button for later.</li>
+<li><strong>Also remake them</strong>: made again after everything else. The row says &quot;Remaking 1,200 clips, after everything else&quot;, with <strong>Stop</strong>.</li>
+</ul>
+<p>A new model in Settings › AI asks the same.</p>
+<h2 id="after-an-update">After an update<a class="anchor" href="#after-an-update" aria-label="Link to this section">#</a></h2>
+<p>When a release makes something differently (a new version of it, or new default settings), what was made before isn't remade until an admin says so. The row says, for example, &quot;A new version of Faces is ready: 8,000 photos made before it are made again once an admin resumes it.&quot; <strong>Remake</strong> starts it. An update alone never sends your library back through an AI machine you pay for.</p>
+<h2 id="why-work-waits">Why work waits<a class="anchor" href="#why-work-waits" aria-label="Link to this section">#</a></h2>
+<p>Under each row a line says why some of its work waits, amber when someone has to act:</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>The row says</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>&quot;… wait until it's resumed.&quot;</td>
+<td>Resume it.</td>
+</tr>
+<tr>
+<td>&quot;… wait for the scheduler, which isn't running.&quot;</td>
+<td>See <a href="troubleshooting.html">Troubleshooting</a>.</td>
+</tr>
+<tr>
+<td>&quot;… Its AI machines can't be used. Settings → AI shows why.&quot;</td>
+<td>Settings › AI says what's wrong.</td>
+</tr>
+<tr>
+<td>&quot;… wait for its plug-in …&quot;</td>
+<td>Settings › Plug-ins says why.</td>
+</tr>
+<tr>
+<td>&quot;… wait for Scenes first.&quot;</td>
+<td>Look at that row.</td>
+</tr>
+<tr>
+<td>&quot;… in Photos wait for its drive …&quot;</td>
+<td>Plug the drive in, or mount the share.</td>
+</tr>
+<tr>
+<td>&quot;… wait for Studio Mac, which reads it …&quot;</td>
+<td>See <a href="devices.html">Libraries on another computer</a>.</td>
+</tr>
+<tr>
+<td>&quot;… failed too many times and aren't tried again until someone asks.&quot;</td>
+<td><strong>Show failures</strong>, then <strong>Try again</strong>.</td>
+</tr>
+<tr>
+<td>&quot;12 files in Photos can't be read …&quot;</td>
+<td>See <a href="troubleshooting.html">Troubleshooting</a>.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="failures">Failures<a class="anchor" href="#failures" aria-label="Link to this section">#</a></h2>
+<p>A clip whose work fails is tried again after 5 minutes, then waiting twice as long each time, up to a day. After 10 tries it's given up. <strong>Show failures</strong> lists each clip with its error, its tries and the next one. Editors and admins click <strong>Try again</strong>, or <strong>Try all again</strong>, which starts the waits over. Work waiting for something else (an AI machine down, a drive away) never counts as failing.</p>
+<p>From the <a href="command-line.html">command line</a>:</p>
+<div class="cmd"><pre><code>lumiverb producers failures</code></pre></div>
+
+      </article>
+      <nav class="pager" aria-label="Previous and next"><a class="prev" href="backups.html"><span>Previous</span>Backups and restore</a><a class="next" href="devices.html"><span>Next</span>Libraries on another computer</a></nav>
+      <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/processing.md">This page on GitHub</a></p>
+    </main>
+
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-lumiverb-makes">What Lumiverb makes</a></li><li><a href="#in-what-order">In what order</a></li><li><a href="#reading-the-page">Reading the page</a></li><li><a href="#pausing">Pausing</a></li><li><a href="#levels">Levels</a></li><li><a href="#changing-settings">Changing settings</a></li><li><a href="#after-an-update">After an update</a></li><li><a href="#why-work-waits">Why work waits</a></li><li><a href="#failures">Failures</a></li></ul></nav>
+  </div>
+</body>
+</html>
