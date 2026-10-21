@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>Lumiverb: find any photo or video by what's in it</title>
+  <meta name="description" content="Lumiverb makes your photos and videos searchable by what's in them, on your own Mac or Linux server. It reads your folders in place and never changes or uploads a file. Free and open source.">
+  <link rel="canonical" href="https://lumiverb.io/">
+  <meta name="theme-color" content="#030712">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://lumiverb.io/">
+  <meta property="og:title" content="Lumiverb: find any photo or video by what's in it">
+  <meta property="og:description" content="Your photos and videos, searchable by what's in them, on your own Mac or Linux server. Free and open source.">
+  <meta property="og:image" content="https://lumiverb.io/images/og.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <script src="site.js"></script>
+</head>
+<body>
+  <a class="skip" href="#install">Skip to install</a>
+
+  <header class="top">
+    <div class="wrap top-row">
+      <a class="brand" href="/" aria-label="Lumiverb home">
+        <span class="mark" aria-hidden="true">Lv</span>
+        <span>Lumiverb</span>
+      </a>
+      <nav aria-label="Site">
+        <a href="#features">Features</a>
+        <a href="#install">Install</a>
+        <a href="https://try.lumiverb.io">Demo</a>
+        <a href="https://github.com/bubbafat/lumiverb">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap">
+        <p class="eyebrow">Free and open source · on your own Mac or Linux server</p>
+        <h1>Find any photo or video by what's&nbsp;in&nbsp;it.</h1>
+        <p class="lead">
+          Lumiverb reads the folders your photos and videos are already in and makes every one of them searchable:
+          what's in the picture, the words in it, who's there, what's said and where it was taken.
+          It runs on your own computer, and it never changes, moves or uploads a file.
+        </p>
+        <div class="actions">
+          <a class="button primary" href="#install">Install</a>
+          <a class="button" href="https://try.lumiverb.io">Try the demo <span aria-hidden="true">→</span></a>
+        </div>
+        <p class="aside">The demo needs no account: search, browse and open anything.</p>
+      </div>
+      <div class="wrap wide">
+        <figure class="window">
+          <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+          <img src="images/search.webp" width="2240" height="1048"
+               alt="Lumiverb's web app: a search for “turquoise water” finds beach photos, a cruise ship and a video in a library.">
+        </figure>
+      </div>
+    </section>
+
+    <section id="install" class="install">
+      <div class="wrap">
+        <h2>Install</h2>
+        <p class="section-lead">One command on a Mac, one on a Linux server. Then open it in a browser and create your account: setting up walks you through your first library.</p>
+
+        <div class="tabs" role="tablist" aria-label="Where it runs">
+          <button type="button" role="tab" id="tab-mac" aria-controls="on-mac" aria-selected="true">On a Mac</button>
+          <button type="button" role="tab" id="tab-linux" aria-controls="on-linux" aria-selected="false" tabindex="-1">On a Linux server</button>
+        </div>
+
+        <div class="install-panels">
+          <article class="card" id="on-mac" role="tabpanel" aria-labelledby="tab-mac">
+            <h3>On a Mac</h3>
+            <p>With <a href="https://brew.sh">Homebrew</a>:</p>
+            <div class="cmd"><pre><code>brew trust --tap bubbafat/lumiverb &amp;&amp; brew install bubbafat/lumiverb/lumiverb</code></pre></div>
+            <div class="cmd"><pre><code>brew services start lumiverb</code></pre></div>
+            <p>Then open <a href="http://localhost:6464">localhost:6464</a> on that Mac. Lumiverb brings everything it needs, its own database included, and starts again at login.</p>
+            <p class="small">To update (it restarts itself into the new version):</p>
+            <div class="cmd"><pre><code>brew upgrade lumiverb</code></pre></div>
+          </article>
+
+          <article class="card" id="on-linux" role="tabpanel" aria-labelledby="tab-linux">
+            <h3>On a Linux server</h3>
+            <p>Ubuntu 22.04 or later, with a domain name pointing at it:</p>
+            <div class="cmd"><pre><code>curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \
+  | sudo bash -s -- --domain app.example.com --email you@example.com --worker</code></pre></div>
+            <p>It installs everything, a certificate included. Then create your account:</p>
+            <div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env</code></pre></div>
+            <p class="small">To update:</p>
+            <div class="cmd"><pre><code>sudo bash /opt/lumiverb/scripts/update.sh</code></pre></div>
+            <p class="small">A server on your home network, without a domain: <a href="https://github.com/bubbafat/lumiverb/blob/main/docs/linux-server.md">the Linux server guide</a>.</p>
+          </article>
+        </div>
+
+        <p class="note">
+          Descriptions, tags and the text in photos need an <strong>AI machine</strong>:
+          <a href="https://ollama.com">Ollama</a> with a vision model on any computer you have, or a key from OpenAI,
+          Anthropic or Google. Settings › AI adds one, and its Test tries it before you give it the work.
+          Everything else, from search by what's in a picture to faces, video scenes and transcripts, runs on the server itself.
+          <a href="https://github.com/bubbafat/lumiverb#ai-descriptions-with-ollama">Setting up Ollama</a>.
+        </p>
+      </div>
+    </section>
+
+    <section id="features" class="features">
+      <div class="wrap">
+        <h2>Everything in your library, findable</h2>
+        <p class="section-lead">Point Lumiverb at a folder. It finds every photo and video in it, keeps looking for new ones, and works through them on its own.</p>
+
+        <ul class="feature-grid">
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <h3>Search in your own words</h3>
+            <p>Type “sunset over the harbor” or “kids on a trampoline”. Lumiverb finds it by what's in the picture and what's written about it, and finds more like any photo you pick.</p>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+            <h3>Descriptions and tags</h3>
+            <p>Every photo and video is described and tagged, and the words in it (signs, screens, documents) are read, by the AI machine you choose.</p>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>
+            <h3>People</h3>
+            <p>Faces are found in photos and in videos. Name someone once and find every photo, and every moment of video, they're in.</p>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>
+            <h3>Video, scene by scene</h3>
+            <p>Every scene is described and every word spoken is transcribed, so a search reaches inside every video, not just its name.</p>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-12a7 7 0 0 1 14 0c0 5.8-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>
+            <h3>Places</h3>
+            <p>Where each shot was taken, from your camera and phone, with place names and landmarks, and a guess for a camera's shots with none from the phone photos taken at the same time.</p>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.7 5.5 6 .9-4.4 4.2 1.1 6L12 16.8l-5.4 2.8 1.1-6-4.4-4.2 6-.9z"/></svg>
+            <h3>Ratings, projects, sharing</h3>
+            <p>Rate and favorite, gather the best into projects, and share a project with a link anyone can open.</p>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.5 2.9-5.5 6.5-5.5s6.5 2 6.5 5.5M16 4.7a3.5 3.5 0 0 1 0 6.6M18 14.9c2 .7 3.5 2.4 3.5 5.1"/></svg>
+            <h3>For a household or a team</h3>
+            <p>Invite people with a link. Each library can be private, or open to some as viewers, editors or admins.</p>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v4h-4"/></svg>
+            <h3>Looks after itself</h3>
+            <p>New files are found every 15 minutes and its databases backed up every night. When something waits, it says why.</p>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 18h6"/><rect x="17" y="8" width="5" height="11" rx="1"/></svg>
+            <h3>On any screen</h3>
+            <p>It's a web app: any browser on your network, your phone included, with HTTPS when you want it.</p>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>
+            <h3>Libraries on other computers</h3>
+            <p>A computer that keeps photos of its own scans them itself and sends only previews: the originals stay where they are.</p>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>
+            <h3>Fast where it can be</h3>
+            <p>It uses Apple silicon or an NVIDIA GPU where there is one, and can hand search and faces to a second machine.</p>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></svg>
+            <h3>Plug-ins</h3>
+            <p>Add what Lumiverb doesn't do yet with a plug-in, written in any language and run apart from Lumiverb itself.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="showcase">
+      <div class="wrap split">
+        <div class="split-text">
+          <h2>Every photo, explained</h2>
+          <p>Open any photo or video to see what Lumiverb knows about it: what's in it and its tags, the camera and exposure, where it was taken and what's nearby.</p>
+          <p>Write your own description, tags or location where you know better: what a person writes is never written over by what's made for them.</p>
+        </div>
+        <figure class="window">
+          <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+          <img src="images/photo.webp" width="2240" height="1400" loading="lazy"
+               alt="A photo of the Eiffel Tower from an open-top bus, open in Lumiverb beside its description, tags, camera, exposure and location.">
+        </figure>
+      </div>
+    </section>
+
+    <section class="showcase">
+      <div class="wrap split reverse">
+        <div class="split-text">
+          <h2>In your pocket</h2>
+          <p>The same library on your phone: search, browse, people and projects, in the browser you already have. Nothing to install on it.</p>
+          <p>Turn on network access in Settings, and your library is there for everyone you've invited, in the house or over HTTPS.</p>
+        </div>
+        <figure class="phone">
+          <img src="images/phone.webp" width="780" height="1688" loading="lazy"
+               alt="Lumiverb on a phone: a library's photos in a grid, with search and filters above.">
+        </figure>
+      </div>
+    </section>
+
+    <section class="privacy">
+      <div class="wrap">
+        <h2>Your files stay yours</h2>
+        <ul class="three">
+          <li>
+            <h3>Read in place</h3>
+            <p>Lumiverb reads your folders and never changes, moves or deletes a file in them. Its previews and everything it learns are kept apart, and backed up every night.</p>
+          </li>
+          <li>
+            <h3>Nothing leaves</h3>
+            <p>Your library lives on your machine. Pictures go to an AI machine only if you set one up, and only to the one you choose: Ollama keeps it all at home.</p>
+          </li>
+          <li>
+            <h3>No account with us</h3>
+            <p>No cloud service, no telemetry, nothing to sign up for. It's MIT licensed: every line is on <a href="https://github.com/bubbafat/lumiverb">GitHub</a>.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="specs">
+      <div class="wrap">
+        <dl>
+          <div>
+            <dt>Photos</dt>
+            <dd id="formats-photos">JPEG, PNG, WebP, BMP, TIFF, DNG; Canon CR2, CR3, CRW; Nikon NEF, NRW; Sony ARW, SR2, SRF; Fujifilm RAF; Olympus ORF; Panasonic RW2, RAW; Leica RWL</dd>
+          </div>
+          <div>
+            <dt>Videos</dt>
+            <dd id="formats-videos">MP4, MOV, MKV</dd>
+          </div>
+          <div>
+            <dt>Runs on</dt>
+            <dd>A Mac with Homebrew, or Ubuntu 22.04 or later with 4 GB of memory or more</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="closing">
+      <div class="wrap">
+        <h2>See it for yourself</h2>
+        <p>The demo is a real Lumiverb with two small libraries, open to anyone as a viewer.</p>
+        <div class="actions">
+          <a class="button primary" href="https://try.lumiverb.io">Try the demo <span aria-hidden="true">→</span></a>
+          <a class="button" href="#install">Install</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="bottom">
+    <div class="wrap bottom-row">
+      <span>Lumiverb · <a href="https://github.com/bubbafat/lumiverb/blob/main/LICENSE">MIT License</a></span>
+      <span><a href="https://github.com/bubbafat/lumiverb">GitHub</a> · <a href="https://try.lumiverb.io">Demo</a></span>
+    </div>
+  </footer>
+</body>
+</html>
