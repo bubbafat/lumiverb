@@ -133,6 +133,33 @@ def machines_models(
         console.print(escape(model))
 
 
+@machines_app.command("test")
+def machines_test(
+    name: Annotated[str, typer.Argument(help="The machine's name.")],
+    model: Annotated[str, typer.Option("--model", help="A model to try instead of the job's.")] = "",
+) -> None:
+    """Try a machine before it gets the work: it's sent what descriptions & text's work sends (a picture Lumiverb
+    draws and a video's scenes, with this account's settings), and each answer is said, with the tokens it used of
+    its room, or why it wouldn't do. Account admins."""
+    client = LumiverbClient()
+    m = _machine(_settings(client), name)
+    r = client.raw("POST", f"/v1/ai/machines/{m['machine_id']}/try", json={"model": model})
+    if r.status_code >= 400:
+        _said(r, "Couldn't test it")
+    tried = r.json()
+    console.print(f"Sent {escape(tried['sent'])}, with {escape(tried['model'])}.")
+    bad = False
+    for t in tried["tries"]:
+        used = f" · {t['tokens']['answer']:,} of {t['limit']:,} tokens" if t.get("tokens") else ""
+        said = (f"[yellow]{escape(t['problem'])}[/yellow]" if t["problem"]
+                else "[green]answered as the work needs it[/green]")
+        console.print(f"\n[bold]{escape(', '.join(t['titles']))}[/bold]: {said} · {t['seconds']} s{used}")
+        if t["answer"]:
+            console.print(escape(t["answer"]), soft_wrap=True)
+        bad |= bool(t["problem"])
+    raise typer.Exit(1 if bad else 0)
+
+
 @machines_app.command("add")
 def machines_add(
     name: Annotated[str, typer.Argument(help="What to call it (OpenAI, Gaming PC).")],

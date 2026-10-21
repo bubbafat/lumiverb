@@ -47,7 +47,7 @@ from src.server.repository.ai_machines import first_vision_machine, job_model, k
 from src.server.repository.ai_machines import set_job_model as _store_model
 from src.shared.ai_jobs import AI_JOBS, BUILT_IN_JOBS, JOBS
 from src.shared.utils import utcnow
-from src.shared.vision_endpoint import VisionEndpointError, check_url, list_models
+from src.shared.vision_endpoint import VisionEndpointError, allowed, check_url, list_models
 from src.shared.whisper_models import canonical, canonical_models
 
 router = APIRouter(prefix="/v1/ai", tags=["ai"])
@@ -165,6 +165,39 @@ class JobModelIn(BaseModel):
     # Answers 409 redo_on_change (ADR-018 decision 6): true, what the old model made is remade too, after
     # everything else; false, new files only (it stays as it is until someone remakes it). Left out: asked.
     redo: bool | None = None
+
+
+class TryIn(BaseModel):
+    # The model to try; "": the job's.
+    model: str = Field(default="", max_length=200)
+
+
+class Tried(BaseModel):
+    """One request of a Test, as a job's work would make it: what it stands for, what came back."""
+
+    # The producers whose settings it was made with (theirs alike: one request).
+    titles: list[str]
+    # The reply as it came (its first 4000 characters).
+    answer: str = ""
+    # What the work would save from it: the description and tags, or the text read; None when nothing could be.
+    result: dict | str | None = None
+    # Why it wouldn't do, in a sentence: it ran out of room, its answer isn't what was asked for, it failed.
+    problem: str = ""
+    # Why it ended, as the machine said ("stop", "length"); None when it didn't say.
+    finish: str | None = None
+    # The tokens it says it used, {"prompt", "answer"}; None when it doesn't say.
+    tokens: dict[str, int] | None = None
+    # The tokens its answer may use (the producer's max_tokens).
+    limit: int = 0
+    seconds: float = 0.0
+
+
+class TryOut(BaseModel):
+    machine: str
+    model: str
+    # What was sent, in words: the same every time, nobody's photo (src/server/ai_sample.py).
+    sent: str
+    tries: list[Tried]
 
 
 class StatusIn(BaseModel):
@@ -412,6 +445,94 @@ def remove_machine(machine_id: str, request: Request) -> AiSettings:
         ctrl.delete(machine)
         ctrl.commit()
         return _settings(ctrl, request.state.tenant_id)
+
+
+# How long a Test waits for each answer: its requests go out at once.
+TRY_WAIT_SEC = 45.0
+SAID_UP_TO = 4000
+
+
+def _try_one(machine: AiMachine, model: str, artifacts: list[str], settings: dict, *, said_in_full: bool) -> Tried:
+    """One request to the machine with these producers' settings, the sample picture or scenes, as their work would
+    make it (OpenAICompatibleCaptionProvider.tried)."""
+    import time
+
+    import requests
+
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.producers.names import TEXT
+    from src.server import ai_sample
+    from src.shared.producers import PRODUCERS
+    from src.shared.vision_endpoint import answer_said, failed
+
+    titles = [PRODUCERS[a].title for a in artifacts]
+    what = "read" if TEXT in artifacts else "describe" if "max_edge" in settings else "describe_text"
+    provider = OpenAICompatibleCaptionProvider(machine.api_url, model, key_of(machine) or None, settings=settings,
+                                               ocr_settings=settings)
+    started = time.monotonic()
+    try:
+        got = provider.tried(what, image=ai_sample.picture(), text=ai_sample.SCENES, timeout=TRY_WAIT_SEC)
+    except requests.Timeout:
+        return Tried(titles=titles, problem=f"No answer within {TRY_WAIT_SEC:.0f} seconds.",
+                     limit=int(settings["max_tokens"]), seconds=round(time.monotonic() - started, 1))
+    except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 0
+        why = answer_said(e.response) if said_in_full and e.response is not None else ""
+        return Tried(titles=titles, problem=f"It answered HTTP {status}" + (f": {why}" if why else "."),
+                     limit=int(settings["max_tokens"]), seconds=round(time.monotonic() - started, 1))
+    except (requests.RequestException, ValueError, KeyError) as e:  # unreachable, or an answer that isn't JSON
+        return Tried(titles=titles, problem="Couldn't get an answer" + (f": {failed(e)}." if said_in_full and
+                                                                        isinstance(e, requests.RequestException)
+                                                                        else "."),
+                     limit=int(settings["max_tokens"]), seconds=round(time.monotonic() - started, 1))
+    return Tried(titles=titles, answer=got["reply"][:SAID_UP_TO], result=got["result"], problem=got["problem"],
+                 finish=got["finish"], tokens=got["tokens"], limit=got["limit"],
+                 seconds=round(time.monotonic() - started, 1))
+
+
+@router.post("/machines/{machine_id}/try", response_model=TryOut, dependencies=[Depends(require_tenant_admin)])
+def try_machine(machine_id: str, body: TryIn, request: Request,
+                session: Annotated[Session, Depends(get_tenant_session)]) -> TryOut:
+    """Try a machine before it gets the work (the demo server, 10-21: a thinking model spent the 500 tokens of
+    scene descriptions before answering, and a temperature refused showed only once the batch ran). It's sent what
+    descriptions & text's work sends, with this account's settings and the job's model (or the one given): a
+    picture Lumiverb draws, nobody's photo, and a video's scenes; one request for each producer's settings,
+    all at once. Each comes back with its answer, what the work would save from it, the tokens it used of its
+    room, how long it took, and why it wouldn't do. 409 no_model when there's no model to try; 409
+    built_in_machine for the built-in one, which does transcripts. A failed request's own words are said to a
+    server admin, as Connect's are."""
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+
+    from src.server.repository import lineage
+
+    with _control() as ctrl:
+        machine = _machine(ctrl, request, machine_id)
+        tenant = ctrl.get(Tenant, request.state.tenant_id)
+        ctrl.expunge(machine)
+    if machine.built_in:
+        raise _built_in_error("The built-in machine does transcripts: there's nothing to try on it here.")
+    model = body.model.strip() or _job_model(tenant, "vision")
+    if not model:
+        raise ConflictError("no_model", "Choose a model for descriptions & text first, under Models.",
+                            {"job": "vision"})
+    try:
+        allowed(machine.api_url)
+    except VisionEndpointError as e:
+        raise UpstreamError("machine_unreachable", str(e), {"api_url": machine.api_url}) from None
+    # One request for each producer's settings: those alike share it.
+    alike: dict[str, tuple[list[str], dict]] = {}
+    for artifact in lineage.JOB_ARTIFACTS.get("vision", ()):
+        settings = lineage.desired(session, artifact, {"vision": model})["settings"]
+        alike.setdefault(json.dumps(settings, sort_keys=True), ([], settings))[0].append(artifact)
+    full = getattr(request.state, "server_admin", False) is True
+    with ThreadPoolExecutor(max_workers=max(1, len(alike))) as pool:
+        tries = list(pool.map(lambda group: _try_one(machine, model, *group, said_in_full=full), alike.values()))
+    from src.server import ai_sample
+
+    return TryOut(machine=machine.name, model=model, tries=tries,
+                  sent=f"a picture Lumiverb draws (a red house on a hill, and a sign reading {ai_sample.SIGN}), "
+                       "and a video's three scenes")
 
 
 def _ask_before_redoing(session: Session, tenant: Tenant | None, job: str, model: str,

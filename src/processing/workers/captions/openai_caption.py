@@ -492,6 +492,11 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
 
     def _ask(self, content: list[dict], settings: dict) -> str:
         """One request: the content (an image and the prompt, or text alone), the reply's text."""
+        return self._asked(content, settings)["reply"]
+
+    def _asked(self, content: list[dict], settings: dict, *, timeout: float = 60) -> dict:
+        """One request, and what came back: {"reply": its text, "finish": why it ended ("stop", "length"…, or
+        None), "tokens": {"prompt", "answer"} when the machine says what it used, else None}."""
         payload = {
             "model": self._model,
             "messages": [{"role": "user", "content": content}],
@@ -507,13 +512,13 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             f"{self._base_url}/chat/completions",
             json=payload,
             headers=headers,
-            timeout=60,
+            timeout=timeout,
         )
         if resp.status_code == 400 and "temperature" in payload and "temperature" in resp.text.lower():
             logger.warning("%s won't take a temperature (%s): asking it without one from now on",
                            self._base_url, resp.text[:200])
             self._sends_temperature = False
-            return self._ask(content, settings)
+            return self._asked(content, settings, timeout=timeout)
         if not resp.ok:
             logger.warning("Error from AI Provider: %s: %s", resp.status_code, resp.text)
             if resp.status_code == 429:
@@ -536,4 +541,42 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         # when content is empty — fall back to it
         if not content.strip():
             content = msg.get("reasoning_content") or ""
-        return self._strip_thinking(content)
+        usage = resp.json().get("usage") or {}
+        used = (usage.get("prompt_tokens"), usage.get("completion_tokens"))
+        return {"reply": self._strip_thinking(content), "finish": finish,
+                "tokens": {"prompt": used[0], "answer": used[1]} if all(isinstance(n, int) for n in used) else None}
+
+    def tried(self, what: str, *, image: bytes | None = None, text: str = "", timeout: float = 45) -> dict:
+        """One request as a job's work makes it, tried once (Settings › AI's Test): what is "describe" (an image's
+        description and tags, this provider's settings), "read" (its text, the OCR settings) or "describe_text"
+        (from text alone, a video's scenes). _asked's answer, with "result": what the work would save (the
+        description and tags; the text read), or None with "problem" saying why it couldn't be. Raises what the
+        request raises (requests' errors)."""
+        settings = self._ocr if what == "read" else self._vision
+        if what == "describe_text":
+            content = [{"type": "text", "text": f"{settings['prompt']}\n\n{text}"}]
+        else:
+            img = Image.open(io.BytesIO(image or b""))
+            img.thumbnail((int(settings["max_edge"]),) * 2, Image.LANCZOS)
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=75)
+            content = [{"type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"}},
+                       {"type": "text", "text": settings["prompt"]}]
+        got = self._asked(content, settings, timeout=timeout)
+        reply = got["reply"].strip()
+        result: dict | str | None = None
+        problem = ""
+        if what == "read":
+            result = "" if not reply or reply.upper() == "NONE" or reply == "<none>" else self._strip_ocr_reasoning(reply)
+        else:
+            try:
+                result = self._parse_description(reply)
+            except Exception as e:  # noqa: BLE001 — what parsing it raised: it isn't what was asked for
+                problem = f"Its answer isn't the description and tags asked for ({e})."
+        if got["finish"] == "length":
+            problem = (f"It ran out of room: it used all {int(settings['max_tokens'])} tokens of its answer before "
+                       "finishing (a model that thinks first can spend them all thinking).")
+        elif not reply:
+            problem = "It answered nothing."
+        return {**got, "result": result, "problem": problem, "limit": int(settings["max_tokens"])}

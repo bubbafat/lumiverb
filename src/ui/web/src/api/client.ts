@@ -1028,6 +1028,34 @@ export async function removeMachine(machineId: string): Promise<AiSettings> {
   return apiFetch<AiSettings>(`/ai/machines/${machineId}`, { method: "DELETE" });
 }
 
+/** One request of a Test: the producers it stands for and what came back (POST /v1/ai/machines/{id}/try). */
+export interface MachineTried {
+  titles: string[];
+  answer: string;
+  /** What the work would save: the description and tags, or the text read; null when nothing could be. */
+  result: { description?: string; tags?: string[] } | string | null;
+  /** Why it wouldn't do, in a sentence; "" when it would. */
+  problem: string;
+  finish: string | null;
+  tokens: { prompt: number; answer: number } | null;
+  /** The tokens its answer may use. */
+  limit: number;
+  seconds: number;
+}
+
+export interface MachineTry {
+  machine: string;
+  model: string;
+  sent: string;
+  tries: MachineTried[];
+}
+
+/** Try a machine (admins): it's sent what descriptions & text's work sends, a picture Lumiverb draws and a
+ * video's scenes, with the job's model or the one given. 409 no_model, 409 built_in_machine. */
+export async function tryMachine(machineId: string, model = ""): Promise<MachineTry> {
+  return apiFetch<MachineTry>(`/ai/machines/${machineId}/try`, { method: "POST", body: { model } });
+}
+
 /** Set a job's model (admins); "" turns the job off. Every machine doing it is
  * asked: 409 model_not_offered (details.machines: name, models, error) when none offers it.
  * A new model asks what becomes of what the old one made (ADR-018 decision 6):

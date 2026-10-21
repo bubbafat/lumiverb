@@ -140,7 +140,11 @@ sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb ai model vision gpt-4.1-min
 ```
 
 (`lumiverb ai list` shows the machines and each job's model; `machines
-edit` and `machines remove` change or remove one.) Each clip is one request: a
+edit` and `machines remove` change or remove one.) Before the batch, try it
+(**Test** on its row, or `lumiverb ai machines test OpenAI`): it's sent a
+picture Lumiverb draws and a video's scenes with your settings, and says
+each answer and the tokens it used, or why it wouldn't do (a model that
+thinks first can spend all of an answer's room). Each clip is one request: a
 1280 px image and the prompt. Settings › Processing shows what's left;
 when nothing is, remove the machine (its key goes with it). Transcripts
 stay on the built-in Whisper (OpenAI's own API takes 25 MB a request: not

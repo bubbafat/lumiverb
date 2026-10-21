@@ -91,6 +91,19 @@ beforeEach(() => {
                        : machines.filter((x) => x !== target);
       return json(settings());
     }
+    const tried = path.match(/^\/ai\/machines\/([^/]+)\/try$/);
+    if (tried) {
+      return json({ machine: "Gaming PC", model: body.model || model,
+                    sent: "a picture Lumiverb draws (a red house on a hill, and a sign reading OPEN 9 TO 5), and a video's three scenes",
+                    tries: [
+                      { titles: ["Scene descriptions", "Descriptions and tags"], answer: '{"description": "A red house."}',
+                        result: { description: "A red house.", tags: ["house"] }, problem: "", finish: "stop",
+                        tokens: { prompt: 1200, answer: 64 }, limit: 500, seconds: 2.4 },
+                      { titles: ["Text in images (OCR)"], answer: "", result: null, finish: "length", tokens: null,
+                        problem: "It ran out of room: it used all 500 tokens of its answer before finishing (a model that thinks first can spend them all thinking).",
+                        limit: 500, seconds: 9.1 },
+                    ] });
+    }
     if (path === "/ai/jobs/vision" && method === "PUT") {
       if (made && body.model && body.model !== model && body.redo === undefined) {
         return err(409, "redo_on_change",
@@ -262,6 +275,28 @@ describe("AiSection", () => {
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Edit Gaming PC" }));
     expect(within(screen.getByRole("form", { name: "Edit Gaming PC" })).queryByLabelText("Where")).toBeNull();
+  });
+
+  it("tests a machine: what each request came back with, its room used, and why one wouldn't do", async () => {
+    machines = [machine({ name: "Gaming PC" })];
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Test Gaming PC" }));
+    const results = await screen.findByLabelText("Test of Gaming PC");
+    expect(lastSent("POST", "/try")!.body).toEqual({ model: "" }); // the job's model
+    expect(results.textContent).toContain(`Sent a picture Lumiverb draws`);
+    expect(within(results).getByText("Scene descriptions, Descriptions and tags")).toBeTruthy();
+    expect(within(results).getByRole("status").textContent).toBe("Answered as the work needs it · 2.4 s · 64 of 500 tokens");
+    expect(within(results).getByRole("alert").textContent).toContain("It ran out of room");
+    expect(within(results).getAllByText("Its answer")).toHaveLength(1); // only one that answered something
+  });
+
+  it("can't test a machine before descriptions & text have a model", async () => {
+    model = "";
+    machines = [machine({ name: "Gaming PC" })];
+    renderSection();
+    const test = (await screen.findByRole("button", { name: "Test Gaming PC" })) as HTMLButtonElement;
+    expect(test.disabled).toBe(true);
+    expect(test.title).toBe("Choose a model for descriptions & text first");
   });
 
   it("marks a machine as sharing the GPU video work runs on", async () => {
