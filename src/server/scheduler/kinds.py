@@ -5,8 +5,9 @@ thumbnails and previews, and probes); 2 prepare (analysis copies, which
 transcripts and scenes are made from); 3 find it (the AI and the rest
 that makes clips findable); 4 redo stale work: what was made with another
 model or settings than now (changing them was the approval), unless an
-admin stopped it; a new producer version stops it until an admin resumes
-it (lineage.hold_new_version). Within a tier, oldest first.
+admin stopped it; a new producer version, or new defaults a release brings,
+stop it until an admin resumes it (lineage.hold_new_version,
+hold_new_defaults). Within a tier, oldest first.
 
 Each kind uses one pool: the resource its work waits on, as its producer
 declares it (src/producers/pools.py for today's). Descriptions, text in

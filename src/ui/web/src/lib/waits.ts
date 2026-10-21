@@ -97,7 +97,7 @@ export const WAIT_SENTENCES: Record<WaitReason, (w: ProducerWait, c: WaitContext
   },
   new_version: (w, c) => {
     const s = some(w, c);
-    return `A new version of ${c.title} is ready: ${s.count} made by an older one ${s.are} made again once an admin resumes it.`;
+    return `A new version of ${c.title} is ready: ${s.count} made before it ${s.are} made again once an admin resumes it.`;
   },
   redo_stopped: (w, c) => {
     const s = some(w, c);

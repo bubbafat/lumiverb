@@ -27,8 +27,8 @@ What's paused isn't listed, as the scheduler hands none of it out: no
 previews while the library's scans are paused (only a scan makes them,
 and Pause all pauses them too); none of a producer's work while its switch
 is paused; no remakes while its redo is stopped, or while a new version of
-it waits to be seen (the scheduler stops its redo then, until an admin
-resumes it: lineage.hold_new_version).
+it, or new defaults, wait to be seen (the scheduler stops its redo then,
+until an admin resumes it: lineage.hold_new_version, hold_new_defaults).
 """
 
 from __future__ import annotations
@@ -79,6 +79,7 @@ def listed(session: Session, library_id: str) -> Listed:
         # These producers take no AI job's model (only the originals): what they make now is the account's settings.
         a: lineage.desired(session, a) for a in work
         if a != PREVIEWS and lineage.redoable(a) and a not in paused.redo and not lineage.new_version_unseen(session, a)
+        and not lineage.new_defaults_unseen(session, a)
     }
     return Listed(work, remakes)
 

@@ -483,8 +483,9 @@ class Scheduler:
         }
 
     def _find_new_versions(self, tenant_id: str) -> None:
-        """A producer's new version stops its redo until an admin resumes it
-        (lineage.hold_new_version): looked for in every producer made again,
+        """A producer's new version, or new defaults, stop its redo until an
+        admin resumes it (lineage.hold_new_version, hold_new_defaults): looked
+        for in every producer made again,
         paused or not, at the account's first refill (before any redo is
         listed) and every NEW_VERSIONS_EVERY_SEC, so Processing shows it
         whatever can be listed. Only the database is asked, so Pause all
@@ -720,12 +721,14 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str] | None,
             return None
         if not kind.redo:
             return candidates(session, kind, libraries, skip=skip)
-        # A new producer version stops its redo until an admin resumes it
+        # A new producer version, or new defaults, stop its redo until an admin resumes it
         # (each refill looks first, _find_new_versions; this is its guard).
         if kind.artifact in paused.redo or lineage.hold_new_version(session, kind.artifact):
             return None
-        return candidates(session, kind, libraries, skip=skip,
-                          want=lineage.desired(session, kind.artifact, _job_models(tenant_id)))
+        want = lineage.desired(session, kind.artifact, _job_models(tenant_id))
+        if lineage.hold_new_defaults(session, kind.artifact, want=want):
+            return None
+        return candidates(session, kind, libraries, skip=skip, want=want)
 
 
 # The producers whose redo the scheduler lists (a redo kind each).
@@ -735,14 +738,16 @@ REDONE: tuple[str, ...] = LiveSeq(  # type: ignore[assignment]
 
 
 def _hold_new_versions_in_database(tenant_id: str) -> None:
-    """lineage.hold_new_version for each producer made again, in the
-    account's database (one read each once its version was seen)."""
+    """lineage.hold_new_version and hold_new_defaults for each producer made
+    again, in the account's database (a read or two each once seen)."""
     from src.server.database import get_tenant_session
     from src.server.repository import lineage
 
+    models = _job_models(tenant_id)
     with get_tenant_session(tenant_id) as session:
         for artifact in REDONE:
             lineage.hold_new_version(session, artifact)
+            lineage.hold_new_defaults(session, artifact, models)
 
 
 def _job_models(tenant_id: str) -> dict[str, str]:
