@@ -206,10 +206,12 @@ same nginx, as a site of its own. With A records for `lumiverb.io` and
 `www.lumiverb.io` to the droplet's address:
 
 ```bash
-sudo bash /opt/lumiverb/scripts/deploy-site.sh --domain lumiverb.io --domain www.lumiverb.io --email you@example.com
+sudo bash /opt/lumiverb/scripts/deploy-site.sh --domain lumiverb.io --domain www.lumiverb.io
 ```
 
-It writes `/etc/nginx/sites-available/lumiverb-site` (the `site/` folder
+(`--email you@example.com` only if certbot has no account here yet: step 3
+made one.) Until this step, `https://lumiverb.io` answers with the web app's
+certificate: nginx falls back to the one site it has. It writes `/etc/nginx/sites-available/lumiverb-site` (the `site/` folder
 and nothing around it; the page's own Content-Security-Policy as a header),
 takes it out again if nginx refuses it, and gets a certificate for each name
 that points here, saying which record to add for any that doesn't. Run it
