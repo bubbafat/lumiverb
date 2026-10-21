@@ -424,7 +424,7 @@ Type=oneshot
 User=${SVC_USER}
 Group=${SVC_USER}
 EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf -X POST "http://127.0.0.1:\${API_PORT}/v1/upkeep?tenants=all" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+ExecStart=/usr/bin/curl -sf --retry 12 --retry-delay 5 --retry-connrefused -X POST "http://127.0.0.1:\${API_PORT}/v1/upkeep?tenants=all" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
 TimeoutSec=120
 UPKEEP_SVC
 
@@ -450,7 +450,7 @@ Type=oneshot
 User=${SVC_USER}
 Group=${SVC_USER}
 EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf -X POST "http://127.0.0.1:\${API_PORT}/v1/upkeep/cleanup?tenants=all&dry_run=false" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+ExecStart=/usr/bin/curl -sf --retry 12 --retry-delay 5 --retry-connrefused -X POST "http://127.0.0.1:\${API_PORT}/v1/upkeep/cleanup?tenants=all&dry_run=false" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
 TimeoutSec=300
 DAILY_SVC
 
