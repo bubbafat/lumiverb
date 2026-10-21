@@ -6,7 +6,7 @@ A library is a folder of photos and videos that Lumiverb reads where it is. This
 
 Lumiverb only reads your originals. It never writes to them, moves, renames, uploads or deletes them. What it makes (previews, descriptions, faces) goes in its own folders and databases. Deleting a clip or a library in Lumiverb removes it from Lumiverb, never from the disk.
 
-It reads JPEG, PNG, WebP, BMP, TIFF, DNG, camera RAW (Canon CR2, CR3 and CRW, Nikon NEF and NRW, Sony ARW, SR2 and SRF, Fujifilm RAF, Olympus ORF, Panasonic RW2 and RAW, Leica RWL) and MP4, MOV and MKV video. Other files are left alone.
+It reads JPEG, HEIC and HEIF (an iPhone's photos), PNG, WebP, BMP, TIFF, DNG, camera RAW (Canon CR2, CR3 and CRW, Nikon NEF and NRW, Sony ARW, SR2 and SRF, Fujifilm RAF, Olympus ORF, Panasonic RW2 and RAW, Leica RWL) and MP4, MOV and MKV video. Other files are left alone.
 
 ## Adding a library
 

@@ -8,6 +8,7 @@ anything, so these run as an ordinary user. LUMIVERB_CONF_DIR stands in for
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -409,6 +410,62 @@ def test_without_a_data_disk_there_is_no_plug_in_runner(tmp_path):
     out, calls, units = _update_plugins(tmp_path, "API_PORT=8100\n")
     assert "warn: No DATA_DIR" in out and calls == []
     assert not (units / "lumiverb-plugins.service").exists()
+
+
+def _function(text: str, name: str) -> str:
+    m = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", text, re.S | re.M)
+    assert m, f"no {name}()"
+    return m.group(0)
+
+
+def test_install_and_update_bring_the_same_heic_decoder():
+    assert _function(DEPLOY_API.read_text(), "heic_decoder") == _function(UPDATE_API.read_text(), "heic_decoder")
+    worker = DEPLOY_API.read_text().split('if [[ "$WITH_WORKER" == "true" ]]; then\n  # Scan and enrich', 1)[1]
+    worker = worker.split("\nfi\n", 1)[0]
+    assert worker.index("libvips42") < worker.index("heic_decoder"), "with libvips, where processing is"
+
+
+def _photo_decoders(tmp_path: Path, *, processing: bool, installed: bool = False, known: bool = True,
+                    installs: bool = True) -> tuple[int, str, list[str]]:
+    """Run update-api.sh's photo decoders step with dpkg, apt-cache and apt-get stubbed: whether the package is
+    installed, whether the distribution has it, whether installing it works. Returns its exit code, its output and
+    the apt-get calls."""
+    calls = tmp_path / "apt-calls"
+    calls.write_text("")
+    text = UPDATE_API.read_text()
+    block = text.split('step "Photo decoders"', 1)[1].split("\n", 1)[1].split("# ----", 1)[0]
+    script = (
+        'ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }\n'
+        f'dpkg() {{ {"return 0" if installed else "return 1"}; }}\n'
+        f'apt-cache() {{ {"return 0" if known else "return 100"}; }}\n'
+        f'apt-get() {{ echo "$*" >> "{calls}"; [[ "$1" == update ]] || {"return 0" if installs else "return 100"}; }}\n'
+        f'PROCESSING={"true" if processing else "false"}\n' + block
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    return out.returncode, out.stdout + out.stderr, calls.read_text().splitlines()
+
+
+def test_an_update_brings_the_heic_decoder_where_the_distribution_has_it(tmp_path):
+    rc, out, apt = _photo_decoders(tmp_path, processing=True)
+    assert rc == 0 and "ok: HEIC photos: installed libheif-plugin-libde265" in out, out
+    assert apt == ["install -y -qq libheif-plugin-libde265"]
+
+
+def test_an_update_leaves_it_be_where_its_there_or_not_a_package(tmp_path):
+    rc, out, apt = _photo_decoders(tmp_path, processing=True, installed=True)
+    assert rc == 0 and "is installed" in out and apt == []
+    rc, out, apt = _photo_decoders(tmp_path, processing=True, known=False)  # Ubuntu 22.04: libheif decodes them
+    assert rc == 0 and "libheif decodes them itself here" in out and apt == []
+    rc, out, apt = _photo_decoders(tmp_path, processing=False)
+    assert rc == 0 and "nothing to decode" in out and apt == []
+
+
+def test_an_update_whose_decoder_wont_install_says_so_and_goes_on(tmp_path):
+    rc, out, apt = _photo_decoders(tmp_path, processing=True, installs=False)
+    assert rc == 0, "every other photo is read as before: never a failed update"
+    assert "warn: HEIC photos can't be read until libheif-plugin-libde265 is installed" in out
+    assert apt == ["install -y -qq libheif-plugin-libde265", "update -qq",
+                   "install -y -qq libheif-plugin-libde265"], "the lists made fresh once, then tried again"
 
 
 def test_a_fresh_install_and_an_update_write_the_same_plug_in_runner():
