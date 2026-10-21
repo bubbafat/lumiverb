@@ -4,15 +4,12 @@ import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-quer
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ApiError,
-  batchRateAssets,
   getApiKey,
   getFilteredFacets,
   getLibrary,
   getLibraryRevision,
   listDirectories,
-  lookupRatings,
   queryAssets,
-  rateAsset,
 } from "../api/client";
 import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
@@ -26,7 +23,7 @@ import { ZoomControl } from "../components/ZoomControl";
 import { DrawerOverlay } from "../components/DrawerOverlay";
 import { DirectoryTree } from "../components/DirectoryTree";
 import { directoriesKey } from "../lib/directoriesKey";
-import type { AssetPageItem, AssetRating, FacetsResponse, RatingColor } from "../api/types";
+import type { AssetPageItem, FacetsResponse } from "../api/types";
 import { HeartButton, StarPicker, ColorPicker } from "../components/RatingControls";
 import { buildSavedQuery, composeDate, composeNear } from "../lib/queryFilter";
 import type { LeafFilter } from "../lib/queryFilter";
@@ -35,6 +32,7 @@ import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
 import { useCanEdit, useIsDemo } from "../lib/useCanEdit";
 import { useClipActions } from "../lib/useClipActions";
+import { useRatings, type RatingUpdate } from "../lib/useRatings";
 import { useRevisionRefresh } from "../lib/useRevisionRefresh";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useScrollAnchor } from "../lib/useScrollAnchor";
@@ -452,52 +450,13 @@ export default function BrowsePage() {
   // Ratings
   // ---------------------------------------------------------------------------
 
-  const ratingsQuery = useQuery({
-    queryKey: ["ratings", orderedAssetIds.slice(0, 500)],
-    queryFn: () => lookupRatings(orderedAssetIds.slice(0, 500)),
-    // Ratings are a signed-in person's; a public page's visitor has none.
-    enabled: orderedAssetIds.length > 0 && !isPublicMode && !demo,
-    staleTime: 30_000,
-  });
-  const ratingsMap: Record<string, AssetRating> = ratingsQuery.data?.ratings ?? {};
-
-  const handleRatingChange = useCallback(
-    async (assetId: string, update: { favorite?: boolean; stars?: number; color?: RatingColor | null }) => {
-      // Optimistic update
-      const prev = ratingsMap[assetId] ?? { favorite: false, stars: 0, color: null };
-      const optimistic: AssetRating = {
-        favorite: update.favorite !== undefined ? update.favorite : prev.favorite,
-        stars: update.stars !== undefined ? update.stars : prev.stars,
-        color: update.color !== undefined ? update.color : prev.color,
-      };
-      queryClient.setQueryData(
-        ["ratings", orderedAssetIds.slice(0, 500)],
-        (old: { ratings: Record<string, AssetRating> } | undefined) => ({
-          ratings: { ...(old?.ratings ?? {}), [assetId]: optimistic },
-        }),
-      );
-      try {
-        await rateAsset(assetId, update);
-      } catch {
-        // Revert on failure
-        queryClient.invalidateQueries({ queryKey: ["ratings"] });
-      }
-    },
-    [ratingsMap, orderedAssetIds, queryClient],
+  // Ratings are a signed-in person's; a public page's visitor has none.
+  const { ratingsMap, rate: handleRatingChange, rateSelection } = useRatings(
+    orderedAssetIds, !isPublicMode && !demo, clipActions.fail,
   );
-
   const handleBatchRating = useCallback(
-    async (update: { favorite?: boolean; stars?: number; color?: RatingColor | null }) => {
-      const ids = selection.toArray();
-      if (ids.length === 0) return;
-      try {
-        await batchRateAssets(ids, update);
-        queryClient.invalidateQueries({ queryKey: ["ratings"] });
-      } catch {
-        // silently fail — user can retry
-      }
-    },
-    [selection, queryClient],
+    (update: RatingUpdate) => rateSelection(selection.toArray(), update),
+    [selection, rateSelection],
   );
 
   // Clear selection on navigation

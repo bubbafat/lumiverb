@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -26,7 +26,8 @@ async function inChunks(ids: string[], fn: (part: string[]) => Promise<unknown>)
  * lightbox, a folder). Archive: out of sight, kept forever. Trash:
  * restorable until it's deleted for good after the trash days. Both say
  * what happened with an Undo; trashing clips projects use asks first, as
- * the API requires; archiving a folder says how many clips first.
+ * the API requires; archiving a folder says how many clips first. What
+ * fails says so.
  *
  * Render `ui` once in the page.
  */
@@ -49,8 +50,11 @@ export function useClipActions(onDone?: () => void) {
     void queryClient.invalidateQueries();
     onDone?.();
   };
-  const fail = (what: string, err: unknown) =>
-    setNotice({ text: `Couldn't ${what}: ${err instanceof Error ? err.message : String(err)}`, error: true });
+  const fail = useCallback(
+    (what: string, err: unknown) =>
+      setNotice({ text: `Couldn't ${what}: ${err instanceof Error ? err.message : String(err)}`, error: true }),
+    [],
+  );
 
   const run = async <T,>(what: string, fn: () => Promise<T>, after: (r: T) => void) => {
     setBusy(true);
@@ -220,5 +224,6 @@ export function useClipActions(onDone?: () => void) {
     document.body,
   );
 
-  return { archive, trash: (ids: string[]) => trash(ids), archiveFolder, busy, ui };
+  // `fail`: what else the page does to clips (ratings) says it failed in the same notice.
+  return { archive, trash: (ids: string[]) => trash(ids), archiveFolder, fail, busy, ui };
 }
