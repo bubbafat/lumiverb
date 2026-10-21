@@ -123,7 +123,10 @@ sudo /opt/lumiverb/.venv/bin/lumiverb-server reset-password --env /etc/lumiverb/
 
 A new password signs that person out everywhere, stops the API keys they made, and voids any reset or invite link they hadn't used.
 
-To change your own password, sign out and use **Forgot password?** on the sign-in page.
+To change your own password, signed in: **Settings › Account › Change password**, with the one you have now
+and the new one twice. Every other browser and device signs in again; this one stays signed in. If you made API
+keys, it names them first: a new password ends them, so whatever uses them (a script, the command line, a device
+you registered) needs a new one. **Change it and end them** goes ahead.
 
 ## API keys
 

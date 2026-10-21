@@ -23,9 +23,10 @@ from src.server.database import _engines
 from tests.app_routes import api_routes
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
-# Writes a viewer may make: their own ratings and saved views, and reads
-# sent as POST (a body too big for a query string).
+# Writes a viewer may make: their own ratings, saved views and password, and
+# reads sent as POST (a body too big for a query string).
 VIEWER_WRITABLE = {
+    ("POST", "/v1/me/password"),  # signed in only, never with a key (tests/test_change_password.py)
     ("PUT", "/v1/assets/{asset_id}/rating"),
     ("PUT", "/v1/assets/ratings"),
     ("POST", "/v1/assets/ratings/lookup"),

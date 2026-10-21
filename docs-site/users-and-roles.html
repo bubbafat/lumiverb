@@ -204,7 +204,10 @@
 <p>On Linux:</p>
 <div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server reset-password --env /etc/lumiverb/env --email them@example.com</code></pre></div>
 <p>A new password signs that person out everywhere, stops the API keys they made, and voids any reset or invite link they hadn't used.</p>
-<p>To change your own password, sign out and use <strong>Forgot password?</strong> on the sign-in page.</p>
+<p>To change your own password, signed in: <strong>Settings › Account › Change password</strong>, with the one you have now
+and the new one twice. Every other browser and device signs in again; this one stays signed in. If you made API
+keys, it names them first: a new password ends them, so whatever uses them (a script, the command line, a device
+you registered) needs a new one. <strong>Change it and end them</strong> goes ahead.</p>
 <h2 id="api-keys">API keys<a class="anchor" href="#api-keys" aria-label="Link to this section">#</a></h2>
 <p>The command line and scripts sign in with an API key instead of a password. Editors and admins make them in <strong>Settings › API Keys</strong>:</p>
 <ol>
