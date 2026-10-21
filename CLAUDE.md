@@ -48,7 +48,9 @@ migrations/   Alembic — control/ + tenant/ trees
 scripts/      Ops (update.sh = one-command update, logged; release.sh vX.Y.Z = audit what it ships (audit_release.py: the formula's Python extras and npm build; stops at an advisory unless --accept-advisories), tag, GitHub release and the Homebrew tap's PR; deploy-*, update-*, migrate.sh, …)
 docs/         Long-form docs + ADRs
 site/         lumiverb.io's front page: static, no build, nothing loaded from another host; its commands, formats
-              and links held to the README and the code by tests/test_site.py; its screenshots are the demo's
+              and links held to the README and the code by tests/test_site.py; its screenshots are the demo's;
+              served as it is by the demo server's nginx (scripts/deploy-site.sh, docs/demo-server.md step 10;
+              tests/test_deploy_site.py tries its site on a real nginx)
 ```
 
 ---

@@ -199,6 +199,23 @@ curl -s -o /dev/null -w '%{http_code}\n' https://try.lumiverb.io/v1/system/healt
 each say `404`. The API's log names each route turned away (`not exposed
 here`).
 
+### 10. lumiverb.io's page, from the same droplet
+
+The front page is the checkout's `site/` folder, served as it is by the
+same nginx, as a site of its own. With A records for `lumiverb.io` and
+`www.lumiverb.io` to the droplet's address:
+
+```bash
+sudo bash /opt/lumiverb/scripts/deploy-site.sh --domain lumiverb.io --domain www.lumiverb.io --email you@example.com
+```
+
+It writes `/etc/nginx/sites-available/lumiverb-site` (the `site/` folder
+and nothing around it; the page's own Content-Security-Policy as a header),
+takes it out again if nginx refuses it, and gets a certificate for each name
+that points here, saying which record to add for any that doesn't. Run it
+again once that record is there. Nothing in it reaches the API: `/v1/` there
+is a 404.
+
 ## Updating
 
 ```bash
@@ -206,6 +223,8 @@ sudo bash /opt/lumiverb/scripts/update.sh
 ```
 
 keeps the env file's settings and nginx's edits. Run the checks again after.
+The front page changes with the checkout: an update brings its changes too,
+with nothing to rerun.
 
 ## Turning it off
 
