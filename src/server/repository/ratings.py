@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlmodel import Session, select
 
+from src.server import cursors
 from src.shared.utils import utcnow
 from src.server.models.tenant import (
     Asset,
@@ -150,8 +151,7 @@ class RatingRepository:
 
         if after:
             conditions.append("r.updated_at < :after_ts")
-            from datetime import datetime as _dt
-            params["after_ts"] = _dt.fromisoformat(after.replace("Z", "+00:00"))
+            params["after_ts"] = cursors.time(after)  # the last one's time; anything else a 400
 
         where_sql = " AND ".join(conditions)
         sql = f"""

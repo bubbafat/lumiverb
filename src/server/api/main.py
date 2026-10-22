@@ -17,6 +17,7 @@ from src.server.telemetry import NO_TELEMETRY
 from src.server.api.errors import (
     ApiError,
     api_error_handler,
+    bad_cursor_handler,
     envelope,
     http_exception_handler,
     secrets_key_missing_handler,
@@ -24,6 +25,7 @@ from src.server.api.errors import (
     unhandled_error_handler,
     validation_error_handler,
 )
+from src.server.cursors import BadCursorError
 from src.server.sealing import SecretsKeyMissingError
 from src.server.storage.store import Unavailable
 from src.server.api import devices, library_access
@@ -148,6 +150,7 @@ app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(Unavailable, storage_unavailable_handler)
 app.add_exception_handler(SecretsKeyMissingError, secrets_key_missing_handler)
+app.add_exception_handler(BadCursorError, bad_cursor_handler)
 
 
 async def _unhandled(request: Request, exc: Exception) -> JSONResponse:

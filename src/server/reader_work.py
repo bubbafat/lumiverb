@@ -40,6 +40,7 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from src.producers.names import PREVIEW, sql_spelling
+from src.server import cursors
 from src.server.repository import lineage
 from src.server.repository.lineage import APPLIES, MADE, lineage_join
 from src.shared.producers import MADE_AT_SCAN as SCANNED
@@ -94,7 +95,7 @@ def page(session: Session, library_id: str, *, after: str | None, limit: int) ->
         return []
     columns = {f"w_{sql_spelling(w)}": previews_missing() if w == PREVIEWS else lineage.queued(w) for w in now.work}
     columns |= {f"r_{sql_spelling(a)}": lineage.queued(a, redo=True) for a in now.remakes}
-    params: dict[str, Any] = {"lib": library_id, "after": after, "n": limit}
+    params: dict[str, Any] = {"lib": library_id, "after": cursors.plain(after), "n": limit}
     for a, want in now.remakes.items():
         params |= lineage.redo_params(a, want)
     rows = session.execute(text(

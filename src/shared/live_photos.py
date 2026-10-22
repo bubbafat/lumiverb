@@ -25,4 +25,4 @@ def identifier(raw: object) -> str | None:
     if not isinstance(raw, str):
         return None
     value = raw.strip().upper()
-    return value if _ID.match(value) else None
+    return value if _ID.fullmatch(value) else None

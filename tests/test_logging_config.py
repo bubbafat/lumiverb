@@ -79,6 +79,17 @@ def test_a_logged_value_cant_forge_a_line(plain_records) -> None:
     assert _written("test.one_line", "tab\tkept %d", 3) == "WARNING tab\tkept 3\n"
 
 
+def test_c1_controls_and_unicode_line_separators_are_escaped_too(plain_records) -> None:
+    # A reader that splits lines as Python does (str.splitlines) breaks on NEL, U+2028 and U+2029: escaped as
+    # C0's are, each made visible. Text in any language is left as it is.
+    from src.shared.logging_config import escape_log_lines
+
+    escape_log_lines()
+    name = "a\x85b c d\x9be\x80f"
+    assert _written("test.one_line", "scan: %s", name) == "WARNING scan: a\\x85b\\u2028c\\u2029d\\x9be\\x80f\n"
+    assert _written("test.one_line", "%s", "Zürich, 東京, ½ — ok") == "WARNING Zürich, 東京, ½ — ok\n"
+
+
 def test_the_scheduler_escapes_its_log_lines(plain_records, monkeypatch) -> None:
     # entry() is what both python -m src.server.scheduler and the
     # lumiverb-scheduler console script run.

@@ -60,7 +60,7 @@ def _text(value: Any, *, most: int, required: bool = False) -> str | None:
         if required:
             raise ValueError("a name is required")
         return None
-    if not isinstance(value, str) or len(value) > most or not _TEXT.match(value):
+    if not isinstance(value, str) or len(value) > most or not _TEXT.fullmatch(value):
         raise ValueError(f"plain text up to {most} characters, not {str(value)[:40]!r}")
     return " ".join(value.split())
 

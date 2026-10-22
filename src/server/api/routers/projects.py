@@ -674,7 +674,9 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
         if len(assets) < page_size:
             return list(ids)
         last = assets[-1]
-        sort_value = getattr(last, spec.sort, None)
+        # As GET /v1/query writes its cursor: changed_at isn't on the clip's row (repository/browse.py changed_at_of).
+        sort_value = (repo.changed_at_of([last.asset_id]).get(last.asset_id) if spec.sort == "changed_at"
+                      else getattr(last, spec.sort, None))
         if sort_value is not None and hasattr(sort_value, "isoformat"):
             sort_value = sort_value.isoformat()
         cursor = _encode_cursor(spec.sort, sort_value, last.asset_id)

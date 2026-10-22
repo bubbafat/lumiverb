@@ -164,6 +164,11 @@ async def storage_unavailable_handler(request: Request, exc: Exception) -> JSONR
     return envelope(503, "storage_unavailable", STORAGE_UNAVAILABLE, headers={"Retry-After": "30"})
 
 
+async def bad_cursor_handler(request: Request, exc: Exception) -> JSONResponse:
+    """A cursor that isn't one the list gave (src/server/cursors.py): 400 bad_cursor, whichever list read it."""
+    return envelope(400, "bad_cursor", str(exc))
+
+
 async def secrets_key_missing_handler(request: Request, exc: Exception) -> JSONResponse:
     """A secret to seal (an AI machine's key, a plug-in's secret setting) on an install with no
     LUMIVERB_SECRETS_KEY (src/server/sealing.py): 503, saying how it gets one; nothing is kept unsealed."""

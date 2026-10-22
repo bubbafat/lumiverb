@@ -415,7 +415,7 @@ def _acknowledgment(data: Any, where: str, problems: list[str]) -> Acknowledgmen
 def _setting(data: Any, where: str, problems: list[str]) -> PluginSetting | None:
     f = _Fields(data, where, problems, SETTING_FIELDS)
     key = f.text("key", required=True, most=40)
-    if key and not _KEY.match(key):
+    if key and not _KEY.fullmatch(key):
         f.bad("key", "lowercase letters, digits and underscores, starting with a letter")
     kind = f.text("type", required=True, most=20)
     if kind and kind not in SETTING_TYPES:
@@ -486,7 +486,7 @@ def _work(data: Any, where: str, problems: list[str]) -> WorkSpec:
     for at, item in f.items("outputs", most=20):
         o = _Fields(item, at, problems, OUTPUT_FIELDS)
         key = o.text("key", required=True, most=40)
-        if key and not _KEY.match(key):
+        if key and not _KEY.fullmatch(key):
             o.bad("key", "lowercase letters, digits and underscores, starting with a letter")
         kind = o.text("kind", required=True, most=20)
         if kind and kind not in OUTPUT_KINDS:
@@ -498,7 +498,7 @@ def _work(data: Any, where: str, problems: list[str]) -> WorkSpec:
         if said and not plain(empty, EMPTY_MAX):
             o.bad("empty", f"plain text (no HTML), up to {EMPTY_MAX} characters")
         was = o.text("was", most=40)
-        if was and (not _KEY.match(was) or was == key):
+        if was and (not _KEY.fullmatch(was) or was == key):
             o.bad("was", "the key it had before: lowercase letters, digits and underscores, not its own")
         outputs.append(Output(key, kind, o.text("label", required=True, most=80), o.boolean("searchable"), empty,
                               was))
@@ -532,7 +532,7 @@ def parse(data: Any, folder: Path | None = None) -> Manifest:
     problems: list[str] = []
     f = _Fields(data, "", problems, FIELDS)
     plugin_id = f.text("id", required=True, most=40)
-    if plugin_id and not _ID.match(plugin_id):
+    if plugin_id and not _ID.fullmatch(plugin_id):
         f.bad("id", "lowercase letters, digits and dashes, starting with a letter (it's in URLs and commands)")
     protocol = f.data.get("protocol")
     if isinstance(protocol, bool) or protocol not in PROTOCOLS:

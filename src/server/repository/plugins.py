@@ -22,6 +22,7 @@ from sqlmodel import Session
 
 from src.plugins import version_key
 from src.plugins.contract import Acknowledgment, PluginSpec
+from src.producers.names import sql_literal
 
 ON, OFF, WAITING = "on", "off", "waiting"
 
@@ -47,8 +48,9 @@ def state_of(spec: PluginSpec, row: dict[str, Any] | None, default: dict[str, An
 def on_sql(spec: PluginSpec, default: dict[str, Any] | None = None) -> str:
     """SQL true while the plug-in is on in the account: enabled, and the version of its acknowledgment
     accepted still stands (what state_of says), versions compared as numbers. spec: its manifest's, and
-    default its default for an account without a row (it hasn't chosen). The id and versions are checked
-    where they come from (the manifest)."""
+    default its default for an account without a row (it hasn't chosen). It's SQL text, joined into the
+    scheduler's queries (a producer's applies), so nothing can be bound: the id is written only as one
+    (names.sql_literal) and the versions only as their numbers, checked where they come from (the manifest)."""
     ack, accepted = spec.acknowledgment, ""
     if ack is not None:
         since = ",".join(str(n) for n in version_key(ack.reaccept_from)) if ack.reaccept_from else ""
@@ -56,11 +58,12 @@ def on_sql(spec: PluginSpec, default: dict[str, Any] | None = None) -> str:
         accepted = (" AND CASE WHEN pg.acknowledged_version ~ '^[0-9]{1,6}(\\.[0-9]{1,6}){0,3}$' THEN "
                     + (f"string_to_array(pg.acknowledged_version, '.')::int[] >= ARRAY[{since}]" if since
                        else "true") + " ELSE false END")
-    chosen = f"EXISTS (SELECT 1 FROM plugins pg WHERE pg.plugin_id = '{spec.plugin_id}' AND pg.enabled{accepted})"
+    plugin_id = sql_literal(spec.plugin_id)
+    chosen = f"EXISTS (SELECT 1 FROM plugins pg WHERE pg.plugin_id = {plugin_id} AND pg.enabled{accepted})"
     if default is None:
         return chosen
     follows = "true" if state_of(spec, None, default) == ON else "false"
-    return (f"(CASE WHEN EXISTS (SELECT 1 FROM plugins pg WHERE pg.plugin_id = '{spec.plugin_id}') THEN {chosen}"
+    return (f"(CASE WHEN EXISTS (SELECT 1 FROM plugins pg WHERE pg.plugin_id = {plugin_id}) THEN {chosen}"
             f" ELSE {follows} END)")
 
 

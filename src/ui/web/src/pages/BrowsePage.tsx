@@ -10,6 +10,7 @@ import {
   getLibraryRevision,
   listDirectories,
   queryAssets,
+  searchRefusal,
 } from "../api/client";
 import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
@@ -607,7 +608,8 @@ export default function BrowsePage() {
     );
   }
 
-  if (isError && error && !errorDismissed) {
+  // A search the server refused is said under the search box (FilterBar), where it's changed: not in place of the page.
+  if (isError && error && !errorDismissed && !searchRefusal(error)) {
     return (
       <div className="flex flex-col gap-4">
         {library && (
@@ -633,7 +635,7 @@ export default function BrowsePage() {
     );
   }
 
-  if (isError && errorDismissed) {
+  if (isError && errorDismissed && !searchRefusal(error)) {
     return (
       <div className="flex flex-col gap-4">
         <Link to="/" className="text-indigo-400 hover:underline">
@@ -733,6 +735,7 @@ export default function BrowsePage() {
         onSaveAsProject={canEdit ? () => setShowSaveAsProject(true) : undefined}
         folder={pathPrefix}
         isPublic={isPublicMode}
+        searchError={searchRefusal(error)}
       />
 
       {showSaveAsProject && (

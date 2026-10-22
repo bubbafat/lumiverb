@@ -58,6 +58,7 @@ from sqlmodel import Session, select
 from ulid import ULID
 
 from src.producers.names import sql_spelling
+from src.server import cursors
 from src.server.models.tenant import ScanSession
 from src.server.reader_work import previews_missing
 from src.server.repository import lineage
@@ -445,7 +446,7 @@ def page(session: Session, scan_id: str, actions: tuple[str, ...], after: str | 
         WHERE scan_id = :scan_id AND action = ANY(CAST(:actions AS text[]))
           AND (CAST(:after AS text) IS NULL OR rel_path > :after)
         ORDER BY rel_path LIMIT :limit
-    """), {"scan_id": scan_id, "actions": list(actions), "after": after, "limit": limit}).mappings()]
+    """), {"scan_id": scan_id, "actions": list(actions), "after": cursors.plain(after), "limit": limit}).mappings()]
 
 
 def decide(session: Session, scan: ScanSession, posted: list[Hashed], *,
@@ -740,7 +741,7 @@ def gone_page(session: Session, scan: ScanSession, after: str | None, limit: int
         SELECT g.asset_id, g.rel_path, g.media_type FROM ({GONE}) g
         WHERE CAST(:after AS text) IS NULL OR g.rel_path > :after
         ORDER BY g.rel_path LIMIT :limit
-    """), {**_params(scan), "after": after, "limit": limit}).mappings()]
+    """), {**_params(scan), "after": cursors.plain(after), "limit": limit}).mappings()]
 
 
 def skipped_page(session: Session, scan: ScanSession, after: str | None, limit: int) -> list[dict]:
@@ -769,7 +770,7 @@ def skipped_page(session: Session, scan: ScanSession, after: str | None, limit: 
           AND (CAST(:after AS text) IS NULL OR f.rel_path > :after)
         ORDER BY f.rel_path LIMIT :limit
     """), {"scan_id": scan.scan_id, "library_id": scan.library_id, "removed_as": list(REMOVED_AS),
-           "after": after, "limit": limit}).mappings()]
+           "after": cursors.plain(after), "limit": limit}).mappings()]
 
 
 def totals(session: Session, scan: ScanSession) -> dict[str, int]:

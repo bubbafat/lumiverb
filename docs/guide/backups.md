@@ -102,7 +102,7 @@ sudo /opt/lumiverb/.venv/bin/lumiverb-server restore --env /etc/lumiverb/env BAC
 sudo systemctl start lumiverb-api lumiverb-scheduler
 ```
 
-The restore asks before it starts (`--yes` skips the question). It checks the backup is whole, backs up what's there now, then puts each database back beside the live one and swaps it in only once it's complete, so a restore that fails changes nothing. Then it brings the databases up to this version of Lumiverb, so a backup from an older version restores too.
+The restore asks before it starts (`--yes` skips the question). It checks the backup is whole and holds only its own files (each one in the backup's folder, each account's named as Lumiverb names accounts: a manifest that says otherwise is refused, naming the database it's about, and nothing is restored), backs up what's there now, then puts each database back beside the live one and swaps it in only once it's complete, so a restore that fails changes nothing. Then it brings the databases up to this version of Lumiverb, so a backup from an older version restores too.
 
 If it says Lumiverb is still running, it names what's still connected to the databases. Stop that first and run it again. On Linux, that can be the plug-in runner:
 

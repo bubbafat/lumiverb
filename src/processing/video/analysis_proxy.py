@@ -74,7 +74,7 @@ class AnalysisProxySettings:
         ffmpeg_run.whole(self.gpu_decodes, 0, 64, "gpu_decodes")
         if self.encoder not in ffmpeg_run.ENCODERS:
             raise ValueError(f"encoder: one of {', '.join(ffmpeg_run.ENCODERS)}, not {str(self.encoder)[:40]!r}")
-        if not isinstance(self.decoder, str) or not ffmpeg_run.NAME.match(self.decoder):
+        if not isinstance(self.decoder, str) or not ffmpeg_run.NAME.fullmatch(self.decoder):
             raise ValueError(f"decoder: auto, cpu or an ffmpeg hwaccel's name, not {str(self.decoder)[:40]!r}")
 
     @classmethod

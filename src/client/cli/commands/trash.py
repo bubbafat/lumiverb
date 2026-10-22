@@ -46,7 +46,7 @@ def trash_add(
     others = data.get("not_found", [])
     if others:
         console.print(f"Skipped {clips(len(others))} (already in the trash, gone with a library, or unknown): "
-                      + ", ".join(others))
+                      + escape(", ".join(others)))
 
 
 @trash_app.command("restore")
@@ -61,7 +61,8 @@ def trash_restore(
                   + (f" {clips(back)} went back to the archive, where {'it was' if back == 1 else 'they were'}." if back else ""))
     skipped = data.get("skipped", [])
     if skipped:
-        console.print(f"Skipped {clips(len(skipped))} not in the trash (or whose library is): " + ", ".join(skipped))
+        console.print(f"Skipped {clips(len(skipped))} not in the trash (or whose library is): "
+                      + escape(", ".join(skipped)))
 
 
 @trash_app.command("list")
@@ -84,7 +85,7 @@ def trash_list(
         return
     table = hidden_table("Trashed", "Deleted for good")
     for item in items:
-        table.add_row(item["asset_id"], escape(item["library_name"]), escape(item["rel_path"]),
+        table.add_row(escape(item["asset_id"]), escape(item["library_name"]), escape(item["rel_path"]),
                       day(item["trashed_at"]), day(item.get("expires_at")) or "when emptied")
     console.print(table)
     total = page.get("total", len(items))

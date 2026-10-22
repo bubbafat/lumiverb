@@ -112,7 +112,7 @@ def _check_added(p: ProducerSpec, own: dict[str, ProducerSpec]) -> None:
     """An added producer is a plug-in's work, named by its plug-in's id (ADR-024), which the scheduler runs from
     what Lumiverb keeps: it reads no original, makes nothing at a scan, uses no AI job, can always be made again
     and is no part of another."""
-    if not (PLUGIN_ID.match(p.artifact) and p.artifact == p.plugin) or p.artifact in own:
+    if not (PLUGIN_ID.fullmatch(p.artifact) and p.artifact == p.plugin) or p.artifact in own:
         raise ValueError(f"{p.artifact}: an added producer's artifact is its plug-in's id, none of Lumiverb's own")
     if not p.scheduled or p.storage or p.made_at_scan or p.job or p.cant_redo or p.part_of or p.regroup \
             or p.uniform or p.redo_also:
@@ -131,7 +131,7 @@ def _check(found: list[ProducerSpec], added: frozenset[str] = frozenset()) -> No
     from src.processing.machine import Machine
 
     for p in found:
-        if p.artifact not in added and not NAME.match(p.artifact):
+        if p.artifact not in added and not NAME.fullmatch(p.artifact):
             raise ValueError(f"{p.artifact}: one of Lumiverb's own producers is named by what it makes (a name)")
     artifacts = [p.artifact for p in found]
     if len(set(artifacts)) != len(artifacts):
@@ -194,7 +194,7 @@ def _check_names(found: list[ProducerSpec], added: frozenset[str] = frozenset())
         if p.makes is None:
             raise ValueError(f"{p.artifact}: one of Lumiverb's own producers names what it makes (makes)")
         name = p.makes.name
-        if not NAME.match(name):
+        if not NAME.fullmatch(name):
             raise ValueError(f"{p.artifact}: {name!r} isn't a name: lumiverb, then words, dots between")
         level = name.split(".")[1]
         want = {("image",): "image", ("video",): "video"}.get(tuple(p.media), "")

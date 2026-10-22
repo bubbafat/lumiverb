@@ -21,6 +21,8 @@ See docs/architecture.md for the full design.
 
 Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes the Typer app.
 
+**What it prints is text.** Rich reads square brackets as markup, so everything the CLI and a scan print that isn't Lumiverb's own words or a number (a name, a path, an email, a description, a server's message), in a console's print, a table's cells and title and a progress bar's description, goes through `rich.markup.escape` (a path through scan.py's `_shown`, which shows a control character too): a library named `x[/b]` is printed as it is, never a markup error, and `[link=…]` in a name is never a link. `tests/test_cli_prints_text.py` reads the code for any value that isn't (and runs commands with such names against the API).
+
 ## Commands
 
 ### Core Operations

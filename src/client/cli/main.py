@@ -115,7 +115,7 @@ def config_show() -> None:
     table = Table(show_header=False)
     table.add_column("Key", style="dim")
     table.add_column("Value")
-    table.add_row("api_url", cfg.api_url)
+    table.add_row("api_url", escape(cfg.api_url))
     table.add_row("api_key", escape("[set]") if cfg.api_key else escape("[not set]"))
     table.add_row("admin_key", escape("[set]") if cfg.admin_key else escape("[not set]"))
     console.print(table)
@@ -184,9 +184,9 @@ def library_create(
     resp = client.post("/v1/libraries", json={"name": name, "root_path": path})
     data = resp.json()
     library_id = data.get("library_id", "")
-    console.print(f"[green]Library created: {library_id}[/green]")
-    console.print(f"  name: {data.get('name', name)}")
-    console.print(f"  root_path: {data.get('root_path', path)}")
+    console.print(f"[green]Library created: {escape(library_id)}[/green]")
+    console.print(f"  name: {escape(data.get('name', name))}")
+    console.print(f"  root_path: {escape(data.get('root_path', path))}")
 
 
 @library_app.command("list")
@@ -210,10 +210,10 @@ def library_list() -> None:
     table.add_column("Last ingest")
     for lib in libraries:
         local = here[lib.get("library_id")]
-        row = [lib.get("library_id", ""), lib.get("name", ""), lib.get("root_path", "")]
+        row = [escape(lib.get("library_id", "")), escape(lib.get("name", "")), escape(lib.get("root_path", ""))]
         if mapped:
-            row.append(str(local) if local is not None and str(local) != lib.get("root_path") else "")
-        row.append(lib.get("last_scan_at") or "—")
+            row.append(escape(str(local)) if local is not None and str(local) != lib.get("root_path") else "")
+        row.append(escape(lib.get("last_scan_at") or "—"))
         table.add_row(*row)
     console.print(table)
 
@@ -253,7 +253,7 @@ def library_report_changes(
     n_libs = len(libraries)
     console.print(
         f"Reported {accepted:,} change{'s' if accepted != 1 else ''} "
-        f"in {n_libs} librar{'ies' if n_libs != 1 else 'y'}."
+        f"in {n_libs:,} librar{'ies' if n_libs != 1 else 'y'}."
     )
     if unmatched:
         console.print(f"[yellow]{unmatched:,} path{'s are' if unmatched != 1 else ' is'} in no library:[/yellow]")
@@ -277,7 +277,7 @@ def library_update(
     libraries = resp.json()
     match = next((lib for lib in libraries if lib.get("name") == name), None)
     if match is None:
-        console.print(f"[red]Library not found: {name}[/red]")
+        console.print(f"[red]Library not found: {escape(name)}[/red]")
         raise typer.Exit(1)
     library_id = match["library_id"]
     payload: dict[str, str] = {}
@@ -287,9 +287,9 @@ def library_update(
         payload["name"] = new_name
     resp = client.patch(f"/v1/libraries/{library_id}", json=payload)
     data = resp.json()
-    console.print(f"[green]Library updated: {library_id}[/green]")
-    console.print(f"  name: {data.get('name')}")
-    console.print(f"  root_path: {data.get('root_path')}")
+    console.print(f"[green]Library updated: {escape(library_id)}[/green]")
+    console.print(f"  name: {escape(str(data.get('name')))}")
+    console.print(f"  root_path: {escape(str(data.get('root_path')))}")
 
 
 LIBRARY_ROLES = ("admin", "editor", "viewer", "none", "default")
@@ -304,7 +304,7 @@ def library_people(
     client = LumiverbClient()
     library = _library_named(client, name, trashed=False)
     data = client.get(f"/v1/libraries/{library['library_id']}/people").json()
-    table = Table(title=f"{name}{' (private)' if data['private'] else ''}")
+    table = Table(title=f"{escape(name)}{' (private)' if data['private'] else ''}")
     table.add_column("EMAIL")
     table.add_column("ROLE HERE")
     table.add_column("HOW")
@@ -319,7 +319,7 @@ def library_people(
             how = "sees only what they're given"
         else:
             how = f"account role ({p['account_role']})"
-        table.add_row(p["email"], p["role"], how)
+        table.add_row(escape(p["email"]), escape(p["role"]), escape(how))
     console.print(table)
 
 
@@ -348,7 +348,7 @@ def library_role(
         err = resp.json().get("error", {}) if resp.content else {}
         console.print(f"[red]Error: {escape(err.get('message') or f'HTTP {resp.status_code}')}[/red]")
         raise typer.Exit(1)
-    console.print(f"[green]{escape(email)} on {escape(name)}: {resp.json()['role']}[/green]")
+    console.print(f"[green]{escape(email)} on {escape(name)}: {escape(str(resp.json()['role']))}[/green]")
 
 
 @library_app.command("private")
@@ -422,7 +422,7 @@ def library_delete(
     # Archived clips aren't deleted on their own, but they go with their library.
     archived = int(client.get("/v1/archive", params={"library_id": library_id, "limit": 1}).json().get("total", 0))
     if archived:
-        console.print(f"Its {archived} archived {'clip goes' if archived == 1 else 'clips go'} with it.")
+        console.print(f"Its {archived:,} archived {'clip goes' if archived == 1 else 'clips go'} with it.")
     if not yes and not typer.confirm(f"Delete library '{name}'? This moves it to trash.", default=False):
         console.print("Aborted.")
         raise typer.Exit(0)
@@ -432,9 +432,9 @@ def library_delete(
         client, "DELETE", f"/v1/libraries/{library_id}", {"remove_from_projects": remove_from_projects},
         answers={"in_projects": in_projects(
             yes=yes, what="in the trash they're hidden there, and deleted for good they leave")},
-        failed=f"Couldn't delete '{escape(name)}'",
+        failed=f"Couldn't delete '{name}'",  # printed as text (send_until_decided)
     )
-    console.print(f"Library '{name}' moved to trash.")
+    console.print(f"Library '{escape(name)}' moved to trash.")
     console.print("Restore it with 'lumiverb library restore', or delete it for good now with "
                   "'lumiverb library empty-trash --name'.")
 
@@ -447,7 +447,7 @@ def library_restore(
     client = LumiverbClient()
     library_id = _library_named(client, name, trashed=True)["library_id"]
     client.post(f"/v1/libraries/{library_id}/restore")
-    console.print(f"Library '{name}' restored, with the clips that went with it. It's private now, "
+    console.print(f"Library '{escape(name)}' restored, with the clips that went with it. It's private now, "
                   "even if it was public before.")
 
 
@@ -474,7 +474,7 @@ def library_empty_trash(
         console.print("Trash is empty." if name is None else f"No library named '{escape(name)}' in the trash.")
         raise typer.Exit(0)
     for lib in trashed:
-        console.print(f"  {lib.get('name', '')} ({lib.get('library_id', '')})")
+        console.print(f"  {escape(lib.get('name', ''))} ({escape(lib.get('library_id', ''))})")
     # Deleting the clips for good takes them out of every project.
     usage = client.post(
         "/v1/assets/project-usage", json={"library_ids": [lib["library_id"] for lib in trashed]}
@@ -485,9 +485,9 @@ def library_empty_trash(
         total = len(named) + usage.get("other_projects", 0)
         one = n_in_projects == 1
         console.print(
-            f"[yellow]{n_in_projects} {'clip' if one else 'clips'} from "
+            f"[yellow]{n_in_projects:,} {'clip' if one else 'clips'} from "
             f"{'this library' if len(trashed) == 1 else 'these libraries'} "
-            f"{'is' if one else 'are'} in {total} {'project' if total == 1 else 'projects'}; "
+            f"{'is' if one else 'are'} in {total:,} {'project' if total == 1 else 'projects'}; "
             f"deleting {'it' if one else 'them'} for good removes {'it' if one else 'them'} from "
             f"{'that project' if total == 1 else 'those projects'}:[/yellow]"
         )
@@ -496,9 +496,10 @@ def library_empty_trash(
                 "archived" if p.get("status") == "archived" else "",
                 "in the trash" if p.get("in_trash") else "",
             ) if n)
-            console.print(f"  {p.get('name', '')}: {p.get('clips', 0)}" + (f" ({notes})" if notes else ""))
+            console.print(f"  {escape(p.get('name', ''))}: {int(p.get('clips') or 0):,}"
+                          + (f" ({escape(notes)})" if notes else ""))
         if usage.get("other_projects"):
-            console.print(f"  and {usage['other_projects']} more you can't see")
+            console.print(f"  and {int(usage['other_projects']):,} more you can't see")
         if yes and not remove_from_projects:
             console.print("[red]Add --remove-from-projects to go ahead.[/red]")
             raise typer.Exit(2)
@@ -515,7 +516,7 @@ def library_empty_trash(
     })
     data = empty_resp.json()
     n = data.get("deleted", 0)
-    console.print(f"Deleted {n} {'library' if n == 1 else 'libraries'}.")
+    console.print(f"Deleted {n:,} {'library' if n == 1 else 'libraries'}.")
 
 
 # ---------------------------------------------------------------------------
@@ -533,7 +534,7 @@ def _resolve_library_id_for_filter(client: LumiverbClient, library: str) -> str:
     libraries = client.get("/v1/libraries").json()
     match = next((lib for lib in libraries if lib["name"] == library), None)
     if match is None:
-        console.print(f"[red]Library not found: {library}[/red]")
+        console.print(f"[red]Library not found: {escape(library)}[/red]")
         raise typer.Exit(1)
     return match["library_id"]
 
@@ -548,7 +549,7 @@ def filter_list(
         library_id = _resolve_library_id_for_filter(client, library)
         resp = client.get(f"/v1/libraries/{library_id}/filters")
         data = resp.json()
-        title = f"Filters for library: {library}"
+        title = f"Filters for library: {escape(library)}"
     else:
         resp = client.get("/v1/tenant/filter-defaults")
         data = resp.json()
@@ -561,9 +562,9 @@ def filter_list(
     includes = data.get("includes", [])
     excludes = data.get("excludes", [])
     for f in includes:
-        table.add_row(f.get("filter_id") or f.get("default_id", ""), "include", f["pattern"])
+        table.add_row(escape(f.get("filter_id") or f.get("default_id", "")), "include", escape(f["pattern"]))
     for f in excludes:
-        table.add_row(f.get("filter_id") or f.get("default_id", ""), "exclude", f["pattern"])
+        table.add_row(escape(f.get("filter_id") or f.get("default_id", "")), "exclude", escape(f["pattern"]))
     if not includes and not excludes:
         console.print(f"No filters configured ({title.lower()}).")
     else:
@@ -602,16 +603,16 @@ def filter_add(
             json={"type": filter_type, "pattern": pattern},
         )
         data = resp.json()
-        console.print(f"[green]Added {filter_type} filter to library {library}:[/green] {pattern}")
-        console.print(f"  ID: {data.get('filter_id') or data.get('default_id', '')}")
+        console.print(f"[green]Added {filter_type} filter to library {escape(library)}:[/green] {escape(pattern)}")
+        console.print(f"  ID: {escape(data.get('filter_id') or data.get('default_id', ''))}")
     else:
         resp = client.post(
             "/v1/tenant/filter-defaults",
             json={"type": filter_type, "pattern": pattern},
         )
         data = resp.json()
-        console.print(f"[green]Added tenant default {filter_type} filter:[/green] {pattern}")
-        console.print(f"  ID: {data.get('default_id', '')}")
+        console.print(f"[green]Added tenant default {filter_type} filter:[/green] {escape(pattern)}")
+        console.print(f"  ID: {escape(data.get('default_id', ''))}")
 
 
 @filter_app.command("remove")
@@ -627,10 +628,10 @@ def filter_remove(
     if library:
         library_id = _resolve_library_id_for_filter(client, library)
         client.delete(f"/v1/libraries/{library_id}/filters/{filter_id}")
-        console.print(f"[green]Removed filter {filter_id} from library {library}.[/green]")
+        console.print(f"[green]Removed filter {escape(filter_id)} from library {escape(library)}.[/green]")
     else:
         client.delete(f"/v1/tenant/filter-defaults/{filter_id}")
-        console.print(f"[green]Removed tenant default filter {filter_id}.[/green]")
+        console.print(f"[green]Removed tenant default filter {escape(filter_id)}.[/green]")
 
 
 
@@ -679,8 +680,8 @@ def admin_maintenance(
         data = resp.json()
         console.print(f"[yellow]Maintenance mode enabled.[/yellow]")
         if data.get("message"):
-            console.print(f"  Message:    {data['message']}")
-        console.print(f"  Started at: {data.get('started_at', '')}")
+            console.print(f"  Message:    {escape(data['message'])}")
+        console.print(f"  Started at: {escape(data.get('started_at') or '')}")
         return
 
     if end:
@@ -695,9 +696,9 @@ def admin_maintenance(
     if active:
         console.print(f"[yellow]Maintenance mode: ACTIVE[/yellow]")
         if data.get("message"):
-            console.print(f"  Message:    {data['message']}")
+            console.print(f"  Message:    {escape(data['message'])}")
         if data.get("started_at"):
-            console.print(f"  Started at: {data['started_at']}")
+            console.print(f"  Started at: {escape(data['started_at'])}")
     else:
         console.print("[green]Maintenance mode: inactive[/green]")
 
@@ -748,7 +749,7 @@ def admin_keys_create(
     data = resp.json()
     raw_key = data.get("api_key", "")
     console.print(f"[green]API key created.[/green]")
-    console.print(raw_key)
+    console.print(raw_key, markup=False)
 
 
 @admin_keys_app.command("list")
@@ -764,11 +765,11 @@ def admin_keys_list(
     client = LumiverbClient(api_key_override=key)
     resp = client.get(f"/v1/admin/tenants/{tenant_id}/keys")
     keys = resp.json()
-    table = Table(title=f"Keys for tenant {tenant_id}")
+    table = Table(title=f"Keys for tenant {escape(tenant_id)}")
     table.add_column("Name")
     table.add_column("Created")
     for k in keys:
-        table.add_row(k.get("name", ""), k.get("created_at", ""))
+        table.add_row(escape(k.get("name") or ""), escape(k.get("created_at") or ""))
     console.print(table)
 
 
@@ -796,10 +797,10 @@ def admin_tenants_list(
     table.add_column("Status")
     for t in tenants:
         table.add_row(
-            t.get("tenant_id", ""),
-            t.get("name", ""),
-            t.get("plan", ""),
-            t.get("status", ""),
+            escape(t.get("tenant_id") or ""),
+            escape(t.get("name") or ""),
+            escape(t.get("plan") or ""),
+            escape(t.get("status") or ""),
         )
     console.print(table)
 
@@ -827,10 +828,10 @@ def admin_tenant_set_vision(
         body["vision_model_id"] = vision_model_id
     resp = client.patch(f"/v1/admin/tenants/{tenant_id}", json=body)
     data = resp.json()
-    console.print(f"[green]Tenant {data['tenant_id']} updated.[/green]")
-    console.print(f"  vision_api_url: {data['vision_api_url']}")
+    console.print(f"[green]Tenant {escape(data['tenant_id'])} updated.[/green]")
+    console.print(f"  vision_api_url: {escape(str(data['vision_api_url']))}")
     if data.get("vision_model_id"):
-        console.print(f"  vision_model_id: {data['vision_model_id']}")
+        console.print(f"  vision_model_id: {escape(data['vision_model_id'])}")
 
 
 # ---------------------------------------------------------------------------
@@ -873,7 +874,7 @@ def admin_vision_test(
 
     path = path.expanduser().resolve()
     if not path.is_dir():
-        console.print(f"[red]Not a directory: {path}[/red]")
+        console.print(f"[red]Not a directory: {escape(str(path))}[/red]")
         raise typer.Exit(1)
 
     # Collect image files (sorted alphabetically)
@@ -882,7 +883,7 @@ def admin_vision_test(
         key=lambda f: f.name.lower(),
     )
     if not images:
-        console.print(f"[yellow]No images found in {path}[/yellow]")
+        console.print(f"[yellow]No images found in {escape(str(path))}[/yellow]")
         raise typer.Exit(0)
 
     # Resolve vision config (CLI config > tenant config > auto-discover)
@@ -915,13 +916,13 @@ def admin_vision_test(
         ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         output = path / f"vision-test-{ts}.json"
 
-    console.print(f"Model: [cyan]{model_id}[/cyan]  URL: [cyan]{vision_url}[/cyan]")
-    console.print(f"Images: [cyan]{len(images)}[/cyan]  Output: [cyan]{output}[/cyan]")
+    console.print(f"Model: [cyan]{escape(str(model_id))}[/cyan]  URL: [cyan]{escape(vision_url)}[/cyan]")
+    console.print(f"Images: [cyan]{len(images)}[/cyan]  Output: [cyan]{escape(str(output))}[/cyan]")
     console.print()
 
     results: list[dict] = []
     for i, img_path in enumerate(images, 1):
-        console.print(f"[dim][{i}/{len(images)}][/dim] {img_path.name} ... ", end="")
+        console.print(f"[dim][{i:d}/{len(images)}][/dim] {escape(img_path.name)} ... ", end="")
 
         from src.processing.workers.captions.base import CaptionError
 
@@ -951,7 +952,7 @@ def admin_vision_test(
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(_json.dumps(output_data, indent=2, ensure_ascii=False) + "\n")
-    console.print(f"\n[green]Wrote {output}[/green]")
+    console.print(f"\n[green]Wrote {escape(str(output))}[/green]")
 
 
 # ---------------------------------------------------------------------------
@@ -1011,7 +1012,7 @@ def _resolve_asset_id(
 
     if "." not in Path(norm).name:
         console.print(
-            f"[red]Path '{norm}' looks like a directory. This command operates on a single asset. Use --path with a file path.[/red]"
+            f"[red]Path '{escape(norm)}' looks like a directory. This command operates on a single asset. Use --path with a file path.[/red]"
         )
         raise typer.Exit(1)
 
@@ -1020,7 +1021,7 @@ def _resolve_asset_id(
         params={"library_id": library_id, "rel_path": norm},
     )
     if resp.status_code == 404:
-        console.print(f"[red]Asset not found: {norm}[/red]")
+        console.print(f"[red]Asset not found: {escape(norm)}[/red]")
         raise typer.Exit(1)
     resp.raise_for_status()
     return resp.json()["asset_id"]
@@ -1080,7 +1081,7 @@ def download(
     name = next((n for n in (size, PREFIX + size) if n in files), None)
     if name is None:
         renamed = now_called(size, "file")
-        console.print(f"[red]{size} is called {short(renamed)} now: type that[/red]" if renamed in files
+        console.print(f"[red]{escape(size)} is called {escape(short(renamed))} now: type that[/red]" if renamed in files
                       else "[red]--size must be one of: preview, preview.thumbnail[/red]")
         raise typer.Exit(1)
 
@@ -1101,7 +1102,7 @@ def download(
     # Stream the response so we don't buffer the whole file in memory
     with client.stream(f"/v1/assets/{resolved_asset_id}/artifacts/{name}") as resp:
         if resp.status_code == 404:
-            console.print(f"[red]No {short(name)} available for asset {resolved_asset_id}[/red]")
+            console.print(f"[red]No {escape(short(name))} available for asset {escape(resolved_asset_id)}[/red]")
             raise typer.Exit(1)
 
         resp.raise_for_status()
@@ -1127,7 +1128,7 @@ def download(
             with open(out_path, "wb") as f:
                 for chunk in resp.iter_bytes(chunk_size=65536):
                     f.write(chunk)
-            console.print(f"Saved to {out_path}")
+            console.print(f"Saved to {escape(str(out_path))}")
         else:
             # Pipe mode: stream bytes to stdout
             for chunk in resp.iter_bytes(chunk_size=65536):
@@ -1180,7 +1181,7 @@ def scan(
     dry_run = dry_run or explain  # --explain changes nothing
 
     if media_type not in ("image", "video", "all"):
-        console.print(f"[red]Invalid --media-type: {media_type}. Must be image, video, or all.[/red]")
+        console.print(f"[red]Invalid --media-type: {escape(media_type)}. Must be image, video, or all.[/red]")
         raise typer.Exit(1)
 
     if path_prefix:
@@ -1189,7 +1190,7 @@ def scan(
         try:  # a folder inside the library: relative, no ".."
             check_rel_path(path_prefix.rstrip("/"))
         except UnsafeRelPathError:
-            console.print(f"[red]Invalid --path-prefix: {path_prefix}. Give a folder inside the library "
+            console.print(f"[red]Invalid --path-prefix: {escape(path_prefix)}. Give a folder inside the library "
                           "(relative, no '..').[/red]")
             raise typer.Exit(1) from None
 
@@ -1197,7 +1198,7 @@ def scan(
     libraries = client.get("/v1/libraries").json()
     match = next((lib for lib in libraries if lib["name"] == library), None)
     if match is None:
-        console.print(f"[red]Library not found: {library}[/red]")
+        console.print(f"[red]Library not found: {escape(library)}[/red]")
         raise typer.Exit(1)
 
     stats = run_scan(
@@ -1300,7 +1301,7 @@ def search(
 
     elif output == "text":
         for hit in hits:
-            console.print(hit["rel_path"])
+            console.print(escape(hit["rel_path"]))
 
     else:  # table (default)
         table = Table(show_header=True, show_lines=False)
@@ -1324,11 +1325,11 @@ def search(
                 kind = "video" if hit.get("media_type") == "video" else "image"
                 type_label = f"[blue]{kind}[/blue]"
 
-            table.add_row(type_label, hit["rel_path"], detail, snippet_display)
+            table.add_row(type_label, escape(hit["rel_path"]), escape(detail), escape(snippet_display))
 
         console.print(table)
         n = len(hits)
-        console.print(f"[dim]{n} result(s) via {source}[/dim]")
+        console.print(f"[dim]{n} result(s) via {escape(source)}[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -1481,16 +1482,17 @@ def _print_similar_results(hits: list, data: dict, output: str, total: int) -> N
         sys.stdout.write("\n")
     elif output == "text":
         for hit in hits:
-            console.print(hit["rel_path"])
+            console.print(escape(hit["rel_path"]))
     else:
         table = Table(show_header=True, show_lines=False)
         table.add_column("Path", style="cyan", no_wrap=False)
         table.add_column("Distance", justify="right", style="dim", width=10)
         table.add_column("Asset ID", style="dim", width=28)
         for hit in hits:
-            table.add_row(hit.get("rel_path", ""), f"{hit.get('distance', 0.0):.4f}", hit.get("asset_id", ""))
+            table.add_row(escape(hit.get("rel_path", "")), f"{hit.get('distance', 0.0):.4f}",
+                          escape(hit.get("asset_id", "")))
         console.print(table)
-        console.print(f"[dim]{total} result(s)[/dim]")
+        console.print(f"[dim]{total:,} result(s)[/dim]")
 
 
 def unreachable(exc: Exception) -> str:

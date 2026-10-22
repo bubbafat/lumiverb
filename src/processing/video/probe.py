@@ -107,7 +107,7 @@ def _timecode(data: dict, video: dict | None) -> str | None:
     candidates.append(data.get("format", {}).get("tags") or {})
     for tags in candidates:
         tc = str(tags.get("timecode") or "")
-        if TIMECODE.match(tc):
+        if TIMECODE.fullmatch(tc):
             return tc
     return None
 

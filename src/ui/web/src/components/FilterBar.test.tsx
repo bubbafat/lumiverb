@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { FilterBar } from "./FilterBar";
+import { ApiError, queryAssets, searchRefusal } from "../api/client";
 
 const fetchMock = vi.fn();
 
@@ -117,6 +118,36 @@ describe("FilterBar's Photos nearby", () => {
     expect(distance.value).toBe("3");
     const shown = Array.from(distance.options).map((o) => o.value);
     expect(shown.indexOf("3")).toBe(shown.indexOf("2") + 1);
+  });
+});
+
+describe("A search the server refuses", () => {
+  it("is said under the search box, in the server's words", async () => {
+    const said = "A search is at most 32 words; this one has 40. Leave some out.";
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      error: { code: "search_too_long", message: said, details: { max_words: 32, max_searches: 16 } },
+    }), { status: 400 }));
+    const refused = await queryAssets([{ type: "query", value: "word ".repeat(40) }]).catch((e: unknown) => e);
+    expect(searchRefusal(refused)).toBe(said);
+    expect(searchRefusal(new ApiError(500, "boom", "internal_error"))).toBeNull();
+    expect(searchRefusal(null)).toBeNull();
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <FilterBar filters={[{ type: "query", value: "word ".repeat(40) }]} sort="taken_at" dir="desc"
+            onSetFilter={() => {}} onSetSort={() => {}} onClearAll={() => {}} facets={facets}
+            searchError={searchRefusal(refused)} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole("alert").textContent).toBe(said);
+  });
+
+  it("says nothing when nothing was refused", () => {
+    renderBar(false);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

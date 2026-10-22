@@ -7,6 +7,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from src.client.cli.client import LumiverbClient
 
@@ -18,7 +19,7 @@ _LENGTH_HELP = "'full' for the whole video, or the most seconds to play"
 
 
 def _describe(cap: int | None) -> str:
-    return "whole video" if cap is None else f"first {cap} seconds"
+    return "whole video" if cap is None else f"first {cap:d} seconds"
 
 
 def _public(signed_in: int | None, public: int | None) -> int | None:
@@ -51,11 +52,12 @@ def show() -> None:
 
 
 def _idle(days: int | None) -> str:
-    return "kept until revoked" if days is None else f"ended after {days} {'day' if days == 1 else 'days'} unused"
+    return "kept until revoked" if days is None else f"ended after {days:d} {'day' if days == 1 else 'days'} unused"
 
 
 def _trash(days: int | None) -> str:
-    return "emptied by hand only" if days is None else f"deleted for good after {days} {'day' if days == 1 else 'days'}"
+    return ("emptied by hand only" if days is None
+            else f"deleted for good after {days:d} {'day' if days == 1 else 'days'}")
 
 
 def _on_off(value: object) -> str:
@@ -123,15 +125,15 @@ def trash_days(
         if error.get("code") == "trash_days_shortened":
             d = error.get("details") or {}
             one = {"clips": "clip", "libraries": "library", "projects": "project"}
-            what = ", ".join(f"{d[k]} {one[k] if d[k] == 1 else k}" for k in one if d.get(k))
-            console.print(f"[yellow]With {value} trash days, {what} already in the trash longer would be "
+            what = ", ".join(f"{d[k]:,} {one[k] if d[k] == 1 else k}" for k in one if d.get(k))
+            console.print(f"[yellow]With {value} trash days, {escape(what)} already in the trash longer would be "
                           "deleted for good within minutes.[/yellow]")
             if not typer.confirm("Go ahead?", default=False):
                 console.print("Aborted.")
                 raise typer.Exit(0)
             r = client.raw("PATCH", "/v1/tenant/settings", json={**body, "confirm_purge": True})
     if r.status_code >= 400:
-        console.print(f"[red]Couldn't change the trash days: {r.text}[/red]")
+        console.print(f"[red]Couldn't change the trash days: {escape(r.text)}[/red]")
         raise typer.Exit(1)
     console.print(f"Trash: {_trash(r.json().get('trash_days'))}")
 
@@ -162,12 +164,12 @@ def key_idle_days(
             keys = (error.get("details") or {}).get("keys") or []
             names = ", ".join(k.get("label") or k.get("key_id", "") for k in keys)
             console.print(f"[yellow]With {value} days, {len(keys)} {'key' if len(keys) == 1 else 'keys'} unused for "
-                          f"longer would stop working within minutes: {names}.[/yellow]")
+                          f"longer would stop working within minutes: {escape(names)}.[/yellow]")
             if not typer.confirm("Go ahead?", default=False):
                 console.print("Aborted.")
                 raise typer.Exit(0)
             r = client.raw("PATCH", "/v1/tenant/settings", json={**body, "confirm_end_keys": True})
     if r.status_code >= 400:
-        console.print(f"[red]Couldn't change the key-idle days: {r.text}[/red]")
+        console.print(f"[red]Couldn't change the key-idle days: {escape(r.text)}[/red]")
         raise typer.Exit(1)
     console.print(f"Unused keys: {_idle(r.json().get('key_idle_days'))}")

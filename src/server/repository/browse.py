@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from sqlalchemy import text
 from sqlmodel import Session, select
 
+from src.server import cursors
 from src.shared.utils import escape_like
 from src.server.repository import corrections as _corr
 from src.server.models.tenant import (
@@ -20,6 +22,13 @@ class UnifiedBrowseRepository:
     SORTABLE_COLUMNS = {
         "asset_id", "taken_at", "created_at", "changed_at", "file_size",
         "iso", "exposure_time_us", "aperture", "focal_length", "rel_path",
+    }
+    # How a cursor's sort value is read, by the column it's of.
+    SORT_VALUES = {
+        "asset_id": cursors.text, "rel_path": cursors.text,
+        "taken_at": cursors.time, "created_at": cursors.time, "changed_at": cursors.time,
+        "file_size": cursors.whole, "iso": cursors.whole, "exposure_time_us": cursors.whole,
+        "aperture": cursors.number, "focal_length": cursors.number,
     }
 
     def __init__(self, session: Session) -> None:
@@ -159,8 +168,6 @@ class UnifiedBrowseRepository:
         because returning Cards/* mixed with chronologically-newer
         non-Cards results was the core "search is confusing" complaint.
         """
-        import base64 as _b64
-
         # Text search forces relevance ordering. Without this override
         # the default sort=taken_at runs and the search's ranking is
         # thrown on the floor.
@@ -193,15 +200,22 @@ class UnifiedBrowseRepository:
                 )
                 params["ordered_candidate_ids"] = ordered_candidate_ids
 
+        # The cursor GET /v1/query gave (its next_cursor): the last clip's
+        # sort value, of the sort column's type, and its id. Anything else is
+        # a 400 (src/server/cursors.py), never bound as it came.
+        cursor_value = cursor_id = None
+        if after is not None:
+            # In relevance order too its value is the sort column's (it isn't compared there: its place in the list is).
+            decoded = cursors.unpacked(after, v=cursors.or_none(self.SORT_VALUES[sort_col]), id=cursors.text)
+            cursor_value, cursor_id = decoded["v"], decoded["id"]
+            if isinstance(cursor_value, datetime):
+                cursor_value = cursor_value.isoformat()  # read as the column's type, as the cursor wrote it
+
         # --- Cursor in relevance mode: a place in the ranked list ---
         # Results ordered by an ad-hoc score page by position in the
         # ordered candidate list: after the cursor's clip (the last of the
         # page before). Ignoring the cursor here made page 2 repeat page 1.
         if after is not None and relevance_order:
-            try:
-                cursor_id = json.loads(_b64.urlsafe_b64decode(after + "=="))["id"]
-            except (ValueError, KeyError, TypeError):
-                cursor_id = after
             # A cursor whose clip left the list (it changed between pages)
             # ends the paging rather than starting it over.
             conditions.append(
@@ -212,16 +226,6 @@ class UnifiedBrowseRepository:
 
         # --- Composite cursor: by (sort column, asset_id) ---
         if after is not None and not relevance_order:
-            cursor_value = None
-            cursor_id = after
-            try:
-                decoded = json.loads(_b64.urlsafe_b64decode(after + "=="))
-                cursor_value = decoded["v"]
-                cursor_id = decoded["id"]
-            except Exception:
-                if sort_col != "asset_id":
-                    sort_col = "asset_id"
-
             if sort_col == "asset_id":
                 conditions.append(f"a.asset_id {cmp_op} :cursor_id")
                 params["cursor_id"] = cursor_id

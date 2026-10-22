@@ -74,6 +74,14 @@ done
 # ---------------------------------------------------------------------------
 [[ -n "$DOMAIN" ]]       || fail "Required: --domain <FQDN>"
 [[ -n "$API_UPSTREAM" ]] || fail "Required: --api-upstream <URL>  (e.g. http://127.0.0.1:8000)"
+# Both go into nginx's config as they're typed (deploy-site.sh checks its names the same way): a domain
+# name (or _), and the API's address, http(s):// and a host (a name, an IPv4 or a bracketed IPv6 address)
+# with its port, nothing else.
+DOMAIN_RE='^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'
+UPSTREAM_RE='^https?://([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?/?$'
+[[ "$DOMAIN" == "_" || "$DOMAIN" =~ $DOMAIN_RE ]] || fail "Not a domain name: ${DOMAIN}"
+[[ "$API_UPSTREAM" =~ $UPSTREAM_RE ]] \
+  || fail "Not the API's address: ${API_UPSTREAM} (give http://HOST:PORT, e.g. http://127.0.0.1:8000)"
 
 if [[ "$DOMAIN" == *"example.com"* ]]; then
   fail "Replace example.com with your actual domain"

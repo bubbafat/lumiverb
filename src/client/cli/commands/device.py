@@ -16,6 +16,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 device_app = typer.Typer(help="Read libraries for a server elsewhere: scan them and make what needs their files.")
 console = Console()
@@ -44,7 +45,7 @@ def run(
     if once:
         done = device.once()
         reading = ", ".join(lib["name"] for lib in device.libraries.values()) or "no library"
-        console.print(f"Reads {reading}; went through {done} clip(s)")
+        console.print(f"Reads {escape(reading)}; went through {done:,} clip(s)")
         return
     console.print("Reading for the server until stopped (Ctrl-C)")
     try:

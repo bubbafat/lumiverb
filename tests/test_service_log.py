@@ -177,7 +177,8 @@ def _journalctl(records: list[dict], calls: list[list[str]], *, stderr: str = ""
         newest_first = [r for r in reversed(records) if r["_SYSTEMD_UNIT"] in units]
         if after:
             newest_first = newest_first[[r["__CURSOR"] for r in newest_first].index(after) + 1:]
-        out = "".join(json.dumps(r) + "\n" for r in newest_first[:n])
+        # As journalctl writes it: a record a line, its text as UTF-8 (U+2028 and the like as they are).
+        out = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in newest_first[:n])
         return SimpleNamespace(stdout=out, stderr=stderr, returncode=returncode)
 
     return run
@@ -210,6 +211,15 @@ def test_journal_pages_lose_and_repeat_nothing(monkeypatch):
     joined = "\n".join(seen)
     for record in JOURNAL:
         assert joined.count(record["MESSAGE"]) == 1, record["MESSAGE"]
+
+
+@pytest.mark.parametrize("separator", [" ", " ", "\x85"])  # JSON escapes the C0 ones itself
+def test_a_record_holding_what_python_splits_lines_on_is_kept(separator):
+    # Read with str.splitlines(), the record was cut there into two lines that aren't JSON: both dropped.
+    records = [*JOURNAL, _record(7, "lumiverb-api.service", f"2026-10-11 21:56:00,000 WARNING src.z: a{separator}b")]
+    page = journal_page(run=_journalctl(records, []))
+    assert page.entries[0].text == f"2026-10-11 21:56:00,000 WARNING src.z: a{separator}b"
+    assert len(page.entries) == 6
 
 
 def test_a_service_user_that_cant_read_the_journal_is_told_how_and_what_it_opens(monkeypatch):

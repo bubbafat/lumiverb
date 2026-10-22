@@ -42,14 +42,21 @@ def configure_api_logging() -> None:
     root.addHandler(handler)  # root stays at WARNING: libraries' info lines don't come through
 
 
-# CR, LF and the other control characters (not tab): a value logged with one,
-# a file name say, can't forge a line of its own or drive a terminal.
-_CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
+# CR, LF and the other control characters (not tab), C1's (U+0080–U+009F: NEL
+# among them) and the line and paragraph separators: a value logged with one,
+# a file name say, can't forge a line of its own (in the log, or where a
+# reader splits lines as Python does) or drive a terminal.
+_CONTROL = re.compile("[\x00-\x08\x0a-\x1f\x7f-\x9f  ]")
 _SHOWN = {"\n": "\\n", "\r": "\\r"}
 
 
+def _shown(char: str) -> str:
+    n = ord(char)
+    return _SHOWN.get(char) or (f"\\x{n:02x}" if n < 0x100 else f"\\u{n:04x}")
+
+
 def _escape(text: str) -> str:
-    return _CONTROL.sub(lambda m: _SHOWN.get(m.group(), f"\\x{ord(m.group()):02x}"), text)
+    return _CONTROL.sub(lambda m: _shown(m.group()), text)
 
 
 def _one_line(record: logging.LogRecord) -> None:

@@ -21,8 +21,9 @@ from src.server.api.dependencies import get_optional_user_id, get_tenant_session
 from src.server.api.library_access import seen
 from src.server.api.limits import MAX_PAGE
 from src.server.api.rate_limit import anonymous_search_limited
+from src.server.api.errors import ApiError
 from src.server.api.routers.projects import guard_project_filters
-from src.server.models.filter_registry import parse_f_params
+from src.server.models.filter_registry import BadFilterError, parse_f_params
 from src.server.models.query_filter import (
     LOCATION_FILTERS,
     ApertureRange,
@@ -120,6 +121,14 @@ def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
     return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
 
 
+def parsed_filters(f: list[str], *, sort: str = "taken_at", direction: str = "desc") -> QuerySpec:
+    """The ?f= params as a QuerySpec (GET /v1/query, facets); 400 bad_filter for one no search can run."""
+    try:
+        return parse_f_params(f, sort=sort, direction=direction)
+    except BadFilterError as exc:
+        raise ApiError(400, "bad_filter", str(exc)) from None
+
+
 def _run_text_search(
     session: Session,
     search_terms: list[SearchTerm],
@@ -152,7 +161,11 @@ def _run_text_search(
     """
     from src.server.search import text_search
 
-    q = text_search.build([st.q for st in search_terms if st.q])
+    try:
+        q = text_search.build([st.q for st in search_terms if st.q])
+    except text_search.SearchTooLongError as exc:  # said as the search box shows it
+        raise ApiError(400, "search_too_long", str(exc),
+                       {"max_words": text_search.MAX_WORDS, "max_searches": text_search.MAX_TERMS}) from None
     if q is None:
         return {}, {}, "none"
 
@@ -316,7 +329,7 @@ def unified_query(
     candidates (candidate-set pattern) and the structured filters are applied
     to them. When no text search filter is present, runs pure SQL browse.
     """
-    spec = parse_f_params(f, sort=sort, direction=dir)
+    spec = parsed_filters(f, sort=sort, direction=dir)
 
     # --- Public-request guard ---
     # Public (unauthenticated) requests are authorized for exactly one

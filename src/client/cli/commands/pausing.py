@@ -41,8 +41,9 @@ def _switches(client: LumiverbClient) -> dict:
 
 def _usage(client: LumiverbClient, command: str) -> None:
     names = [shown(sw["target"]) for sw in _switches(client).get("switches") or []]
-    console.print(f"Usage: lumiverb {command} <name> (scans: --library NAME for one library's)")
-    console.print(f"Names: {', '.join(['all', 'scans', *names]) if names else 'all, scans, upkeep or a producer'}")
+    console.print(f"Usage: lumiverb {escape(command)} <name> (scans: --library NAME for one library's)")
+    console.print("Names: " + (escape(", ".join(["all", "scans", *names])) if names
+                               else "all, scans, upkeep or a producer"))
     raise typer.Exit(2)
 
 
@@ -76,7 +77,7 @@ def _act(command: str, name: str | None, library: str | None = None) -> None:
         r = client.raw("POST", f"/v1/producers/{name}/{command}", json={"scope": "work"})
     if r.status_code >= 400:
         what = f"{name} of {library}" if library else shown(name or "")
-        console.print(f"[red]Couldn't {command} {escape(what)}: {escape(_error(r))}[/red]")
+        console.print(f"[red]Couldn't {escape(command)} {escape(what)}: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
     queue = _switches(client)
     console.print(f"Processing: {STATE_WORDS.get(queue.get('state', ''), 'Running')}")

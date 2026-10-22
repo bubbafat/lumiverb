@@ -88,7 +88,7 @@ def _duration(seconds: float) -> str:
     days, rest = divmod(hours, 24)
     if days > 30:
         return "over a month"
-    return f"{days} days {rest} h" if rest else f"{days} days"
+    return f"{days:d} days {rest:d} h" if rest else f"{days:d} days"
 
 
 def _caught_up(eta: dict) -> str:
@@ -165,7 +165,7 @@ def producers_list(
     console.print(f"Processing: {STATE_WORDS.get(queue.get('state', ''), 'Running')}")
     for sw in queue.get("switches") or []:
         if sw.get("target") in ("scans", "upkeep"):
-            console.print(f"{sw['title']}: {'[yellow]Paused[/yellow]' if sw.get('paused') else 'Running'}")
+            console.print(f"{escape(sw['title'])}: {'[yellow]Paused[/yellow]' if sw.get('paused') else 'Running'}")
     # How long is left is the whole account's: only with its counts, and while the scheduler runs.
     eta = (queue.get("eta") or {}) if queue.get("live") and not params else {}
     # By what each makes.
@@ -270,7 +270,7 @@ def producers_failures(
     for f in items:
         nxt = "given up" if f.get("given_up") else (f.get("retry_at") or "")[:16].replace("T", " ")
         table.add_row(f"{escape(f['rel_path'])} [dim]({escape(f['library_name'])})[/dim]", escape(shown(f["artifact"])),
-                      str(f.get("attempts", 0)), nxt, escape(f.get("error", ""))[:300])
+                      f"{f.get('attempts', 0):,}", escape(nxt), escape((f.get("error") or "")[:300]))
     console.print(table)
     if data.get("next_cursor"):
         console.print(f"[dim]The {len(items)} most recent; --limit shows more.[/dim]")
@@ -370,12 +370,13 @@ def producers_settings(
     p = producers[artifact]
     fields = {f["key"]: f for f in p.get("fields") or []}
     if not changes:
-        table = Table(show_header=True, header_style="bold", title=f"{p['title']} · version {p['version']}")
+        table = Table(show_header=True, header_style="bold",
+                      title=f"{escape(p['title'])} · version {escape(str(p['version']))}")
         for col in ("Setting", "Key", "Now", "Default", "Can be"):
             table.add_column(col)
         for f in fields.values():
-            table.add_row(escape(f["label"]), f["key"], escape(_shown(f["value"])), escape(_shown(f["default"])),
-                          _bounds(f))
+            table.add_row(escape(f["label"]), escape(f["key"]), escape(_shown(f["value"])),
+                          escape(_shown(f["default"])), escape(_bounds(f)))
         console.print(table)
         for f in fields.values():
             if f.get("fixed") and f["key"] != "model":
@@ -389,7 +390,7 @@ def producers_settings(
         key, sep, raw = change.partition("=")
         f = fields.get(key)
         if not sep or f is None:
-            console.print(f"[red]Give KEY=VALUE, with one of: {', '.join(fields)}.[/red]")
+            console.print(f"[red]Give KEY=VALUE, with one of: {escape(', '.join(fields))}.[/red]")
             raise typer.Exit(2)
         if raw == "":
             body[key] = None
@@ -397,7 +398,7 @@ def producers_settings(
             body[key] = raw
         elif f["kind"] in ("level", "notch"):
             if raw not in (f.get("choices") or []):
-                console.print(f"[red]{escape(f['label'])} is one of {', '.join(f.get('choices') or [])}.[/red]")
+                console.print(f"[red]{escape(f['label'])} is one of {escape(', '.join(f.get('choices') or []))}.[/red]")
                 raise typer.Exit(2)
             body[key] = raw
         elif f["kind"] == "bool":

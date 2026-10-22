@@ -66,12 +66,12 @@ _SERVER = re.compile(PATTERN)
 
 def well_formed(value: str | None) -> bool:
     """Whether value is a content hash of any scheme (the grammar)."""
-    return bool(value) and bool(_GRAMMAR.match(value))
+    return bool(value) and bool(_GRAMMAR.fullmatch(value))
 
 
 def ours(value: str | None) -> bool:
     """Whether value is one of the server's schemes, exactly as it makes them."""
-    return bool(value) and bool(_SERVER.match(value))
+    return bool(value) and bool(_SERVER.fullmatch(value))
 
 
 def scheme(value: str | None) -> str | None:

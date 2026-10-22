@@ -43,6 +43,7 @@ from sqlmodel import Session
 
 from src.producers.names import sql_spelling
 from src.producers.live import LiveMap, LiveSet, Made
+from src.server import cursors
 from src.shared.content_hash import FP1, FULL_UP_TO, SHA256
 from src.shared.producers import (
     MADE_AT_SCAN,
@@ -876,9 +877,17 @@ def failures(session: Session, *, artifact: str | None = None, library_id: str |
     many tries, and when the next one is (None when given up). after: the
     cursor the last page ended with; within: only these libraries. Only the
     producers this server has now: an uninstalled plug-in's or a removed
-    producer's rows are left out."""
+    producer's rows are left out. A cursor (`<time>|<clip>/<producer>`) that
+    isn't one this list gave is a 400 (src/server/cursors.py)."""
+    after_at = after_key = None
+    if after is not None:
+        at, sep, after_key = cursors.text(after).partition("|")
+        if not sep:
+            raise cursors.BadCursorError("not this list's cursor")
+        after_at = cursors.time(at)
     rows = session.execute(text(
         "SELECT l.asset_id, l.artifact, l.error, l.attempts, l.failed_at, l.retry_at,"
+        " COALESCE(l.failed_at, l.produced_at) AS failed_order,"
         " a.rel_path, a.library_id, a.media_type, lib.name AS library_name"
         " FROM artifact_lineage l JOIN active_assets a ON a.asset_id = l.asset_id"
         " JOIN libraries lib ON lib.library_id = a.library_id"
@@ -887,19 +896,19 @@ def failures(session: Session, *, artifact: str | None = None, library_id: str |
         "   AND (CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
         "   AND (CAST(:ids AS text[]) IS NULL OR a.asset_id = ANY(CAST(:ids AS text[])))"
         f"  AND {_WITHIN}"
-        "   AND (CAST(:after AS text) IS NULL"
+        "   AND (CAST(:after_at AS timestamptz) IS NULL"
         "        OR (COALESCE(l.failed_at, l.produced_at), l.asset_id || '/' || l.artifact)"
-        "           < (CAST(split_part(:after, '|', 1) AS timestamptz), split_part(:after, '|', 2)))"
+        "           < (CAST(:after_at AS timestamptz), CAST(:after_key AS text)))"
         " ORDER BY COALESCE(l.failed_at, l.produced_at) DESC, l.asset_id || '/' || l.artifact DESC"
         " LIMIT :n"
-    ), {"artifact": artifact, "lib": library_id, "ids": asset_ids, "after": after, "n": limit,
-        "within": within, "known": list(PRODUCERS)}).mappings().all()
+    ), {"artifact": artifact, "lib": library_id, "ids": asset_ids, "after_at": after_at, "after_key": after_key,
+        "n": limit, "within": within, "known": list(PRODUCERS)}).mappings().all()
     out = []
     for r in rows:
         given_up = r["retry_at"] is not None and r["retry_at"].year >= 9999
-        when = r["failed_at"]
+        # The time it's ordered by (a row from before failed_at was kept has only produced_at).
         out.append({**r, "given_up": given_up, "retry_at": None if given_up else r["retry_at"],
-                    "cursor": f"{when.isoformat() if when else ''}|{r['asset_id']}/{r['artifact']}"})
+                    "cursor": f"{r['failed_order'].isoformat()}|{r['asset_id']}/{r['artifact']}"})
     return out
 
 

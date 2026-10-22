@@ -71,7 +71,7 @@ def _status(m: dict) -> str:
 def _said(r: httpx.Response, failed: str) -> None:
     """What went wrong, then exit 1: a machine's models when it doesn't offer what's asked."""
     err = api_error(r)
-    console.print(f"[red]{failed}: {escape(err.get('message') or r.text)}[/red]")
+    console.print(f"[red]{escape(failed)}: {escape(err.get('message') or r.text)}[/red]")
     details = err.get("details") or {}
     if err.get("code") == "model_not_offered":
         for m in details.get("machines") or []:
@@ -89,8 +89,8 @@ def _machines_table(settings: dict) -> Table:
     for m in settings["machines"]:
         key = "" if m["built_in"] else ("enter it again" if m["has_key"] and not m.get("key_readable", True)
                                         else "set" if m["has_key"] else "none")
-        table.add_row(escape(m["name"]), escape(m["api_url"] or "—"), ", ".join(m["jobs"]) or "—",
-                      str(m["at_once"]), key, escape(_status(m)))
+        table.add_row(escape(m["name"]), escape(m["api_url"] or "—"), escape(", ".join(m["jobs"]) or "—"),
+                      f"{m['at_once']:d}", key, escape(_status(m)))
     return table
 
 
@@ -103,8 +103,8 @@ def ai_list() -> None:
     for col in ("JOB", "WHAT", "MODEL", "MACHINES OFFERING IT"):
         table.add_column(col)
     for j in settings["jobs"]:
-        table.add_row(j["job"], escape(j["label"]), escape(j["model"] or "off"),
-                      f"{j['offering']} of {j['machines']}" if j["machines"] else "none does it")
+        table.add_row(escape(j["job"]), escape(j["label"]), escape(j["model"] or "off"),
+                      f"{j['offering']:d} of {j['machines']:d}" if j["machines"] else "none does it")
     console.print(table)
 
 
@@ -153,7 +153,7 @@ def machines_test(
         used = f" · {t['tokens']['answer']:,} of {t['limit']:,} tokens" if t.get("tokens") else ""
         said = (f"[yellow]{escape(t['problem'])}[/yellow]" if t["problem"]
                 else "[green]answered as the work needs it[/green]")
-        console.print(f"\n[bold]{escape(', '.join(t['titles']))}[/bold]: {said} · {t['seconds']} s{used}")
+        console.print(f"\n[bold]{escape(', '.join(t['titles']))}[/bold]: {said} · {t['seconds']:.1f} s{used}")
         if t["answer"]:
             console.print(escape(t["answer"]), soft_wrap=True)
         bad |= bool(t["problem"])
