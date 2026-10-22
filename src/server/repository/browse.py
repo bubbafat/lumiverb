@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 
 from sqlalchemy import text
 from sqlmodel import Session, select
 
 from src.server import cursors
-from src.shared.utils import escape_like
 from src.server.repository import corrections as _corr
 from src.server.models.tenant import (
     Asset,
@@ -33,120 +31,6 @@ class UnifiedBrowseRepository:
 
     def __init__(self, session: Session) -> None:
         self._session = session
-
-    def _DELETED_OLD_page(
-        self,
-        *,
-        filters: "object | None" = None,
-        rating_user_id: str | None = None,
-        after: str | None = None,
-        limit: int = 500,
-    ) -> list[Asset]:
-        """Keyset pagination across all libraries using BrowseFilters."""
-        from src.server.models.browse_filters import BrowseFilters as _BF
-        import base64 as _b64
-        import math as _math
-
-        if filters is None:
-            filters = _BF()
-
-        sort_col = filters.sort if filters.sort in self.SORTABLE_COLUMNS else "taken_at"
-        is_desc = filters.direction.lower() == "desc"
-        cmp_op = "<" if is_desc else ">"
-        order_dir = "DESC" if is_desc else "ASC"
-
-        conditions: list[str] = []
-        params: dict[str, object] = {"limit": limit}
-
-        # --- Library filter ---
-        if filters.library_ids:
-            conditions.append("a.library_id = ANY(:library_ids)")
-            params["library_ids"] = filters.library_ids
-
-        # --- Path prefix (requires library_ids) ---
-        if filters.path_prefix:
-            conditions.append(
-                "(a.rel_path = :path_prefix OR a.rel_path LIKE :path_prefix_like ESCAPE '\\')"
-            )
-            params["path_prefix"] = filters.path_prefix
-            params["path_prefix_like"] = escape_like(filters.path_prefix) + "/%"
-
-        # --- Composite cursor ---
-        if after is not None:
-            cursor_value = None
-            cursor_id = after
-            try:
-                decoded = json.loads(_b64.urlsafe_b64decode(after + "=="))
-                cursor_value = decoded["v"]
-                cursor_id = decoded["id"]
-            except Exception:
-                if sort_col != "asset_id":
-                    sort_col = "asset_id"
-
-            if sort_col == "asset_id":
-                conditions.append(f"a.asset_id {cmp_op} :cursor_id")
-                params["cursor_id"] = cursor_id
-            else:
-                conditions.append(f"""(
-                    -- Rows are ordered NULLS LAST: after an undated cursor only
-                    -- undated rows follow; after a dated one, later dated rows
-                    -- and every undated row.
-                    CASE
-                        WHEN :cursor_value IS NULL THEN
-                            a.{sort_col} IS NULL AND a.asset_id {cmp_op} :cursor_id
-                        WHEN a.{sort_col} IS NULL THEN
-                            TRUE
-                        ELSE
-                            (a.{sort_col}, a.asset_id) {cmp_op} (:cursor_value, :cursor_id)
-                    END
-                )""")
-                params["cursor_value"] = cursor_value
-                params["cursor_id"] = cursor_id
-
-        # Apply filters from BrowseFilters object
-        join_ratings, join_metadata = _apply_browse_filters(
-            filters, conditions, params, rating_user_id, _math
-        )
-
-        # --- Build query ---
-        where_sql = " AND ".join(conditions) if conditions else "TRUE"
-
-        lateral_join = ""
-        if join_metadata:
-            lateral_join = _corr.TAGS_JOIN  # the tags a person sees
-
-        rating_join_sql = ""
-        if join_ratings:
-            rating_join_sql = """
-            LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id AND r.user_id = :rating_user_id
-            """
-
-        if sort_col == "asset_id":
-            order_clause = f"a.asset_id {order_dir}"
-        else:
-            order_clause = f"a.{sort_col} {order_dir} NULLS LAST, a.asset_id {order_dir}"
-
-        id_sql = f"""
-            SELECT a.asset_id
-            FROM active_assets a
-            {lateral_join}
-            {rating_join_sql}
-            WHERE {where_sql}
-            ORDER BY {order_clause}
-            LIMIT :limit
-        """
-        result = self._session.execute(text(id_sql).bindparams(**params))
-        asset_ids = [row[0] for row in result.all()]
-        if not asset_ids:
-            return []
-        stmt = (
-            select(Asset)
-            .where(Asset.asset_id.in_(asset_ids))
-            .where(Asset.deleted_at.is_(None))
-        )
-        assets_by_id = {a.asset_id: a for a in self._session.exec(stmt).all()}
-        return [assets_by_id[aid] for aid in asset_ids if aid in assets_by_id]
-
 
     def query_page(
         self,

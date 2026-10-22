@@ -75,6 +75,7 @@ def test_a_demo_session_reads_and_changes_nothing_whatever_its_roles(install, mo
         ("PATCH", f"/v1/libraries/{library_id}", {"name": "Demo"}),
         ("POST", "/v1/keys", {"label": "mine", "role": "viewer"}),
         ("POST", "/v1/views", {"name": "mine", "query": {}}),
+        ("POST", "/v1/views", {"name": "a\x00b", "query": {}}),  # its body never read (src/server/api/no_nul.py)
         ("DELETE", f"/v1/libraries/{library_id}", None),
     ):
         r = client.request(method, path, json=body, headers=demo)

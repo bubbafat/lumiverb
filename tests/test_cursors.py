@@ -6,8 +6,10 @@ where a time goes, or a NUL was the database's error, a 500, GET /v1/query's
 from a public page too. Every list reads its cursor through cursors.py now:
 the first tests read cursors directly; the rest send each list a cursor it
 never gave, against the real API and database, and page through every sort
-GET /v1/query offers with the cursors it does give. A NUL in a ?f= filter is
-a 400 bad_filter.
+GET /v1/query offers with the cursors it does give. A NUL in a cursor as sent,
+or in a ?f= filter, is refused before any list reads it, as anywhere in a URL
+(src/server/api/no_nul.py: 400 not_text); one inside a cursor's JSON is
+a bad cursor.
 """
 
 from __future__ import annotations
@@ -76,9 +78,10 @@ BAD = ["not a cursor!", _packed([1]), _packed({"v": {"a": 1}, "id": "x"}), _pack
        _packed({"v": None, "id": "a\x00b"}), _packed({"count": "many", "id": "x"}), "a\x00b"]
 
 
-def _bad_cursor(r) -> None:
+def _bad_cursor(r, cursor: str = "") -> None:
+    """400 bad_cursor; one with a NUL as sent never reaches the list (no_nul.py)."""
     assert r.status_code == 400, (r.status_code, r.text)
-    assert r.json()["error"]["code"] == "bad_cursor", r.text
+    assert r.json()["error"]["code"] == ("not_text" if "\x00" in cursor else "bad_cursor"), r.text
 
 
 @pytest.fixture(scope="module")
@@ -116,7 +119,7 @@ def test_every_list_answers_a_cursor_it_never_gave_with_400(env, lists, cursor) 
         if path == "/v1/query" and "query:" in params.get("f", "") and r.status_code == 200:
             assert r.json()["items"] == []  # nothing found: no page to place a cursor in
             continue
-        _bad_cursor(r)
+        _bad_cursor(r, cursor)
 
 
 @pytest.mark.slow
@@ -126,7 +129,7 @@ def test_the_failures_list_reads_its_own_cursor_only(env, cursor) -> None:
     r = env.client.get("/v1/producers/failures", params={"after": cursor}, headers=env.admin)
     if cursor == "":
         assert r.status_code == 400  # not this list's cursor either (no time, no clip)
-    _bad_cursor(r)
+    _bad_cursor(r, cursor)
 
 
 @pytest.mark.slow
@@ -138,7 +141,7 @@ def test_a_public_pages_search_with_a_bad_cursor_is_a_400(env) -> None:
     seen = env.client.get("/v1/query", params={"f": f"library:{library_id}"})
     assert seen.status_code == 200 and len(seen.json()["items"]) == 1, seen.text
     for cursor in BAD:
-        _bad_cursor(env.client.get("/v1/query", params={"f": f"library:{library_id}", "after": cursor}))
+        _bad_cursor(env.client.get("/v1/query", params={"f": f"library:{library_id}", "after": cursor}), cursor)
 
 
 @pytest.mark.slow
@@ -172,6 +175,7 @@ def test_a_nul_in_a_filter_is_a_400(env) -> None:
     for path in ("/v1/query", "/v1/assets/facets"):
         for f in ("camera_make:Can\x00on", "query:a\x00b", "library:lib_\x00"):
             r = env.client.get(path, params={"f": f}, headers=env.admin)
-            assert r.status_code == 400 and r.json()["error"]["code"] == "bad_filter", (path, f, r.text)
-        # Signed out, a library a public page can't be: no page, and never a 500.
-        assert env.client.get(path, params={"f": "library:lib_\x00"}).status_code == 401
+            assert r.status_code == 400 and r.json()["error"]["code"] == "not_text", (path, f, r.text)
+        # Signed out, the public page's lookup never sees it: the same 400, never a 500.
+        r = env.client.get(path, params={"f": "library:lib_\x00"})
+        assert r.status_code == 400 and r.json()["error"]["code"] == "not_text", (path, r.text)
