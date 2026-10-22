@@ -400,9 +400,9 @@ def test_an_editor_is_refused_a_library_folder_before_where_it_is_chosen(public_
 
     made = client.post("/v1/libraries", json={"name": "EdElsewhere", "root_path": "/x"}, headers=ed)
     moved = client.patch(f"/v1/libraries/{lib.json()['library_id']}", json={"root_path": "/x"}, headers=ed)
-    # Making one is an account admin's; moving one its own admin's (ADR-018 decision 8).
+    # Making one is an account admin's, and so is moving one (ADR-018 decision 8).
     assert made.status_code == 403 and made.json()["error"]["code"] == "forbidden", made.text
-    assert moved.status_code == 403 and moved.json()["error"]["code"] == "library_admin_required", moved.text
+    assert moved.status_code == 403 and moved.json()["error"]["code"] == "forbidden", moved.text
     r = client.post("/v1/libraries", json={"name": "AdElsewhere", "root_path": "/x"}, headers=admin)
     assert r.status_code == 403 and r.json()["error"]["code"] == "folder_elsewhere", r.text
 

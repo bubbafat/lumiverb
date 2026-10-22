@@ -6,9 +6,10 @@ libraries`).
 
 Against the real API and databases (tests/test_scans_api.py's accounts): an
 account admin sets who has which role on a library; a library's admin does
-the same for theirs, chooses its reader, pauses its scans and makes it
-private, and nothing of another library; what they set takes effect on the
-next request. The CLI's commands run against the same API.
+the same for theirs, pauses its scans and makes it private, and nothing of
+another library; where its files are and who reads them stay an account
+admin's; what they set takes effect on the next request. The CLI's commands
+run against the same API.
 """
 
 from __future__ import annotations
@@ -99,16 +100,11 @@ def test_a_librarys_admin_runs_their_library_and_nothing_else(env, team):
     assert _ok(env.client.get(f"/v1/libraries/{team.a}", headers=team.lead))["infer_location"] is True
     _ok(env.client.post("/v1/libraries/scans/pause", json={"library_ids": [team.a]}, headers=team.lead), 204)
     _ok(env.client.post("/v1/libraries/scans/resume", json={"library_ids": [team.a]}, headers=team.lead), 204)
-    device = _ok(env.client.post("/v1/devices", json={"name": f"lead's {team.a}"}, headers=env.admin))
-    chosen = _ok(env.client.put(f"/v1/libraries/{team.a}/reader", json={"reader": device["device_id"]},
-                                headers=team.lead))
-    assert chosen["reader"] == device["device_id"]
 
     for r in (env.client.get(f"/v1/libraries/{team.b}/people", headers=team.lead),
               _role(env, team.b, team.member_id, "none", team.lead),
               env.client.patch(f"/v1/libraries/{team.b}", json={"private": True}, headers=team.lead),
               env.client.patch(f"/v1/libraries/{team.b}", json={"infer_location": True}, headers=team.lead),
-              env.client.put(f"/v1/libraries/{team.b}/reader", json={"reader": "server"}, headers=team.lead),
               env.client.post("/v1/libraries/scans/pause", json={"library_ids": [team.a, team.b]}, headers=team.lead),
               env.client.post("/v1/libraries/scans/pause", json={"all": True}, headers=team.lead)):
         _error(r, 403, "library_admin_required")
@@ -121,6 +117,48 @@ def test_a_librarys_admin_runs_their_library_and_nothing_else(env, team):
     assert env.client.get(f"/v1/libraries/{team.a}/previews", headers=team.lead).status_code == 403
     _error(env.client.get(f"/v1/libraries/{team.a}/people", headers=team.member), 403, "library_admin_required")
     _error(env.client.get(f"/v1/libraries/{team.a}/people", headers=team.lead_key), 403, "library_admin_required")
+
+
+def test_where_its_files_are_and_who_reads_them_are_an_account_admins(env, team):
+    """A library's own admin who isn't an account admin sees its folder and its
+    reader and changes neither, as they make no library: a folder or a device
+    is the account's to give. An account admin chooses both, signed in or
+    with their key."""
+    _ok(_role(env, team.a, team.lead_id, "admin", env.admin))
+    before = _ok(env.client.get(f"/v1/libraries/{team.a}", headers=team.lead))
+    assert (before["role"], before["reader"]) == ("admin", "server")
+    device = _ok(env.client.post("/v1/devices", json={"name": f"lead's {team.a}"}, headers=env.admin))
+
+    elsewhere = "/Volumes/elsewhere"
+    for r in (env.client.patch(f"/v1/libraries/{team.a}", json={"root_path": elsewhere}, headers=team.lead),
+              env.client.patch(f"/v1/libraries/{team.a}", json={"root_path": elsewhere, "private": True},
+                               headers=team.lead),
+              env.client.put(f"/v1/libraries/{team.a}/reader", json={"reader": device["device_id"]}, headers=team.lead),
+              env.client.put(f"/v1/libraries/{team.a}/reader", json={"reader": "server", "root_path": elsewhere},
+                             headers=team.lead),
+              # Nor on a library they edit.
+              env.client.patch(f"/v1/libraries/{team.b}", json={"root_path": elsewhere}, headers=team.lead),
+              env.client.put(f"/v1/libraries/{team.b}/reader", json={"reader": "server"}, headers=team.lead)):
+        _error(r, 403, "forbidden")
+    after = _ok(env.client.get(f"/v1/libraries/{team.a}", headers=env.admin))
+    assert (after["root_path"], after["reader"], after["private"]) == (before["root_path"], "server", False)
+    # What else is theirs stays theirs.
+    _ok(env.client.patch(f"/v1/libraries/{team.a}", json={"private": True}, headers=team.lead))
+
+    boss_email = f"boss-{uuid.uuid4().hex[:8]}@example.com"
+    _person(env, boss_email, "admin")
+    token = _ok(env.client.post("/v1/auth/login", json={"email": boss_email, "password": PASSWORD}))["access_token"]
+    boss = {"Authorization": f"Bearer {token}"}
+    assert _ok(env.client.patch(f"/v1/libraries/{team.a}", json={"root_path": "/Volumes/moved"},
+                                headers=boss))["root_path"] == "/Volumes/moved"
+    chosen = _ok(env.client.put(f"/v1/libraries/{team.a}/reader",
+                                json={"reader": device["device_id"], "root_path": "/Users/lead/a"}, headers=env.admin))
+    assert (chosen["reader"], chosen["root_path"]) == (device["device_id"], "/Users/lead/a")
+    seen = _ok(env.client.get(f"/v1/libraries/{team.a}", headers=team.lead))
+    assert (seen["reader"], seen["reader_name"], seen["root_path"]) == (
+        device["device_id"], f"lead's {team.a}", "/Users/lead/a"), "its admin sees who reads it and where"
+    assert _ok(env.client.put(f"/v1/libraries/{team.a}/reader", json={"reader": "server", "root_path": "/Volumes/a"},
+                              headers=boss))["reader"] == "server"
 
 
 def test_a_private_library_and_someone_who_sees_only_what_theyre_given(env, team):
@@ -210,6 +248,19 @@ def test_the_cli_sets_roles_privacy_and_who_sees_every_library(env, team):
 
     r = _cli(env, team.member, "library", "role", "--name", name, "--email", team.lead_email, "--role", "none")
     assert r.exit_code == 1, "not theirs to set"
+
+
+def test_the_cli_moves_a_library_for_an_account_admin_and_says_why_not_to_its_own_admin(env, team):
+    _ok(_role(env, team.a, team.lead_id, "admin", env.admin))
+    name = _name_of(env, team.a)
+    r = _cli(env, team.lead, "library", "update", "--name", name, "--root-path", "/Volumes/leads")
+    assert r.exit_code == 1 and "Error [forbidden]: Admin API key required" in r.stderr, r.output
+    assert "Library updated" not in r.output
+    r = _cli(env, env.admin, "library", "update", "--name", name, "--root-path", "/Volumes/moved-by-cli")
+    assert r.exit_code == 0 and "root_path: /Volumes/moved-by-cli" in r.output, r.output
+    # Renaming stays its editors'.
+    r = _cli(env, team.lead, "library", "update", "--name", name, "--new-name", f"{name}-renamed")
+    assert r.exit_code == 0 and f"name: {name}-renamed" in r.output, r.output
 
 
 def test_the_cli_turns_infer_location_on_and_asks_before_removing_guesses(env, team):

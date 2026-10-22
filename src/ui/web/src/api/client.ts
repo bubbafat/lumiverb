@@ -244,7 +244,7 @@ export async function createLibrary(
   });
 }
 
-/** Who reads a library's files (admins): "server", this server, or a registered device's id, never both at once.
+/** Who reads a library's files (account admins): "server", this server, or a registered device's id, never both at once.
  * rootPath: the folder as the new reader sees it (left out, it stays). */
 export async function chooseLibraryReader(libraryId: string, reader: string, rootPath?: string): Promise<LibraryResponse> {
   return apiFetch<LibraryResponse>(`/libraries/${libraryId}/reader`, {

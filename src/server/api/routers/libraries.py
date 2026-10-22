@@ -54,10 +54,11 @@ class ReaderChoice(BaseModel):
     root_path: str | None = None
 
 
-# Library fields only an account admin changes (making it public is the account's), and those its own
-# admin changes too (where its files are, who sees it, whether its locations are guessed: ADR-018 decision 8).
-ACCOUNT_ADMINS_FIELDS = {"is_public"}
-LIBRARY_ADMINS_FIELDS = {"root_path", "private", "infer_location"}
+# Library fields only an account admin changes (making it public is the account's, and so is where its files
+# are, as on making a library: a folder may be another library's), and those its own admin changes too (who
+# sees it, whether its locations are guessed: ADR-018 decision 8).
+ACCOUNT_ADMINS_FIELDS = {"is_public", "root_path"}
+LIBRARY_ADMINS_FIELDS = {"private", "infer_location"}
 
 
 def require_admin_for(request: Request, body: BaseModel) -> None:
@@ -212,8 +213,9 @@ def create_library(
     _: Annotated[None, Depends(require_tenant_admin)],
 ) -> LibraryResponse:
     """
-    Create a library. Admins only: a library is made with its folder, and
-    choosing a library's folder is an admin's, as changing it is (PATCH).
+    Create a library. Account admins only: a library is made with its
+    folder, and choosing a library's folder is an account admin's, as
+    changing it (PATCH) and who reads it (PUT reader) are.
     Name must be unique for this tenant.
     Returns 409 if a library with the same name already exists.
     New libraries inherit tenant path filter defaults at creation time.
@@ -459,8 +461,9 @@ def update_library(
     _: Annotated[None, Depends(require_editor)],
 ) -> LibraryResponse:
     """Update library name, root_path, is_public, private and/or
-    infer_location. A folder is chosen on the library's reader: for this
-    server's libraries, as on creating one (require_folder_chosen_here).
+    infer_location. A folder is an account admin's, chosen on the library's
+    reader: for this server's libraries, as on creating one
+    (require_folder_chosen_here).
     Turning Infer location off removes the library's location guesses (a
     person's location stays): 409 guesses_exist with how many clips have one,
     unless remove_guesses says so."""
@@ -521,15 +524,16 @@ def _known_reader(session: Session, reader: str) -> None:
         raise ApiError(404, "device_not_found", "There's no such device: register it first (/v1/devices).")
 
 
-@router.put("/{library_id}/reader", response_model=LibraryResponse, dependencies=[Depends(require_library_admin)])
+@router.put("/{library_id}/reader", response_model=LibraryResponse, dependencies=[Depends(require_tenant_admin)])
 def choose_reader(
     library_id: str,
     request: Request,
     body: ReaderChoice,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> LibraryResponse:
-    """Who reads the library's files (ADR-018 decision 1; its admin): this
-    server or a registered device, never both at once. The new reader scans
+    """Who reads the library's files (ADR-018 decision 1): this server or a
+    registered device, never both at once. An account admin's, as its folder
+    is (a library's own admin sees who reads it). The new reader scans
     it and makes what needs its originals from its next check-in; the old
     one's scans of it are refused from now (409 not_the_reader). With
     root_path, the folder as the new reader sees it. Handed to this server,

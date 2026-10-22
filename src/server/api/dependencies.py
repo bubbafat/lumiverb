@@ -86,15 +86,16 @@ def require_editor(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Editor access required")
 
 
-LIBRARY_ADMIN_REQUIRED = "This is the library's admin's: its settings, who reads it and who can see it."
+LIBRARY_ADMIN_REQUIRED = "This is the library's admin's: its settings, its scans and who can see it."
 
 
 def require_library_admin(request: Request) -> None:
     """The admin of every library the request names (ADR-018 decision 8: a
-    library's settings, its reader, its people), an account admin being
+    library's settings, its Scans pause, its people), an account admin being
     every library's; when it names none, an account admin. 403
     library_admin_required otherwise (src/server/api/library_access.py
-    keeps the roles on what the request names)."""
+    keeps the roles on what the request names). Where its files are and who
+    reads them are an account admin's (require_tenant_admin)."""
     from src.server.api.errors import ApiError
     from src.server.api.library_access import role_here
 

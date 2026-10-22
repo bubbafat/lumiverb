@@ -178,8 +178,8 @@ def library_create(
     name: Annotated[str, typer.Option("--name", "-n", help="Library name.")],
     path: Annotated[str, typer.Option("--path", "-p", help="Root path on disk.")],
 ) -> None:
-    """Create a library with the given name and root path. Needs an admin's key:
-    choosing a library's folder is an admin's."""
+    """Create a library with the given name and root path. Needs an account
+    admin's key: choosing a library's folder is an account admin's."""
     client = LumiverbClient()
     resp = client.post("/v1/libraries", json={"name": name, "root_path": path})
     data = resp.json()
@@ -267,7 +267,8 @@ def library_update(
     root_path: Annotated[str | None, typer.Option("--root-path", "-p", help="New root path on disk.")] = None,
     new_name: Annotated[str | None, typer.Option("--new-name", help="New library name.")] = None,
 ) -> None:
-    """Update a library's root path or name."""
+    """Update a library's root path or name. A new root path needs an account
+    admin's key: choosing a library's folder is an account admin's."""
     if root_path is None and new_name is None:
         console.print("[red]Provide at least --root-path or --new-name[/red]")
         raise typer.Exit(1)

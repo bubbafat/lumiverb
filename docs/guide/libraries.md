@@ -50,7 +50,7 @@ On the Libraries page, click a library's **Settings**. What you see depends on y
 |---|---|---|
 | Path Filters | Which files in the folder are taken in | The library's editors and admins |
 | Scans | Scan now, and pausing its scans | Scan now: editors; pausing: its admins |
-| Who reads it | This server or a device, and the folder | Its admins |
+| Who reads it | This server or a device, and the folder | Account admins (its admins see them) |
 | Location guesses | Infer location on or off | Its admins |
 | People | Who sees it, their role there, and whether it's private: see [Roles on one library](users-and-roles.md#roles-on-one-library) | Its admins |
 | Previews | Where its previews are kept: see [A library's own previews folder](storage.md#a-librarys-own-previews-folder) | Account admins |
@@ -105,7 +105,7 @@ sudo systemctl restart lumiverb-scheduler
 
 ### Who reads it
 
-Each library is read by this server or by one registered device, never both. The reader scans it and makes what needs the files themselves, such as previews; the server does the rest. Choose **Read by**, give **Its folder** as that reader sees it, and click **Save**. This is also where a library's folder is changed. See [Libraries on another computer](devices.md).
+Each library is read by this server or by one registered device, never both. The reader scans it and makes what needs the files themselves, such as previews; the server does the rest. Choose **Read by**, give **Its folder** as that reader sees it, and click **Save**. This is also where a library's folder is changed. Both are an account admin's to choose, as adding a library is: a library's own admin sees who reads it and its folder, and "An account admin chooses its folder and who reads it." See [Libraries on another computer](devices.md).
 
 ### Location guesses
 

@@ -74,16 +74,40 @@ describe("LibraryReaderSection", () => {
     expect((await screen.findByRole("link", { name: "Settings › Devices" })).getAttribute("href")).toBe("/settings/devices");
   });
 
-  it("is its admin's: one who isn't an account admin keeps this server or the device it has", async () => {
+  it("is an account admin's: the library's own admin sees who reads it and its folder, and who chooses them", async () => {
     api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "editor", server_admin: false });
     api.getLibrary.mockResolvedValue({ library_id: "lib_1", name: "Trips", root_path: "/Users/robert/Trips",
                                        is_public: false, reader: "dev_1", reader_name: "Studio Mac", role: "admin" });
     renderSection();
+    const section = await screen.findByLabelText("Who reads it");
     expect(await screen.findByText(/Studio Mac reads its files\./)).toBeTruthy();
-    const options = Array.from((screen.getByLabelText("Read by") as HTMLSelectElement).options).map((o) => o.text);
-    expect(options).toEqual(["This server", "Studio Mac"]);
+    expect(section.textContent).toContain("Its folder as Studio Mac sees it: /Users/robert/Trips");
+    expect(screen.getByText("An account admin chooses its folder and who reads it.")).toBeTruthy();
+    expect(screen.queryByLabelText("Read by")).toBeNull();
+    expect(section.querySelector("input, select, button")).toBeNull();
     expect(api.listDevices).not.toHaveBeenCalled();
-    expect(screen.queryByRole("link", { name: "Settings › Devices" })).toBeNull();
+    expect(api.chooseLibraryReader).not.toHaveBeenCalled();
+  });
+
+  it("says this server's folder as it is to the library's own admin", async () => {
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "viewer", server_admin: false });
+    api.getLibrary.mockResolvedValue({ library_id: "lib_1", name: "Trips", root_path: "/Volumes/Trips", is_public: false,
+                                       reader: "server", reader_name: null, role: "admin" });
+    renderSection();
+    const section = await screen.findByLabelText("Who reads it");
+    expect(section.textContent).toContain("This server reads its files.");
+    expect(section.textContent).toContain("Its folder on this server: /Volumes/Trips");
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  });
+
+  it("gives an account admin the choice", async () => {
+    // An account admin is every library's admin; a server from before roles per library says no role.
+    api.getLibrary.mockResolvedValue({ library_id: "lib_1", name: "Trips", root_path: "/Volumes/Trips", is_public: false,
+                                       reader: "server", reader_name: null });
+    renderSection();
+    expect(await screen.findByLabelText("Read by")).toBeTruthy();
+    expect(screen.getByLabelText("Its folder on this server")).toBeTruthy();
+    expect(screen.queryByText("An account admin chooses its folder and who reads it.")).toBeNull();
   });
 
   it("is nobody's but its admin's: an editor of it sees nothing", async () => {

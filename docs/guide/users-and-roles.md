@@ -53,7 +53,7 @@ A person's account role holds on every library unless that library says otherwis
 Each person has a **Role here**:
 
 - **Default**: what they'd have without a choice (shown in brackets).
-- **Admin**: runs this library: its settings, its folder, who reads it, pausing its scans, location guesses, who sees it.
+- **Admin**: runs this library: its settings, pausing its scans, location guesses, who sees it. Its folder and who reads it are an account admin's to choose, as adding a library is; the library's admin sees them.
 - **Editor** or **Viewer**: as in the account, on this library only.
 - **No access**: they don't see it.
 

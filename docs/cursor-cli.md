@@ -69,10 +69,10 @@ There is no worker command. Processing runs in the server-side scheduler (`lumiv
 - `lumiverb producers retry PRODUCER|all (--library NAME | --all | --asset ID ...)` — Try failing clips again now, given up or not (editors and admins): what's tried again is always named; without it the command does nothing and says how.
 
 #### Library
-- `lumiverb library create --name <name> --path <path>` — Create a library.
+- `lumiverb library create --name <name> --path <path>` — Create a library (an account admin's key).
 - `lumiverb library list` — List libraries; a **Here** column shows mapped roots.
 - `lumiverb library report-changes <path>... [--stdin]` — Tell the server these files or folders changed, so its scheduler scans them (`POST /v1/changes`). Paths are as this machine sees them; root mappings turn them back into the library's form. Prints how many matched a library and which didn't.
-- `lumiverb library update --name <name> [--new-name <new>] [--root-path <path>]` — Update library.
+- `lumiverb library update --name <name> [--new-name <new>] [--root-path <path>]` — Update library: renaming is its editors', a new root path an account admin's (anyone else, the library's own admin too, gets the server's 403 said on stderr, and the command exits 1).
 - `lumiverb library delete --name <name> [--yes] [--remove-from-projects]` — Move a library to the trash with everything in it (it says how many archived clips go with it); it's deleted for good after the trash days. When its clips are in projects it names them and asks (in the trash they're hidden there; deleted for good they leave them); `--remove-from-projects` answers for scripts (`--yes` without it stops if there are any).
 - `lumiverb library restore --name <name>` — Take a library out of the trash with the clips that went with it. It comes back private.
 - `lumiverb library empty-trash (--name <name> | --all) [--remove-from-projects] [--yes]` — Permanently delete trashed libraries: that one, or all of them (admins only); exactly one of `--name` or `--all`. First lists the projects their clips are in (deleting removes the clips from those projects) and asks, unless `--yes`; with `--yes` and clips in projects it stops (exit 2) unless `--remove-from-projects`.
