@@ -41,7 +41,6 @@ import io
 import json
 import logging
 import os
-import pwd
 import threading
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping
@@ -69,7 +68,7 @@ from src.processing.ingest import (
     _generate_video_preview,
     _jpeg_to_webp,
 )
-from src.processing.originals import Originals, reach, where
+from src.processing.originals import Originals, reach, reader_named, where
 from src.processing.proxy.proxy_cache import ProxyCache
 from src.processing.video.probe import probe_video
 from src.producers.names import (
@@ -731,14 +730,6 @@ def _refused(rel_path: str, stats: ScanStats) -> None:
     with stats.lock:
         if rel_path not in stats.unreadable:
             stats.unreadable.append(rel_path)
-
-
-def reader_named() -> str:
-    """Who this machine reads files as, for a person to give them to: "the lumiverb user"."""
-    try:
-        return f"the {pwd.getpwuid(os.geteuid()).pw_name} user"
-    except KeyError:
-        return f"user {os.geteuid()}"
 
 
 def some_of(paths: list[str], shown: int = 5) -> str:

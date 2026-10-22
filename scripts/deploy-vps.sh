@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap Lumiverb on a fresh Ubuntu 22.04+ VPS (single-machine deploy).
+# Bootstrap Lumiverb on a fresh Ubuntu 24.04+ VPS (single-machine deploy).
 #
 # This is a convenience wrapper that runs deploy-api.sh then deploy-web.sh
 # on the same machine. For split deployments (API and web on separate machines),

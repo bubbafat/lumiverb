@@ -438,7 +438,27 @@ heic_decoder() {
     warn "HEIC photos can't be read until ${pkg} is installed: sudo apt-get install ${pkg}"
   fi
 }
+# Photos are read with libvips 8.13 or later, the first that can turn off its untrusted loaders:
+# src/processing/libvips.py refuses an older one (TRUSTED_ONLY_SINCE), and scans stop, saying why. Ubuntu 22.04's
+# is 8.12, 24.04's 8.15. Held to the same text in deploy-api.sh and update-api.sh.
+LIBVIPS_NEEDED=8.13
+libvips_too_old() {
+  [[ -n "$1" ]] && dpkg --compare-versions "$1" lt "$LIBVIPS_NEEDED"
+}
+# The libvips installed here: one too old is said, and the update goes on (all but scans works as before, and the
+# untrusted loaders are never used again).
+libvips_check() {
+  local vips
+  vips="$(dpkg-query -W -f='${db:Status-Abbrev}${Version}\n' libvips42t64 libvips42 2>/dev/null \
+    | awk '$1 == "ii" { print $2; exit }' || true)"
+  if libvips_too_old "$vips"; then
+    warn "This system's libvips is ${vips%%-*}: Lumiverb reads photos with libvips ${LIBVIPS_NEEDED} or later, the first that can turn off its untrusted loaders, so scans stop until it's newer (Settings › Processing says why). Ubuntu 24.04 or later has one. Everything else works as before."
+  elif [[ -n "$vips" ]]; then
+    ok "libvips ${vips%%-*}"
+  fi
+}
 if [[ "$PROCESSING" == "true" ]]; then
+  libvips_check
   heic_decoder
 else
   ok "No processing here: nothing to decode"

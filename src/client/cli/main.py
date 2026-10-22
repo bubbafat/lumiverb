@@ -1169,7 +1169,11 @@ def scan(
 
     --explain lists every difference between the disk and Lumiverb, changing nothing.
     """
-    from src.processing.scan import run_scan
+    try:
+        from src.processing.scan import run_scan
+    except ImportError as exc:  # a libvips too old to use (src/processing/libvips.py), or none
+        console.print(f"[red]Can't scan on this machine: {escape(str(exc))}[/red]")
+        raise typer.Exit(1) from None
 
     if allow_moves and skip_moves:
         console.print("[red]Cannot use both --allow-moves and --skip-moves[/red]")

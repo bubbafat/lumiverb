@@ -42,7 +42,7 @@ New previews go to the new folder at once, and the rest move in the background. 
 Lumiverb moves, sweeps and deletes what's in a previews folder as its own, so the folder must be one of its own:
 
 - Not a library's folder, not inside one, and not a folder holding one: previews stay apart from every library's files.
-- Not inside Lumiverb's own folders in the data folder, nor a folder holding the data folder. A new, empty folder in the data folder is fine.
+- Not inside Lumiverb's own folders in the data folder, nor a folder holding the data folder. A new, empty folder in the data folder is fine, unless its name is one Lumiverb uses there, now or later (such as `models`, `plugins`, `backups`, `cache`, `tmp` or `uploads`): give it a name of its own.
 - One that belongs to the user Lumiverb runs as: on a Mac, you; on Linux, `lumiverb` (see below).
 
 Each is refused saying why. Lumiverb never follows a symbolic link inside a previews folder: a file or folder linked from elsewhere is left alone, never read, moved or deleted.

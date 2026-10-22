@@ -16,7 +16,7 @@ The React UI is built to static assets and served directly by nginx.
 
 ## Quick start
 
-From a fresh Ubuntu 22.04+ VPS with DNS already pointed:
+From a fresh Ubuntu 24.04+ VPS with DNS already pointed:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \

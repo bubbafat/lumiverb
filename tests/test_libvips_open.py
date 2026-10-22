@@ -10,13 +10,15 @@ HEIF (an iPhone's HEIC) through libvips, BMP through Pillow, RAW through
 rawpy (a DNG rawpy can't read through libvips, as a TIFF). A .tif is read as
 a TIFF only, whatever Pillow would make of its content, and nothing over
 proxy_gen.MAX_PIXELS is decoded: its size is read from its header first.
+A libvips older than 8.13, which can't block its untrusted loaders, is
+refused where it comes in (a scan), saying so; nothing else stops.
 """
 
 from __future__ import annotations
 
 import ast
+import importlib
 import io
-import logging
 import struct
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -352,18 +354,106 @@ def test_libvips_8_13_or_later_blocks_its_untrusted_loaders(monkeypatch):
     block.assert_called_once_with(True)
 
 
-def test_an_older_libvips_is_warned_of_and_still_used(monkeypatch, caplog):
+TOO_OLD = ("libvips 8.12 is too old: Lumiverb reads photos with libvips 8.13 or later, the first that can turn off "
+           "the loaders libvips doesn't trust (ImageMagick, PDF, SVG and others). Install a newer libvips (Ubuntu "
+           "24.04 or later has one), then restart Lumiverb.")
+
+
+def test_an_older_libvips_is_refused_saying_which_and_what_it_needs(monkeypatch):
     from src.processing import libvips
 
     block = MagicMock()
     monkeypatch.setattr(libvips.pyvips, "version", lambda i: (8, 12, 1)[i])
     monkeypatch.setattr(libvips.pyvips, "block_untrusted_set", block)
 
-    with caplog.at_level(logging.WARNING, logger=libvips.__name__):
+    with pytest.raises(libvips.TooOld) as refused:
         libvips._block_untrusted()
 
     block.assert_not_called()
-    assert "libvips 8.12 can't block its untrusted loaders" in caplog.text
+    assert str(refused.value) == TOO_OLD
+    assert isinstance(refused.value, ImportError), "libvips can't be imported as Lumiverb uses it"
+
+
+def test_an_older_libvips_is_refused_wherever_it_comes_in_every_time(monkeypatch):
+    """Importing libvips is where it's first used: refused there, and again at every try (a module whose
+    import failed isn't kept), so nothing goes on with the untrusted loaders on. A scan brings it in."""
+    import sys
+
+    from tests import old_libvips
+
+    old_libvips.pretend(monkeypatch)
+    for _ in range(2):
+        for name in ("src.processing.libvips", "src.processing.proxy.proxy_gen", "src.processing.scan"):
+            with pytest.raises(ImportError) as refused:
+                importlib.import_module(name)
+            assert str(refused.value) == TOO_OLD
+            assert name not in sys.modules
+
+
+def test_a_stored_preview_is_passed_through_as_it_is_where_libvips_is_refused(monkeypatch):
+    """What only shrinks a stored preview for CLIP, faces and the rest (proxy_cache.fit) uses no libvips then, as
+    for a picture it can't read: the work from what's stored goes on."""
+    from src.processing.proxy.proxy_cache import fit
+    from tests import old_libvips
+
+    big = encoded("JPEG", (1600, 1200))
+    assert fit(big, 800) != big, "made smaller with a libvips new enough"
+    old_libvips.pretend(monkeypatch)
+    assert fit(big, 800) == big
+
+
+def test_the_api_and_the_scheduler_start_and_answer_where_libvips_is_refused(tmp_path):
+    """On a machine whose libvips is too old, nothing that starts imports it: the API answers, the scheduler, its
+    producers' work, the plug-in runner, the CLI and a device load without it. Only a scan brings it in, and
+    is refused."""
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent("""
+        import sys
+        import pyvips
+        pyvips.version = lambda i: (8, 12, 1)[i]
+        import src.server.api.main
+        import src.server.scheduler.service, src.server.scheduler.account, src.server.scheduler.inputs
+        import src.server.scheduler.runners, src.server.scheduler.scans, src.server.scheduler.dispatch
+        import src.server.plugin_runner, src.client.cli.main, src.processing.device
+        from src.producers import load
+        from src.shared.producers import PRODUCERS
+        for p in PRODUCERS.values():
+            if p.run:
+                load(p.run)
+        print("in:", sorted(m for m in sys.modules if m == "src.processing.libvips" or m.startswith("src.processing.scan")))
+        from fastapi.testclient import TestClient
+        print("health:", TestClient(src.server.api.main.app).get("/health").status_code)
+        try:
+            import src.processing.scan
+        except ImportError as exc:
+            print("scan:", exc)
+    """)
+    ran = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], capture_output=True,
+                         text=True, timeout=300)
+    assert ran.returncode == 0, ran.stderr
+    lines = ran.stdout.splitlines()
+    assert "in: []" in lines and "health: 200" in lines, ran.stdout
+    assert f"scan: {TOO_OLD}" in lines, ran.stdout
+
+
+def test_lumiverb_scan_says_so_plainly(monkeypatch):
+    from unittest.mock import patch
+
+    from typer.testing import CliRunner
+
+    from src.client.cli.main import app
+    from tests import old_libvips
+
+    old_libvips.pretend(monkeypatch)
+    with patch("src.client.cli.main.LumiverbClient") as client:
+        result = CliRunner().invoke(app, ["scan", "--library", "L"])
+    assert result.exit_code == 1
+    assert " ".join(result.output.split()) == f"Can't scan on this machine: {TOO_OLD}", result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit), "never a traceback"
+    client.assert_not_called()
 
 
 def test_every_module_using_libvips_gets_it_from_the_one_that_blocks_untrusted_loaders():

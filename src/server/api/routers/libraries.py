@@ -924,6 +924,7 @@ def move_library_previews(
         raise ApiError(409, "move_running", "The previews are being moved already: wait for that to finish.")
     originals = originals_here(session)
     try:
+        move.check_name(data, body.folder)  # refused before it's offered to be made
         with new_folder.made_if_asked(body.folder, body.make_folder, data):
             old, chosen, need = move.plan(data, body.folder, library_id=library_id, originals=originals)
             same = not body.move and _same_device(chosen, _originals_device(library)) is True

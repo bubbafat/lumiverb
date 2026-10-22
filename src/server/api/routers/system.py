@@ -650,10 +650,11 @@ def change_backups_folder(body: BackupFolderChange, request: Request) -> Backups
         raise ApiError(403, "backups_elsewhere", BACKUPS_ELSEWHERE)
     data = Path(get_settings().data_dir)
     try:
+        backups.check_name(data, body.folder)  # refused before it's offered to be made
         with new_folder.made_if_asked(body.folder, body.make_folder, data):
             chosen = backups.set_folder(data, body.folder)
     except backups.BackupError as exc:
-        raise ApiError(400, "folder_not_usable", str(exc)) from None
+        raise ApiError(exc.status, exc.code, str(exc)) from None
     logger.info("Backups go to %s (an admin's choice)", chosen)
     return _backups(request)
 
@@ -791,6 +792,7 @@ def move_previews(body: PreviewsChange, request: Request,
     target = body.folder if body.folder is not None else str(data)
     originals = originals_here(session)  # the account's libraries this server reads: never with their files
     try:
+        move.check_name(data, body.folder)  # refused before it's offered to be made
         with new_folder.made_if_asked(body.folder, body.make_folder, data):
             _, chosen, need = move.plan(data, body.folder, originals=originals)
             if need.files and not body.move:

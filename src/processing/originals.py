@@ -19,6 +19,7 @@ their drive may be unplugged or asleep.
 - Originals.local_file(rel_path): the file itself, for a tool, for the
   block. Never a copy, and nothing writes to it.
 - where(library): where they'd be, as said to a person (nothing read).
+- reader_named(): who this machine reads them as, as said to a person.
 
 Nothing outside this module builds a path to an original or walks a
 library's folder (tests/test_originals_only.py): the scheduler's look at
@@ -44,6 +45,7 @@ import contextlib
 import errno
 import logging
 import os
+import pwd
 import threading
 import unicodedata
 from collections.abc import Iterator, Mapping
@@ -127,6 +129,14 @@ def where(library: Mapping[str, Any], root_map: dict[str, str] | None = None) ->
     """Where the library's originals would be on this machine (its root,
     mapped), as said to a person: nothing is read, and nothing is reached."""
     return roots.local_library_root(dict(library), root_map)
+
+
+def reader_named() -> str:
+    """Who this machine reads files as, for a person to give them to: "the lumiverb user"."""
+    try:
+        return f"the {pwd.getpwuid(os.geteuid()).pw_name} user"
+    except KeyError:
+        return f"user {os.geteuid()}"
 
 
 # A drive's look still stuck, per folder (Folder.device): while one is, no

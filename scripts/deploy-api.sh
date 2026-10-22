@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap the Lumiverb API server on a fresh Ubuntu 22.04+ machine.
+# Bootstrap the Lumiverb API server on a fresh Ubuntu 24.04+ machine (22.04's libvips is too old to process).
 #
 # Installs PostgreSQL, Python/uv, runs migrations, creates systemd units.
 # Search is PostgreSQL's own (ADR-019): there's no search service. Does NOT
@@ -318,6 +318,24 @@ memory_check() {
     warn "$LOW_MEMORY"
   fi
 }
+
+# Photos are read with libvips 8.13 or later, the first that can turn off its untrusted loaders:
+# src/processing/libvips.py refuses an older one (TRUSTED_ONLY_SINCE), and scans stop, saying why. Ubuntu 22.04's
+# is 8.12, 24.04's 8.15. Held to the same text in deploy-api.sh and update-api.sh.
+LIBVIPS_NEEDED=8.13
+libvips_too_old() {
+  [[ -n "$1" ]] && dpkg --compare-versions "$1" lt "$LIBVIPS_NEEDED"
+}
+
+# The libvips processing would install here: one too old stops the install before any package is.
+libvips_check() {
+  local vips
+  vips="$(apt-cache policy libvips42t64 libvips42 2>/dev/null \
+    | awk '$1 == "Candidate:" && $2 != "(none)" { print $2; exit }' || true)"
+  if libvips_too_old "$vips"; then
+    fail "This system's libvips is ${vips%%-*}: Lumiverb reads photos with libvips ${LIBVIPS_NEEDED} or later, the first that can turn off its untrusted loaders. Install on Ubuntu 24.04 or later (or without --worker, for a server that doesn't process). No package was installed."
+  fi
+}
 # ---------------------------------------------------------------------------
 
 data_dir_check "$DATA_DIR" "$([[ -n "$DATA_DIR_OVERRIDE" ]] && echo true || echo false)"
@@ -338,6 +356,7 @@ step "Installing system packages"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
+[[ "$WITH_WORKER" != "true" ]] || libvips_check
 
 apt-get install -y -qq curl ca-certificates gnupg lsb-release openssl
 

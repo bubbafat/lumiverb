@@ -45,7 +45,7 @@ By default, `backups` in the data folder, on the same drive as Lumiverb's data. 
 1. In **Settings › Backups**, under Folder, click **Change**.
 2. Type the folder, such as `/Volumes/Backup/Lumiverb`, and click **Save**. If it isn't there yet, click **Make it**.
 
-It applies from now on: backups made already stay where they are. **Use the default** goes back. A folder on a drive that isn't plugged in is refused. On Linux, a folder outside the data folder needs the API's service allowed to write there first: see [Storage](storage.md#on-linux-folders-outside-the-data-folder).
+It applies from now on: backups made already stay where they are. **Use the default** goes back. A folder on a drive that isn't plugged in is refused. So is a folder in the data folder with a name Lumiverb uses there, such as `tmp` (emptied every time Lumiverb starts), `models` or `plugins`: give it a name of its own, or choose one outside the data folder. On Linux, a folder outside the data folder needs the API's service allowed to write there first: see [Storage](storage.md#on-linux-folders-outside-the-data-folder).
 
 ## Keep a copy of the env file
 
