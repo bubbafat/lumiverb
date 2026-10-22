@@ -12,7 +12,10 @@ only an admin (the scheduler's key is one) reads them, to send machines
 work. A machine's address is an account admin's too (it can name a host
 on the server's own network): anyone else reads its name, jobs and status,
 with the address said as its name. Changing a job's model makes its
-artifacts stale.
+artifacts stale. An https machine may be added with its certificate's
+fingerprint (Lumiverb's AI worker makes its own certificate): every request
+to it, Connect's too, takes that certificate and no other
+(src/shared/ai_requests.py).
 
 Every tenant has one built-in machine: the worker's own computer, with no
 URL or key, doing what the worker does itself (Whisper: transcripts). It
@@ -50,6 +53,7 @@ from src.server.repository.ai_machines import (
     address_for,
     first_vision_machine,
     job_model,
+    keeps_key,
     key_for,
     key_of,
     machines,
@@ -58,6 +62,7 @@ from src.server.repository.ai_machines import (
 )
 from src.server.repository.ai_machines import set_job_model as _store_model
 from src.shared.ai_jobs import AI_JOBS, BUILT_IN_JOBS, JOBS
+from src.shared.ai_requests import fingerprint_typed
 from src.shared.utils import utcnow
 from src.shared.vision_endpoint import VisionEndpointError, allowed, check_url, list_models
 from src.shared.whisper_models import canonical, canonical_models
@@ -81,6 +86,8 @@ class MachineOut(BaseModel):
     # False for a key this install can't read (sealed by another install's: a backup restored elsewhere): it's
     # entered again (src/server/sealing.py).
     key_readable: bool = True
+    # The certificate an https machine was added with, its SHA-256 (AB:CD:…): the only one taken from it. "": none.
+    fingerprint: str = ""
     jobs: list[str]
     at_once: int
     enabled: bool
@@ -131,6 +138,8 @@ class MachineIn(BaseModel):
     name: str = Field(max_length=100)
     api_url: str = Field(min_length=1, max_length=500)
     api_key: str = Field(default="", max_length=500)
+    # Its certificate's SHA-256, typed any way (with or without colons, either case); "": none. An https one's only.
+    fingerprint: str = Field(default="", max_length=200)
     jobs: list[str] = Field(default_factory=list)
     at_once: int = Field(default=2, ge=1, le=32)
     enabled: bool = True
@@ -145,6 +154,8 @@ class MachinePatch(BaseModel):
     api_url: str | None = Field(default=None, min_length=1, max_length=500)
     # None: keep the saved key; "": none.
     api_key: str | None = Field(default=None, max_length=500)
+    # None: keep the saved one (dropped when the URL is http now); "": none.
+    fingerprint: str | None = Field(default=None, max_length=200)
     jobs: list[str] | None = None
     at_once: int | None = Field(default=None, ge=1, le=32)
     enabled: bool | None = None
@@ -163,8 +174,10 @@ class MachinePatch(BaseModel):
 
 class ConnectIn(BaseModel):
     api_url: str = Field(min_length=1, max_length=500)
-    # None: a saved machine's key (machine_id), when it's that machine's URL; "": none.
+    # None: a saved machine's key (machine_id), when it's that machine's URL (or it over HTTPS); "": none.
     api_key: str | None = Field(default=None, max_length=500)
+    # None: a saved machine's certificate (machine_id), for an https URL; "": none.
+    fingerprint: str | None = Field(default=None, max_length=200)
     machine_id: str | None = None
 
 
@@ -226,6 +239,8 @@ class WorkerMachine(BaseModel):
     api_url: str | None
     # Its key for the scheduler's own key alone; "" for anyone else (write-only).
     api_key: str
+    # The certificate an https machine was added with: the only one its requests take ("": any trusted one).
+    fingerprint: str = ""
     at_once: int
     # The worker's own computer: it does the job itself.
     built_in: bool
@@ -245,6 +260,21 @@ def _url(api_url: str) -> str:
         return check_url(api_url)
     except VisionEndpointError as e:
         raise InvalidChoiceError("invalid_url", str(e), {"api_url": api_url}) from None
+
+
+def _pin(api_url: str, fingerprint: str) -> str:
+    """A certificate fingerprint as it's kept ("" for none); 422 invalid_fingerprint for one that isn't a SHA-256,
+    or one for an address that isn't https (a fingerprint is a certificate's)."""
+    if not fingerprint.strip():
+        return ""
+    try:
+        kept = fingerprint_typed(fingerprint)
+    except ValueError as e:
+        raise InvalidChoiceError("invalid_fingerprint", str(e), {"fingerprint": fingerprint}) from None
+    if not api_url.startswith("https://"):
+        raise InvalidChoiceError("invalid_fingerprint", "A certificate fingerprint is for an https:// address.",
+                                 {"api_url": api_url})
+    return kept
 
 
 def _job_model(tenant: Tenant | None, job: str) -> str:
@@ -302,6 +332,7 @@ def _settings(ctrl: Session, request: Request) -> AiSettings:
     return AiSettings(
         machines=[MachineOut(machine_id=m.machine_id, name=m.name, api_url=address_for(m, admin),
                              has_key=bool(m.api_key), key_readable=key_of(m) is not None,
+                             fingerprint=m.fingerprint,
                              jobs=list(m.jobs), at_once=m.at_once, enabled=m.enabled, built_in=m.built_in,
                              shares_gpu=m.shares_gpu or m.built_in, status=_status(m, admin))
                   for m in machines],
@@ -309,11 +340,13 @@ def _settings(ctrl: Session, request: Request) -> AiSettings:
     )
 
 
-def _ask(api_url: str, api_key: str | None, *, said_in_full: bool = False) -> tuple[list[str], str]:
-    """(models by their one names, "") when the machine answers; ([], why not) when it can't. said_in_full:
-    what went wrong there too (its address, what it answered), which is the log's."""
+def _ask(api_url: str, api_key: str | None, *, fingerprint: str = "",
+         said_in_full: bool = False) -> tuple[list[str], str]:
+    """(models by their one names, "") when the machine answers; ([], why not) when it can't. fingerprint: the
+    certificate it was added with. said_in_full: what went wrong there too (its address, what it answered), which is
+    the log's."""
     try:
-        return canonical_models(list_models(api_url, api_key or None)), ""
+        return canonical_models(list_models(api_url, api_key or None, fingerprint=fingerprint)), ""
     except VisionEndpointError as e:
         return [], f"{e} {e.detail}" if said_in_full and e.detail else str(e)
 
@@ -325,10 +358,11 @@ def _record(machine: AiMachine, models: list[str], error: str) -> None:
     machine.checked_at = utcnow()
 
 
-def _models_or_502(api_url: str, api_key: str | None, request: Request) -> list[str]:
+def _models_or_502(api_url: str, api_key: str | None, request: Request, *, fingerprint: str = "") -> list[str]:
     """The machine's models, or 502 machine_unreachable. Why, in full, only to a server admin: it's the log's,
     which is theirs (Admin › Logs), and said to anyone else it would map the network around the server."""
-    models, error = _ask(api_url, api_key, said_in_full=getattr(request.state, "server_admin", False) is True)
+    models, error = _ask(api_url, api_key, fingerprint=fingerprint,
+                         said_in_full=getattr(request.state, "server_admin", False) is True)
     if error:
         raise UpstreamError("machine_unreachable", error, {"api_url": api_url})
     return models
@@ -367,14 +401,18 @@ def get_ai(request: Request) -> AiSettings:
 def connect(body: ConnectIn, request: Request) -> Models:
     """Ask a machine which models it offers. 502 machine_unreachable when it
     can't say (why is logged, and said to a server admin); 422 invalid_url for
-    a URL that isn't plain http(s)."""
+    a URL that isn't plain http(s), invalid_fingerprint for a fingerprint that
+    isn't one, or isn't an https URL's."""
     api_url = _url(body.api_url)
-    key = body.api_key
-    if key is None and body.machine_id:
+    key, fingerprint = body.api_key, body.fingerprint
+    if body.machine_id and (key is None or fingerprint is None):
         with _control() as ctrl:
             machine = _machine(ctrl, request, body.machine_id)
-            key = key_of(machine) if machine.api_url == api_url else None
-    return Models(models=_models_or_502(api_url, key, request))
+            if key is None:
+                key = key_of(machine) if keeps_key(machine.api_url, api_url) else None
+            if fingerprint is None:
+                fingerprint = machine.fingerprint if api_url.startswith("https://") else ""
+    return Models(models=_models_or_502(api_url, key, request, fingerprint=_pin(api_url, fingerprint or "")))
 
 
 @router.post("/machines", response_model=AiSettings, status_code=201, dependencies=[Depends(require_tenant_admin)])
@@ -386,12 +424,14 @@ def add_machine(body: MachineIn, request: Request) -> AiSettings:
 
     tenant_id = request.state.tenant_id
     api_url = _url(body.api_url)
+    fingerprint = _pin(api_url, body.fingerprint)
     with _control() as ctrl:
         _name_free(ctrl, tenant_id, body.name)
-        models = _models_or_502(api_url, body.api_key, request)
+        models = _models_or_502(api_url, body.api_key, request, fingerprint=fingerprint)
         _check_jobs(ctrl.get(Tenant, tenant_id), body.jobs, models)
         machine = AiMachine(machine_id=f"aim_{ULID()}", tenant_id=tenant_id, name=body.name, api_url=api_url,
-                            jobs=body.jobs, at_once=body.at_once, enabled=body.enabled, shares_gpu=body.shares_gpu)
+                            fingerprint=fingerprint, jobs=body.jobs, at_once=body.at_once, enabled=body.enabled,
+                            shares_gpu=body.shares_gpu)
         set_key(machine, body.api_key)
         _record(machine, models, "")
         ctrl.add(machine)
@@ -410,27 +450,33 @@ def _commit_named(ctrl: Session, name: str | None) -> None:
 
 @router.patch("/machines/{machine_id}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
 def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiSettings:
-    """Change a machine: only the fields sent. When where it is, its key or
-    jobs change, or it's turned back on, it's asked again (502, 409 as when
-    added). Turning off the last machine doing a job, or taking the job from
-    it, just does it (Robert, Oct 9: never ask): the job's work waits, and
-    Settings → Processing says why."""
+    """Change a machine: only the fields sent. When where it is, its key,
+    certificate or jobs change, or it's turned back on, it's asked again (502,
+    409 as when added). Turning off the last machine doing a job, or taking the
+    job from it, just does it (Robert, Oct 9: never ask): the job's work waits,
+    and Settings → Processing says why."""
     tenant_id = request.state.tenant_id
     with _control() as ctrl:
         machine = _machine(ctrl, request, machine_id)
         if machine.built_in:
-            if body.api_url is not None or body.api_key is not None:
+            if body.api_url is not None or body.api_key is not None or body.fingerprint is not None:
                 raise _built_in_error("The built-in machine is the worker's own computer: it has no URL or key.")
             if body.jobs is not None and set(body.jobs) - BUILT_IN_JOBS:
                 can = " and ".join(JOBS[j].lower() for j in JOBS if j in BUILT_IN_JOBS)
                 raise _built_in_error(f"The built-in machine only does {can}: the rest need a server.")
-        was = (machine.api_url, key_of(machine), set(machine.jobs), machine.enabled)
+        was = (machine.api_url, key_of(machine), machine.fingerprint, set(machine.jobs), machine.enabled)
         if body.name is not None:
             _name_free(ctrl, tenant_id, body.name, machine_id)
             machine.name = body.name
         if body.api_url is not None and _url(body.api_url) != machine.api_url:
-            machine.api_url = _url(body.api_url)
-            machine.api_key = ""  # a key never goes along to another host unless given again
+            url = _url(body.api_url)
+            if not keeps_key(machine.api_url, url):
+                machine.api_key = ""  # a key never goes along to another host unless given again
+            machine.api_url = url
+        if body.fingerprint is not None:
+            machine.fingerprint = _pin(machine.api_url, body.fingerprint)
+        elif not machine.api_url.startswith("https://"):
+            machine.fingerprint = ""  # at an http address now: a certificate is only ever an https machine's
         if body.api_key is not None:
             set_key(machine, body.api_key)
         if body.jobs is not None:
@@ -441,15 +487,16 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiS
             machine.enabled = body.enabled
         if body.shares_gpu is not None and not machine.built_in:
             machine.shares_gpu = body.shares_gpu
-        # Asked again only for what needs it: where it is or its key changed,
-        # a job it hadn't, or turned back on. A rename or a new limit doesn't.
-        moved = (machine.api_url, key_of(machine)) != was[:2]
+        # Asked again only for what needs it: where it is, its key or its
+        # certificate changed, a job it hadn't, or turned back on. A rename or
+        # a new limit doesn't.
+        moved = (machine.api_url, key_of(machine), machine.fingerprint) != was[:3]
         if machine.built_in:
             # Nothing to ask: the worker checks it. A new job's model must be one it knows.
-            for added in sorted(set(machine.jobs) - was[2]):
+            for added in sorted(set(machine.jobs) - was[3]):
                 _check_jobs(ctrl.get(Tenant, tenant_id), [added], list(AI_JOBS[added].built_in_models))
-        elif machine.enabled and (moved or set(machine.jobs) - was[2] or not was[3]):
-            models = _models_or_502(machine.api_url, key_of(machine), request)
+        elif machine.enabled and (moved or set(machine.jobs) - was[3] or not was[4]):
+            models = _models_or_502(machine.api_url, key_of(machine), request, fingerprint=machine.fingerprint)
             _check_jobs(ctrl.get(Tenant, tenant_id), machine.jobs, models)
             _record(machine, models, "")
         ctrl.add(machine)
@@ -487,24 +534,39 @@ def _try_one(machine: AiMachine, model: str, artifacts: list[str], settings: dic
     from src.server import ai_sample
     from src.shared import ai_requests
     from src.shared.producers import PRODUCERS
-    from src.shared.vision_endpoint import answer_said, failed
+    from src.shared.vision_endpoint import (
+        NOT_ITS_CERTIFICATE,
+        UNTRUSTED,
+        answer_said,
+        failed,
+        untrusted,
+    )
 
     titles = [PRODUCERS[a].title for a in artifacts]
     what = "read" if TEXT in artifacts else "describe" if "max_edge" in settings else "describe_text"
     provider = OpenAICompatibleCaptionProvider(machine.api_url, model, key_of(machine) or None, settings=settings,
-                                               ocr_settings=settings)
+                                               ocr_settings=settings, fingerprint=machine.fingerprint)
     started = time.monotonic()
     try:
         got = provider.tried(what, image=ai_sample.picture(), text=ai_sample.SCENES, timeout=TRY_WAIT_SEC)
     except requests.Timeout:
         return Tried(titles=titles, problem=f"No answer within {TRY_WAIT_SEC:.0f} seconds.",
                      limit=int(settings["max_tokens"]), seconds=round(time.monotonic() - started, 1))
-    except (ai_requests.Redirected, ai_requests.AddressRefused) as e:
-        # Followed nowhere, as the work's requests aren't (where it pointed is the log's).
+    except (ai_requests.Redirected, ai_requests.AddressRefused, ai_requests.NotItsCertificate) as e:
+        # Followed nowhere, as the work's requests aren't (where it pointed is the log's); nothing sent to an address
+        # that isn't allowed, or a certificate that isn't the machine's.
         problem = ("It answered with a redirect, which Lumiverb doesn't follow."
-                   if isinstance(e, ai_requests.Redirected) else "That address isn't allowed.")
+                   if isinstance(e, ai_requests.Redirected)
+                   else f"{NOT_ITS_CERTIFICATE} Nothing was sent to it."
+                   if isinstance(e, ai_requests.NotItsCertificate) else "That address isn't allowed.")
         return Tried(titles=titles, problem=problem, limit=int(settings["max_tokens"]),
                      seconds=round(time.monotonic() - started, 1))
+    except requests.exceptions.SSLError as e:
+        # An https machine without its fingerprint whose certificate no trusted authority signed: said as Connect says
+        # it; any other TLS failure, as any request's that got no answer.
+        return Tried(titles=titles, problem=UNTRUSTED if untrusted(e) else "Couldn't get an answer" + (
+                         f": {failed(e)}." if said_in_full else "."),
+                     limit=int(settings["max_tokens"]), seconds=round(time.monotonic() - started, 1))
     except requests.HTTPError as e:
         status = e.response.status_code if e.response is not None else 0
         why = answer_said(e.response) if said_in_full and e.response is not None else ""
@@ -630,7 +692,7 @@ def set_job_model(job: str, body: JobModelIn, request: Request,
                     if machine.built_in:
                         models, error = list(AI_JOBS[job].built_in_models), ""
                     else:
-                        models, error = _ask(machine.api_url, key_of(machine))
+                        models, error = _ask(machine.api_url, key_of(machine), fingerprint=machine.fingerprint)
                         _record(machine, models, error)
                         ctrl.add(machine)
                     asked.append({"machine_id": machine.machine_id, "name": machine.name, "models": models,
@@ -670,7 +732,7 @@ def job_machines(job: str, request: Request) -> WorkerJob:
         tenant = ctrl.get(Tenant, tenant_id)
         return WorkerJob(job=job, model=_job_model(tenant, job), machines=[
             WorkerMachine(machine_id=m.machine_id, name=m.name, api_url=address_for(m, admin),
-                          api_key=key_for(m, scheduler),
+                          api_key=key_for(m, scheduler), fingerprint=m.fingerprint,
                           at_once=m.at_once, built_in=m.built_in, shares_gpu=m.shares_gpu or m.built_in)
             for m in _machines(ctrl, tenant_id) if m.enabled and job in m.jobs])
 

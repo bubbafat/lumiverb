@@ -18,7 +18,7 @@ import {
   type MachineTry,
 } from "../../api/client";
 import { AI_PRESETS, CUSTOM, presetOf } from "../../lib/aiPresets";
-import { OLLAMA_GUIDE } from "../../lib/guides";
+import { AI_WORKER_GUIDE, OLLAMA_GUIDE } from "../../lib/guides";
 
 const inputClass =
   "w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100 disabled:opacity-50";
@@ -199,6 +199,44 @@ function MachineStatusLine({ machine }: { machine: AiMachine }) {
   );
 }
 
+/** A machine reached over plain HTTP across the network: its key and what it's sent cross it as they are. One on this
+ * computer (localhost) crosses no network. Its address is an account admin's (null for anyone else): none, no mark. */
+function unencrypted(machine: AiMachine): boolean {
+  const address = machine.api_url;
+  if (machine.built_in || !address || !/^http:\/\//i.test(address)) return false;
+  let host: string;
+  try {
+    host = new URL(address).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return true;
+  }
+  return !(host === "localhost" || host === "::1" || host.startsWith("127."));
+}
+
+/** Lumiverb's AI worker: the one kind of machine besides the built-in one doing visual search and faces. */
+function aiWorker(machine: AiMachine): boolean {
+  return !machine.built_in && machine.jobs.some((j) => j === "clip" || j === "faces");
+}
+
+function Unencrypted({ worker }: { worker: boolean }) {
+  return (
+    <p className="text-xs text-amber-300">
+      Unencrypted (http://): its key and what it&apos;s sent cross the network as they are.
+      {worker && (
+        <>
+          {" "}
+          Lumiverb&apos;s AI worker serves HTTPS from this version: update it there and start it with --https (a
+          Mac&apos;s service: --install --https), then Edit this machine, change its address to https:// and give the
+          certificate fingerprint the worker prints.{" "}
+          <a href={AI_WORKER_GUIDE} target="_blank" rel="noopener noreferrer" className="underline hover:opacity-80">
+            How to
+          </a>
+        </>
+      )}
+    </p>
+  );
+}
+
 function MachineRow({ ai, machine, admin }: { ai: AiSettings; machine: AiMachine; admin: boolean }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -269,6 +307,12 @@ function MachineRow({ ai, machine, admin }: { ai: AiSettings; machine: AiMachine
         // Its address is an account admin's: anyone else gets null, and no line for it.
         machine.api_url && <p className="break-all font-mono text-xs text-gray-400">{machine.api_url}</p>
       )}
+      {machine.fingerprint && (
+        <p className="break-all text-xs text-gray-500">
+          Its certificate: <span className="font-mono">{machine.fingerprint}</span>
+        </p>
+      )}
+      {unencrypted(machine) && <Unencrypted worker={aiWorker(machine)} />}
       <p className="text-sm text-gray-300">
         {labels.length ? `Does: ${labels.join(", ")}` : "Does nothing yet"} · {machine.at_once} at once
         {machine.shares_gpu && " · video work comes first on its GPU"}
@@ -324,6 +368,7 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
   const [url, setUrl] = useState(machine?.api_url ?? "");
   const [key, setKey] = useState("");
   const [forgetKey, setForgetKey] = useState(false);
+  const [fingerprint, setFingerprint] = useState(machine?.fingerprint ?? "");
   const [jobs, setJobs] = useState<string[]>(machine?.jobs ?? []);
   // Jobs picked by hand: Connect leaves them as they are.
   const [picked, setPicked] = useState(!!machine);
@@ -337,10 +382,18 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
   const [kind, setKind] = useState(CUSTOM);
   const preset = presetOf(kind);
 
-  const sameUrl = !!machine && url.trim().replace(/\/+$/, "") === machine.api_url;
+  const trimmed = url.trim().replace(/\/+$/, "");
+  const sameUrl = !!machine && trimmed === machine.api_url;
+  // The same address over HTTPS (an AI worker switched to it): its saved key goes along, as it's the same machine.
+  const saved = machine?.api_url ?? "";  // an account admin's form: the address is theirs to read
+  const keyKept = sameUrl || (saved.startsWith("http://") && trimmed === `https://${saved.slice("http://".length)}`);
   // A key typed now; "" to save none; undefined keeps the saved one.
   const keyToSend = key ? key : forgetKey ? "" : machine ? undefined : "";
-  const moved = !builtIn && (!machine || !sameUrl || keyToSend !== undefined);
+  // An https machine's certificate: the only one taken from it ("" none). An http one has none to send.
+  const https = /^https:\/\//i.test(url.trim());
+  const fingerprintToSend = https ? fingerprint.trim() : undefined;
+  const pinChanged = !!machine && https && fingerprint.trim() !== (machine.fingerprint ?? "");
+  const moved = !builtIn && (!machine || !sameUrl || keyToSend !== undefined || pinChanged);
   // The jobs it can be given: the built-in machine's own, or any.
   const doable = ai.jobs.filter((j) => !builtIn || j.built_in);
   const edited = () => {
@@ -350,7 +403,8 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
 
   const connect = useMutation({
     mutationFn: () =>
-      connectMachine({ api_url: url.trim(), api_key: keyToSend, machine_id: sameUrl ? machine?.machine_id : undefined }),
+      connectMachine({ api_url: url.trim(), api_key: keyToSend, machine_id: keyKept ? machine?.machine_id : undefined,
+                       ...(fingerprintToSend !== undefined && { fingerprint: fingerprintToSend }) }),
     onMutate: () => setProblem(null),
     onSuccess: (offered) => {
       setModels(offered);
@@ -377,6 +431,7 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
       const fields: MachineFields = { name: name.trim(), api_url: url.trim(), jobs, at_once: atOnce, enabled,
                                       shares_gpu: sharesGpu };
       if (keyToSend !== undefined) fields.api_key = keyToSend;
+      if (fingerprintToSend !== undefined) fields.fingerprint = fingerprintToSend;
       return machine ? updateMachine(machine.machine_id, fields) : addMachine(fields);
     },
     onMutate: () => setProblem(null),
@@ -469,7 +524,7 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
               type="password"
               aria-label="API key"
               autoComplete="off"
-              placeholder={machine?.has_key && sameUrl && !forgetKey ? "Saved — leave blank to keep it" : "None"}
+              placeholder={machine?.has_key && keyKept && !forgetKey ? "Saved — leave blank to keep it" : "None"}
               value={key}
               className={inputClass}
               onChange={(e) => {
@@ -478,13 +533,13 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
               }}
             />
           </label>
-          {machine?.has_key && machine.key_readable === false && sameUrl && !key && (
+          {machine?.has_key && machine.key_readable === false && keyKept && !key && (
             <p className="text-sm text-amber-300">
               Its saved key can&apos;t be read on this server (it was saved on another, before a backup was restored
               here): enter it again.
             </p>
           )}
-          {machine?.has_key && sameUrl && !key && (
+          {machine?.has_key && keyKept && !key && (
             <label className="flex items-center gap-2 text-sm text-gray-300">
               <input
                 type="checkbox"
@@ -495,6 +550,28 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
                 }}
               />
               Remove the saved key
+            </label>
+          )}
+          {https && (
+            <label className="block space-y-1 text-sm text-gray-300">
+              <span>Certificate fingerprint</span>
+              <input
+                aria-label="Certificate fingerprint"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="None: a certificate a trusted authority signed"
+                value={fingerprint}
+                className={`${inputClass} font-mono`}
+                onChange={(e) => {
+                  setFingerprint(e.target.value);
+                  edited();
+                }}
+              />
+              <span className="block text-xs text-gray-500">
+                For Lumiverb&apos;s AI worker, or another machine whose certificate no public authority signed: the
+                SHA-256 fingerprint it prints when it starts. Lumiverb then takes that certificate from it and no
+                other. Leave it empty for a cloud service.
+              </span>
             </label>
           )}
           <div className="flex flex-wrap items-center gap-3">

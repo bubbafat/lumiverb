@@ -152,35 +152,59 @@ WantedBy=multi-user.target</code></pre>
 <div class="cmd"><pre><code>sudo systemctl enable --now lumiverb-ai-worker</code></pre></div>
 <p>Its log:</p>
 <div class="cmd"><pre><code>journalctl -u lumiverb-ai-worker -f</code></pre></div>
-<h2 id="its-key">Its key<a class="anchor" href="#its-key" aria-label="Link to this section">#</a></h2>
-<p>Every request to the worker needs its key, so only your Lumiverb can use it. The worker makes one the first time and keeps it. On a Mac:</p>
+<h2 id="its-key-and-its-certificate">Its key and its certificate<a class="anchor" href="#its-key-and-its-certificate" aria-label="Link to this section">#</a></h2>
+<p>Every request to the worker needs its key, so only your Lumiverb can use it. The worker serves HTTPS with a certificate of its own, and your Lumiverb takes that certificate and no other, by its fingerprint: the key and the photos it's sent cross your network encrypted, to the worker alone. It makes both the first time and keeps them, in <code>ai-worker/</code> in its data folder.</p>
+<p>When it starts, and when it's installed with <code>--install</code>, it prints what to add: its <code>https://</code> address, its certificate's fingerprint, and how to see its key. On a Mac:</p>
 <div class="cmd"><pre><code>lumiverb-server ai-worker --env "$(brew --prefix)/etc/lumiverb/env" --show-key</code></pre></div>
-<p>On Linux, once the unit has started, it's in the data folder (<code>DATA_DIR</code> in <code>/etc/lumiverb/env</code>, <code>/var/lib/lumiverb</code> unless you chose another):</p>
+<div class="cmd"><pre><code>lumiverb-server ai-worker --env "$(brew --prefix)/etc/lumiverb/env" --show-fingerprint</code></pre></div>
+<p>On Linux, once the unit has started, its key is in the data folder (<code>DATA_DIR</code> in <code>/etc/lumiverb/env</code>, <code>/var/lib/lumiverb</code> unless you chose another), and its log says the rest:</p>
 <div class="cmd"><pre><code>sudo cat /var/lib/lumiverb/ai-worker/key</code></pre></div>
+<div class="cmd"><pre><code>sudo journalctl -u lumiverb-ai-worker | grep -A2 "add a machine"</code></pre></div>
 <h2 id="add-it-to-your-server">Add it to your server<a class="anchor" href="#add-it-to-your-server" aria-label="Link to this section">#</a></h2>
 <p>As an admin, in the Lumiverb it should help:</p>
 <ol>
 <li><strong>Settings › AI › Add machine</strong>. Leave <strong>Where</strong> at Custom URL.</li>
 <li><strong>Name</strong>: anything, such as &quot;Gaming PC&quot;.</li>
-<li><strong>Endpoint URL</strong>: <code>http://</code> and that computer's address, then <code>:6366/v1</code>, such as <code>http://192.168.1.30:6366/v1</code>.</li>
+<li><strong>Endpoint URL</strong>: <code>https://</code> and that computer's address, then <code>:6366/v1</code>, such as <code>https://192.168.1.30:6366/v1</code>.</li>
+<li><strong>Certificate fingerprint</strong>: the one the worker printed, such as <code>7F:3A:…</code> (32 pairs).</li>
 <li><strong>API key (optional)</strong>: the worker's key.</li>
 <li>Click <strong>Connect</strong>. It says &quot;Connected: offers ViT-B-32, buffalo_l&quot;.</li>
 <li>Under <strong>Does</strong>, tick <strong>Visual search (CLIP)</strong> and <strong>Faces</strong>, then <strong>Add</strong>.</li>
 </ol>
+<p>From the command line, the same with <code>lumiverb ai machines add Worker --url https://192.168.1.30:6366/v1 --fingerprint 7F:3A:… --jobs clip,faces --key</code>.</p>
+<p>If the worker's certificate is ever not the one it was added with (its data folder made again, say, or another computer at that address), its row says &quot;Its certificate isn't the one it was added with&quot;, and nothing is sent to it. <strong>Edit</strong> it and give the fingerprint the worker prints now.</p>
 <p>The machine's row then says &quot;Online · checked …&quot;, or &quot;Offline:&quot; and why. Lumiverb checks every machine every minute.</p>
 <p>The server's own <strong>Built in</strong> machine keeps doing visual search and faces too, and work is spread across both. To leave them to the worker, click <strong>Edit</strong> on Built in and untick them under <strong>Does</strong>.</p>
 <h2 id="requests-at-once">Requests at once<a class="anchor" href="#requests-at-once" aria-label="Link to this section">#</a></h2>
 <p>Each machine works on one photo at a time on its GPU. <strong>Requests at once</strong> in Settings › AI (2 to begin with) is how many the server sends it together, so the next is ready when one finishes. The worker itself takes 2 at once unless started with <code>--at-once N</code>.</p>
 <h2 id="its-network">Its network<a class="anchor" href="#its-network" aria-label="Link to this section">#</a></h2>
-<p>The worker listens on port 6366 on every network interface, over plain HTTP. <code>--port</code> and <code>--host</code> change that; on a Mac, give them with <code>--install</code> so the service keeps them. Its key keeps others from using it, but the previews it's sent cross your network unencrypted, as they do to an Ollama machine. Run it only on a network you trust.</p>
-<p>If <strong>Connect</strong> can't reach it, check that the worker is running (its log), that the address and port are right, and that nothing on that computer blocks port 6366.</p>
+<p>The worker listens on port 6366 on every network interface, over HTTPS. <code>--port</code> and <code>--host</code> change that; on a Mac, give them with <code>--install</code> so the service keeps them.</p>
+<p>If <strong>Connect</strong> can't reach it, check that the worker is running (its log), that the address and port are right, that it starts with <code>https://</code> and has the certificate fingerprint, and that nothing on that computer blocks port 6366. Without the fingerprint, <strong>Connect</strong> says its certificate isn't signed by an authority the server trusts.</p>
+<h2 id="a-worker-from-before-https">A worker from before HTTPS<a class="anchor" href="#a-worker-from-before-https" aria-label="Link to this section">#</a></h2>
+<p>A worker set up before it served HTTPS goes on serving plain HTTP after an update, as your Lumiverb has its <code>http://</code> address: nothing stops working. Its log says so loudly each time it starts, and Settings › AI marks the machine as unencrypted. To switch:</p>
+<ol>
+<li>
+<p>Start it with <code>--https</code>. On a Mac:</p>
+<div class="cmd"><pre><code>lumiverb-server ai-worker --env "$(brew --prefix)/etc/lumiverb/env" --install --https</code></pre></div>
+<p>On Linux, add <code>--https</code> to the end of <code>ExecStart</code> in its unit, then:</p>
+<div class="cmd"><pre><code>sudo systemctl daemon-reload</code></pre></div>
+<div class="cmd"><pre><code>sudo systemctl restart lumiverb-ai-worker</code></pre></div>
+</li>
+<li>
+<p>It makes its certificate and prints what to add. Until the next step, your Lumiverb can't reach it.</p>
+</li>
+<li>
+<p>In Settings › AI, <strong>Edit</strong> the machine: change <code>http://</code> to <code>https://</code> in its URL (its saved key stays), paste the <strong>Certificate fingerprint</strong>, <strong>Connect</strong>, then <strong>Save</strong>.</p>
+</li>
+</ol>
+<p><code>--plain-http</code> serves plain HTTP on purpose, said just as loudly: its key and the previews it's sent cross your network unencrypted, as they do to an Ollama machine. Use it only on a network you trust.</p>
 
       </article>
       <nav class="pager" aria-label="Previous and next"><a class="prev" href="devices.html"><span>Previous</span>Libraries on another computer</a><a class="next" href="plugins.html"><span>Next</span>Plug-ins</a></nav>
       <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/ai-worker.md">This page on GitHub</a></p>
     </main>
 
-    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-the-ai-worker-is">What the AI worker is</a></li><li><a href="#on-a-mac">On a Mac</a></li><li><a href="#on-linux">On Linux</a></li><li><a href="#its-key">Its key</a></li><li><a href="#add-it-to-your-server">Add it to your server</a></li><li><a href="#requests-at-once">Requests at once</a></li><li><a href="#its-network">Its network</a></li></ul></nav>
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-the-ai-worker-is">What the AI worker is</a></li><li><a href="#on-a-mac">On a Mac</a></li><li><a href="#on-linux">On Linux</a></li><li><a href="#its-key-and-its-certificate">Its key and its certificate</a></li><li><a href="#add-it-to-your-server">Add it to your server</a></li><li><a href="#requests-at-once">Requests at once</a></li><li><a href="#its-network">Its network</a></li><li><a href="#a-worker-from-before-https">A worker from before HTTPS</a></li></ul></nav>
   </div>
 </body>
 </html>

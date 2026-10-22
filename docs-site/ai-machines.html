@@ -163,6 +163,7 @@
 <li>Open <strong>Settings › AI</strong> and click <strong>Add machine</strong>.</li>
 <li>Under <strong>Where</strong>, choose Ollama on this computer, Ollama on another computer, OpenAI, Anthropic (Claude), Google Gemini, or Custom URL (any other OpenAI-compatible server). It fills in the <strong>Endpoint URL</strong> and <strong>Name</strong>, and says whether it needs a key.</li>
 <li>Paste the <strong>API key</strong>, if it needs one.</li>
+<li>For an <code>https://</code> URL whose certificate no public authority signed, such as Lumiverb's own <a href="ai-worker.html">AI worker</a>, paste its <strong>Certificate fingerprint</strong>: Lumiverb then takes that certificate from it and no other. Leave it empty for a cloud service: its certificate is checked as any https site's is.</li>
 <li>Click <strong>Connect</strong>. It lists the models the machine offers.</li>
 <li>Under <strong>Does</strong>, tick its jobs. Those whose model it offers are ticked already.</li>
 <li>Set <strong>Requests at once</strong>: how many it works on together. More needs more memory there.</li>
@@ -228,6 +229,9 @@
 <p>Lumiverb checks every machine each minute. Each shows <strong>Online</strong>, or <strong>Offline</strong> with the reason; an offline one's work goes to the others. With no machine for a job online, Settings › AI shows the job as paused, with a dot beside AI in Settings. The work waits until it's fixed, and no clip is marked as failed for it.</p>
 <p>The reason is in Lumiverb's words, such as &quot;refused the key&quot; or &quot;answered 500&quot;, as everyone signed in can see it. What the machine itself answered is in the server's log, <strong>Admin › Logs</strong>, for the server's admin.</p>
 <p>Lumiverb sends a machine's work, and its key, only to the address you gave it. A machine that answers with a redirect to somewhere else is offline: Lumiverb doesn't follow it. The address is checked again at every request, as when the machine was added: this computer and your network are fine; link-local and cloud metadata addresses never are.</p>
+<p>A machine added with a certificate fingerprint whose certificate isn't that one any more is offline too, saying &quot;Its certificate isn't the one it was added with&quot;: nothing is sent to it. If its certificate really changed, <strong>Edit</strong> it and give the new fingerprint.</p>
+<h2 id="unencrypted-machines">Unencrypted machines<a class="anchor" href="#unencrypted-machines" aria-label="Link to this section">#</a></h2>
+<p>A machine at an <code>http://</code> address on another computer is marked <strong>Unencrypted</strong>: its key and the photos it's sent cross your network as they are. Ollama serves only plain HTTP, so use one on another computer only on a network you trust. Lumiverb's own AI worker serves HTTPS: one set up before it did is marked with how to switch it (see <a href="ai-worker.html#a-worker-from-before-https">A second machine for search and faces</a>). A machine on this computer (<code>localhost</code>) crosses no network and isn't marked.</p>
 <h2 id="keys-stay-sealed">Keys stay sealed<a class="anchor" href="#keys-stay-sealed" aria-label="Link to this section">#</a></h2>
 <p>A machine's key is never shown again once saved, to anyone. Editing a machine, leave the key blank to keep it, or tick <strong>Remove the saved key</strong>. Keys are sealed in the database with a key from the install's env file, so a backup alone can't read them: keep a copy of the env file with your backups (see <a href="backups.html#keep-a-copy-of-the-env-file">Backups and restore</a>). Restored without it, a machine says its saved key can't be read here: enter it again.</p>
 <h2 id="costs">Costs<a class="anchor" href="#costs" aria-label="Link to this section">#</a></h2>
@@ -239,14 +243,14 @@
 <div class="cmd"><pre><code>lumiverb ai machines add Ollama --url http://localhost:11434/v1 --jobs vision</code></pre></div>
 <div class="cmd"><pre><code>lumiverb ai model vision qwen3-vl:8b-instruct</code></pre></div>
 <div class="cmd"><pre><code>lumiverb ai machines test Ollama</code></pre></div>
-<p>The jobs are called <code>vision</code> (descriptions &amp; text), <code>transcripts</code>, <code>clip</code> and <code>faces</code>. <code>--key</code> asks for a machine's key at a prompt, so it never appears on the command line. More in <a href="command-line.html">The command line</a>.</p>
+<p>The jobs are called <code>vision</code> (descriptions &amp; text), <code>transcripts</code>, <code>clip</code> and <code>faces</code>. <code>--key</code> asks for a machine's key at a prompt, so it never appears on the command line. <code>--fingerprint</code> gives an https machine's certificate fingerprint (on <code>add</code>, <code>edit</code> and <code>models</code>; <code>--fingerprint ''</code> on <code>edit</code> forgets it). More in <a href="command-line.html">The command line</a>.</p>
 
       </article>
       <nav class="pager" aria-label="Previous and next"><a class="prev" href="libraries.html"><span>Previous</span>Libraries</a><a class="next" href="users-and-roles.html"><span>Next</span>Users and roles</a></nav>
       <p class="source"><a href="https://github.com/bubbafat/lumiverb/blob/main/docs/guide/ai-machines.md">This page on GitHub</a></p>
     </main>
 
-    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-needs-a-machine">What needs a machine</a></li><li><a href="#the-built-in-machine">The Built in machine</a></li><li><a href="#adding-a-machine">Adding a machine</a></li><li><a href="#ollama">Ollama</a></li><li><a href="#cloud-services">Cloud services</a></li><li><a href="#choosing-each-jobs-model">Choosing each job&#x27;s model</a></li><li><a href="#testing-a-machine">Testing a machine</a></li><li><a href="#when-a-machine-is-offline">When a machine is offline</a></li><li><a href="#keys-stay-sealed">Keys stay sealed</a></li><li><a href="#costs">Costs</a></li><li><a href="#from-the-command-line">From the command line</a></li></ul></nav>
+    <nav class="toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#what-needs-a-machine">What needs a machine</a></li><li><a href="#the-built-in-machine">The Built in machine</a></li><li><a href="#adding-a-machine">Adding a machine</a></li><li><a href="#ollama">Ollama</a></li><li><a href="#cloud-services">Cloud services</a></li><li><a href="#choosing-each-jobs-model">Choosing each job&#x27;s model</a></li><li><a href="#testing-a-machine">Testing a machine</a></li><li><a href="#when-a-machine-is-offline">When a machine is offline</a></li><li><a href="#unencrypted-machines">Unencrypted machines</a></li><li><a href="#keys-stay-sealed">Keys stay sealed</a></li><li><a href="#costs">Costs</a></li><li><a href="#from-the-command-line">From the command line</a></li></ul></nav>
   </div>
 </body>
 </html>

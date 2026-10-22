@@ -70,18 +70,28 @@ Its log:
 journalctl -u lumiverb-ai-worker -f
 ```
 
-## Its key
+## Its key and its certificate
 
-Every request to the worker needs its key, so only your Lumiverb can use it. The worker makes one the first time and keeps it. On a Mac:
+Every request to the worker needs its key, so only your Lumiverb can use it. The worker serves HTTPS with a certificate of its own, and your Lumiverb takes that certificate and no other, by its fingerprint: the key and the photos it's sent cross your network encrypted, to the worker alone. It makes both the first time and keeps them, in `ai-worker/` in its data folder.
+
+When it starts, and when it's installed with `--install`, it prints what to add: its `https://` address, its certificate's fingerprint, and how to see its key. On a Mac:
 
 ```bash
 lumiverb-server ai-worker --env "$(brew --prefix)/etc/lumiverb/env" --show-key
 ```
 
-On Linux, once the unit has started, it's in the data folder (`DATA_DIR` in `/etc/lumiverb/env`, `/var/lib/lumiverb` unless you chose another):
+```bash
+lumiverb-server ai-worker --env "$(brew --prefix)/etc/lumiverb/env" --show-fingerprint
+```
+
+On Linux, once the unit has started, its key is in the data folder (`DATA_DIR` in `/etc/lumiverb/env`, `/var/lib/lumiverb` unless you chose another), and its log says the rest:
 
 ```bash
 sudo cat /var/lib/lumiverb/ai-worker/key
+```
+
+```bash
+sudo journalctl -u lumiverb-ai-worker | grep -A2 "add a machine"
 ```
 
 ## Add it to your server
@@ -90,10 +100,15 @@ As an admin, in the Lumiverb it should help:
 
 1. **Settings › AI › Add machine**. Leave **Where** at Custom URL.
 2. **Name**: anything, such as "Gaming PC".
-3. **Endpoint URL**: `http://` and that computer's address, then `:6366/v1`, such as `http://192.168.1.30:6366/v1`.
-4. **API key (optional)**: the worker's key.
-5. Click **Connect**. It says "Connected: offers ViT-B-32, buffalo_l".
-6. Under **Does**, tick **Visual search (CLIP)** and **Faces**, then **Add**.
+3. **Endpoint URL**: `https://` and that computer's address, then `:6366/v1`, such as `https://192.168.1.30:6366/v1`.
+4. **Certificate fingerprint**: the one the worker printed, such as `7F:3A:…` (32 pairs).
+5. **API key (optional)**: the worker's key.
+6. Click **Connect**. It says "Connected: offers ViT-B-32, buffalo_l".
+7. Under **Does**, tick **Visual search (CLIP)** and **Faces**, then **Add**.
+
+From the command line, the same with `lumiverb ai machines add Worker --url https://192.168.1.30:6366/v1 --fingerprint 7F:3A:… --jobs clip,faces --key`.
+
+If the worker's certificate is ever not the one it was added with (its data folder made again, say, or another computer at that address), its row says "Its certificate isn't the one it was added with", and nothing is sent to it. **Edit** it and give the fingerprint the worker prints now.
 
 The machine's row then says "Online · checked …", or "Offline:" and why. Lumiverb checks every machine every minute.
 
@@ -105,6 +120,31 @@ Each machine works on one photo at a time on its GPU. **Requests at once** in Se
 
 ## Its network
 
-The worker listens on port 6366 on every network interface, over plain HTTP. `--port` and `--host` change that; on a Mac, give them with `--install` so the service keeps them. Its key keeps others from using it, but the previews it's sent cross your network unencrypted, as they do to an Ollama machine. Run it only on a network you trust.
+The worker listens on port 6366 on every network interface, over HTTPS. `--port` and `--host` change that; on a Mac, give them with `--install` so the service keeps them.
 
-If **Connect** can't reach it, check that the worker is running (its log), that the address and port are right, and that nothing on that computer blocks port 6366.
+If **Connect** can't reach it, check that the worker is running (its log), that the address and port are right, that it starts with `https://` and has the certificate fingerprint, and that nothing on that computer blocks port 6366. Without the fingerprint, **Connect** says its certificate isn't signed by an authority the server trusts.
+
+## A worker from before HTTPS
+
+A worker set up before it served HTTPS goes on serving plain HTTP after an update, as your Lumiverb has its `http://` address: nothing stops working. Its log says so loudly each time it starts, and Settings › AI marks the machine as unencrypted. To switch:
+
+1. Start it with `--https`. On a Mac:
+
+   ```bash
+   lumiverb-server ai-worker --env "$(brew --prefix)/etc/lumiverb/env" --install --https
+   ```
+
+   On Linux, add `--https` to the end of `ExecStart` in its unit, then:
+
+   ```bash
+   sudo systemctl daemon-reload
+   ```
+
+   ```bash
+   sudo systemctl restart lumiverb-ai-worker
+   ```
+
+2. It makes its certificate and prints what to add. Until the next step, your Lumiverb can't reach it.
+3. In Settings › AI, **Edit** the machine: change `http://` to `https://` in its URL (its saved key stays), paste the **Certificate fingerprint**, **Connect**, then **Save**.
+
+`--plain-http` serves plain HTTP on purpose, said just as loudly: its key and the previews it's sent cross your network unencrypted, as they do to an Ollama machine. Use it only on a network you trust.

@@ -32,10 +32,13 @@ END_SLACK_SEC = 30.0
 
 
 class OpenAITranscriber(Transcriber):
-    def __init__(self, api_url: str, api_key: str | None, model: str, *, timeout: float | None = None) -> None:
+    def __init__(self, api_url: str, api_key: str | None, model: str, *, fingerprint: str = "",
+                 timeout: float | None = None) -> None:
+        """fingerprint: the certificate an https server was added with (src/shared/ai_requests.py)."""
         self._url = f"{api_url.rstrip('/')}/audio/transcriptions"
         self._key = api_key
         self._model = model
+        self._fingerprint = fingerprint
         self._timeout = timeout
 
     def transcribe(self, speech_wav: Path) -> Heard:
@@ -45,11 +48,12 @@ class OpenAITranscriber(Transcriber):
         try:
             with open(speech_wav, "rb") as audio:
                 resp = ai_requests.post(self._url, headers=headers, timeout=(CONNECT_TIMEOUT_SEC, allowed),
+                                        fingerprint=self._fingerprint,
                                         files={"file": ("speech.wav", audio, "audio/wav")},
                                         data={"model": self._model, "response_format": "verbose_json",
                                               "timestamp_granularities[]": "segment",
                                               "vad_filter": "false", "without_timestamps": "false"})
-        except (ai_requests.AddressRefused, ai_requests.Redirected) as e:
+        except (ai_requests.AddressRefused, ai_requests.NotItsCertificate, ai_requests.Redirected) as e:
             raise TranscriptError(str(e), endpoint_fault=True) from None
         except requests.ConnectTimeout as e:
             raise TranscriptError(f"Couldn't reach {self._url}: it didn't answer.", endpoint_fault=True) from e

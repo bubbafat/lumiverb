@@ -290,30 +290,53 @@ sudo systemctl enable --now lumiverb-ai-worker
 ```
 
 It listens on port 6366 on every network interface (`--port`, `--host`),
-over plain HTTP. Every request needs its key, so only Lumiverb can use it,
-but the previews it's sent cross your network unencrypted, as they do to an
-Ollama machine. Run it only on a network you trust. Its key:
+over HTTPS with a certificate of its own, made the first time it starts
+(kept in `ai-worker/` in its data folder). Every request needs its key, so
+only Lumiverb can use it, and Lumiverb takes its certificate and no other,
+by the fingerprint you add it with, so its key and the previews it's sent
+cross your network encrypted, to it alone. When it starts, and on
+`--install`, it prints what to add: its `https://` address, its
+certificate's fingerprint, and how to see its key:
 
 ```bash
 lumiverb-server ai-worker --env /opt/homebrew/etc/lumiverb/env --show-key
 ```
 
-On Linux, once the unit has started, it's in the data folder (`DATA_DIR`
-in `/etc/lumiverb/env`, `/var/lib/lumiverb` unless you chose another):
+```bash
+lumiverb-server ai-worker --env /opt/homebrew/etc/lumiverb/env --show-fingerprint
+```
+
+On Linux, once the unit has started, its key is in the data folder
+(`DATA_DIR` in `/etc/lumiverb/env`, `/var/lib/lumiverb` unless you chose
+another), and its log has the rest:
 
 ```bash
 sudo cat /var/lib/lumiverb/ai-worker/key
 ```
 
+```bash
+sudo journalctl -u lumiverb-ai-worker | grep -A2 "add a machine"
+```
+
 Then, as an admin, in the Lumiverb it should help:
 
 1. **Settings › AI › Add machine**: a name, the URL
-   `http://<that computer's address>:6366/v1` and the key, then **Connect**.
-   It lists `ViT-B-32` and `buffalo_l`.
+   `https://<that computer's address>:6366/v1`, the **Certificate
+   fingerprint** and the key, then **Connect**. It lists `ViT-B-32` and
+   `buffalo_l`.
 2. Under **Does**, tick **Visual search (CLIP)** and **Faces**, then **Add**.
 
 The server's own **Built in** machine keeps doing them too, unless you
 untick them there. Each machine works on one photo at a time on its GPU.
+
+A worker set up before it served HTTPS goes on serving plain HTTP after an
+update, as the Lumiverb using it has its `http://` address, and says so
+loudly in its log (Settings › AI marks that machine as unencrypted). To
+switch, start it with `--https` (on a Mac, `--install --https`; on Linux,
+add `--https` to `ExecStart` and restart the unit), then **Edit** the
+machine: change its URL to `https://`, keep its saved key, paste the
+certificate fingerprint it printed, **Connect** and **Save**. `--plain-http`
+serves plain HTTP on purpose, said just as loudly.
 
 ## Plug-ins
 

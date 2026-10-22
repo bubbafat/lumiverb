@@ -114,6 +114,12 @@ def set_key(machine: AiMachine, key: str) -> None:
     machine.api_key = seal(key)
 
 
+def keeps_key(was: str, now: str) -> bool:
+    """Whether a machine's saved key goes along when its URL changes from `was` to `now`: only to the same URL, or to
+    the same one over HTTPS (an AI worker switched to it). Never to another host."""
+    return now == was or (was.startswith("http://") and now == "https://" + was.removeprefix("http://"))
+
+
 def key_for(machine: AiMachine | None, scheduler: bool) -> str:
     """A machine's key as the caller may read it: the scheduler's own key's, to send it work; "" for anyone else,
     an account admin too (write-only: Settings › AI says only whether one is saved), and for one this install
@@ -186,6 +192,8 @@ def update_vision(ctrl: Session, tenant: Tenant, *, api_url: str | None, api_key
             machine = new_vision_machine(ctrl, tenant.tenant_id, url)
         else:
             machine.api_url = url
+            if not url.startswith("https://"):
+                machine.fingerprint = ""  # a certificate is only ever an https machine's
     if api_key is not None and machine is not None:
         set_key(machine, api_key)
     if machine is not None:

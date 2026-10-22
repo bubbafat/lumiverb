@@ -49,6 +49,8 @@ class Machine:
     api_url: str
     api_key: str | None
     at_once: int
+    # The certificate an https machine was added with, the only one taken from it ("": any trusted one).
+    fingerprint: str = ""
     # The worker's own computer (no URL): it does the job itself.
     built_in: bool = False
     # It shares the GPU video is decoded on here: video work comes first.
@@ -91,9 +93,9 @@ class MachinePool:
         """The job's model and machines, from the server (raises when it can't say).
         Machines already known are updated in place, so requests in flight keep
         counting against them; ones no longer listed are dropped. A machine
-        whose address or key changed, or every machine when the model did, is
-        checked again before it's sent anything (the next request checks it),
-        so nothing the old model makes is saved as the new one's."""
+        whose address, key or certificate changed, or every machine when the
+        model did, is checked again before it's sent anything (the next request
+        checks it), so nothing the old model makes is saved as the new one's."""
         data = self._client.get(f"/v1/ai/jobs/{self.job}").json()
         model = data.get("model") or ""
         with self._cond:
@@ -101,13 +103,16 @@ class MachinePool:
             machines = []
             for m in data.get("machines") or []:
                 api_key = m.get("api_key") or None
+                fingerprint = m.get("fingerprint") or ""
                 machine = known.get(m["machine_id"])
                 if machine is None:
                     machine = Machine(machine_id=m["machine_id"], name=m["name"], api_url=m["api_url"],
-                                      api_key=api_key, at_once=1)
-                elif model != self.model or (machine.api_url, machine.api_key) != (m["api_url"], api_key):
+                                      api_key=api_key, at_once=1, fingerprint=fingerprint)
+                elif model != self.model or (machine.api_url, machine.api_key, machine.fingerprint) != (
+                        m["api_url"], api_key, fingerprint):
                     machine.online, machine.serves, machine.checked_at = False, "", None
                 machine.name, machine.api_url, machine.api_key = m["name"], m["api_url"], api_key
+                machine.fingerprint = fingerprint
                 machine.at_once = max(1, int(m.get("at_once") or 1))
                 machine.built_in = bool(m.get("built_in"))
                 machine.shares_gpu = bool(m.get("shares_gpu")) or (machine.built_in and self._built_in_yields)
@@ -201,7 +206,7 @@ class MachinePool:
                                      else self._check_built_in())
         else:
             try:
-                models = list_models(machine.api_url, machine.api_key)
+                models = list_models(machine.api_url, machine.api_key, fingerprint=machine.fingerprint)
                 serves = served_as(models, model) or ""
                 error = "" if serves else f"{machine.api_url} doesn't offer {model}."
             except VisionEndpointError as e:
@@ -281,8 +286,8 @@ class _OnAMachine:
         self._lock = threading.Lock()
 
     def _provider(self, machine: Machine) -> Any:
-        # A machine whose address, key or model name changed gets a new one.
-        key = (machine.machine_id, machine.api_url, machine.api_key, machine.serves)
+        # A machine whose address, key, certificate or model name changed gets a new one.
+        key = (machine.machine_id, machine.api_url, machine.api_key, machine.fingerprint, machine.serves)
         with self._lock:
             if key not in self._providers:
                 self._providers = {k: v for k, v in self._providers.items() if k[0] != machine.machine_id}

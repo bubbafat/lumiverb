@@ -53,7 +53,7 @@ class WorkerFaces:
     def __init__(self, machine: Machine) -> None:
         from src.processing.ai_worker_client import AiWorker
 
-        self._worker = AiWorker(machine.api_url, machine.api_key, error=FaceError)
+        self._worker = AiWorker(machine.api_url, machine.api_key, fingerprint=machine.fingerprint, error=FaceError)
 
     def detect(self, image: bytes, settings: dict) -> dict:
         return self._worker.faces(image, settings)

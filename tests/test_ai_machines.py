@@ -44,8 +44,8 @@ def _machines(answers: dict):
     ids, an HTTP status, or an exception to raise. Unknown URLs refuse."""
     seen: list[dict] = []
 
-    def get(url, headers=None, timeout=None, **_kwargs):
-        seen.append({"url": url, "headers": headers or {}})
+    def get(url, headers=None, timeout=None, fingerprint="", **_kwargs):
+        seen.append({"url": url, "headers": headers or {}, "fingerprint": fingerprint})
         answer = answers.get(url.removesuffix("/models"), requests.ConnectionError("refused"))
         if isinstance(answer, BaseException):
             raise answer
@@ -311,10 +311,10 @@ def test_the_scheduler_gets_a_jobs_machines_with_their_keys(env, none):
     gaming_pc, studio = (_machine(_ai(env), name)["machine_id"] for name in ("Gaming PC", "Studio"))
     scheduler = scheduler_client(env[4])
     assert scheduler.get("/v1/ai/jobs/vision").json() == {"job": "vision", "model": QWEN, "machines": [
-        {"machine_id": gaming_pc, "name": "Gaming PC", "api_url": GAMING_PC, "api_key": "sk-1", "at_once": 2,
+        {"machine_id": gaming_pc, "name": "Gaming PC", "api_url": GAMING_PC, "api_key": "sk-1", "fingerprint": "",
+         "at_once": 2, "built_in": False, "shares_gpu": False},
+        {"machine_id": studio, "name": "Studio", "api_url": STUDIO, "api_key": "", "fingerprint": "", "at_once": 4,
          "built_in": False, "shares_gpu": False},
-        {"machine_id": studio, "name": "Studio", "api_url": STUDIO, "api_key": "", "at_once": 4, "built_in": False,
-         "shares_gpu": False},
     ]}
     pool = MachinePool(scheduler, "vision")
     pool.load()
@@ -833,6 +833,104 @@ def test_a_machine_moved_to_another_url_leaves_its_key_behind(env, none):
     assert r.status_code == 200, r.text
     assert "Authorization" not in seen[-1]["headers"]  # never sent to the new host
     assert _machine(r.json(), "Box")["has_key"] is False
+
+
+WORKER = "https://10.10.10.3:6366/v1"
+PINNED = ":".join(["7F"] * 32)
+
+
+@pytest.mark.slow
+def test_an_https_machine_is_reached_by_the_certificate_it_was_added_with_alone(env, none, tmp_path):
+    """A machine on this computer serving HTTPS with a certificate signed by nobody, as Lumiverb's AI worker does:
+    added with its fingerprint (typed any way, kept one way), it's asked, checked by the scheduler and given work
+    by that certificate alone; another's is said plainly, and none is checked as any https site's is."""
+    from src.processing.ai_pool import MachinePool
+    from src.shared.vision_endpoint import NOT_ITS_CERTIFICATE, UNTRUSTED
+    from tests.ai_machine_server import MODEL, certificate, local_machine
+    from tests.producer_fakes import scheduler_client
+
+    client, headers, *_ = env
+    (files, pinned), (_, another) = certificate(tmp_path / "worker"), certificate(tmp_path / "another")
+    with local_machine(tls=files) as machine:
+        for fingerprint, says in ((another, NOT_ITS_CERTIFICATE), ("", UNTRUSTED)):
+            r = _add(env, name="Worker", api_url=machine.url, fingerprint=fingerprint)
+            assert r.status_code == 502 and r.json()["error"]["message"] == says, r.text
+            r = client.post("/v1/ai/connect", json={"api_url": machine.url, "fingerprint": fingerprint},
+                            headers=headers)
+            assert r.status_code == 502 and r.json()["error"]["message"] == says, r.text
+        assert machine.asked == [], "nothing was asked of it without its own certificate"
+        r = _add(env, name="Worker", api_url=machine.url, fingerprint=pinned.lower().replace(":", ""))
+        assert r.status_code == 201, r.text
+        m = _machine(r.json(), "Worker")
+        assert (m["api_url"], m["fingerprint"], m["status"]["online"]) == (machine.url, pinned, True)
+        assert _model(env, "vision", MODEL, redo=False).status_code == 200
+
+        scheduler = scheduler_client(env[4])
+        [worker] = scheduler.get("/v1/ai/jobs/vision").json()["machines"]
+        assert worker["fingerprint"] == pinned
+        pool = MachinePool(scheduler, "vision")
+        assert pool.check() is True, pool.error
+        assert [(m.name, m.fingerprint, m.online) for m in pool.machines] == [("Worker", pinned, True)]
+
+        # Given another certificate's, it's asked again, and says so.
+        r = client.patch(f"/v1/ai/machines/{m['machine_id']}", json={"fingerprint": another}, headers=headers)
+        assert r.status_code == 502 and r.json()["error"]["message"] == NOT_ITS_CERTIFICATE, r.text
+        assert _machine(_ai(env), "Worker")["fingerprint"] == pinned, "nothing changed"
+
+
+@pytest.mark.slow
+def test_a_fingerprint_is_an_https_machines_certificate_alone(env, none):
+    client, headers, *_ = env
+    moved = WORKER.replace("10.10.10.3", "10.10.10.4")
+    fake, seen = _machines({GAMING_PC: (QWEN,), WORKER: (QWEN,), moved: (QWEN,)})
+    with fake:
+        for url, fingerprint in ((GAMING_PC, PINNED), (WORKER, "7F:7F"), (WORKER, "sha256:" + "7f" * 32)):
+            r = _add(env, name="Worker", api_url=url, fingerprint=fingerprint)
+            assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_fingerprint", r.text
+        assert seen == [], "nothing asked"
+        assert _add(env, name="Worker", api_url=WORKER, fingerprint=PINNED).status_code == 201
+        assert seen[-1]["fingerprint"] == PINNED
+        worker = _machine(_ai(env), "Worker")["machine_id"]
+        # Moved to another address over HTTPS (a new one from the router): the same certificate, asked by it.
+        r = client.patch(f"/v1/ai/machines/{worker}", json={"api_url": moved}, headers=headers)
+        assert r.status_code == 200 and _machine(r.json(), "Worker")["fingerprint"] == PINNED
+        assert seen[-1] == {"url": moved + "/models", "headers": {}, "fingerprint": PINNED}
+        # At an http address, it has none: nothing to compare.
+        r = client.patch(f"/v1/ai/machines/{worker}", json={"api_url": GAMING_PC}, headers=headers)
+        assert r.status_code == 200 and _machine(r.json(), "Worker")["fingerprint"] == ""
+        assert seen[-1] == {"url": GAMING_PC + "/models", "headers": {}, "fingerprint": ""}
+        r = client.patch(f"/v1/ai/machines/{worker}", json={"fingerprint": PINNED}, headers=headers)
+        assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_fingerprint"
+    built_in = _built_in(_ai(env))["machine_id"]
+    r = client.patch(f"/v1/ai/machines/{built_in}", json={"fingerprint": PINNED}, headers=headers)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "built_in_machine"
+
+
+@pytest.mark.slow
+def test_an_ai_worker_switched_to_https_keeps_its_key(env, none):
+    """Its address the same but https://, as a worker that served plain HTTP before is switched: its key goes along
+    (the same machine, now encrypted), with the fingerprint it prints. Connect for it asks with both."""
+    client, headers, *_ = env
+    before = WORKER.replace("https://", "http://")
+    fake, seen = _machines({before: (QWEN,), WORKER: (QWEN,)})
+    with fake:
+        assert _add(env, name="Worker", api_url=before, api_key="sk-worker").status_code == 201
+        worker = _machine(_ai(env), "Worker")["machine_id"]
+        r = client.post("/v1/ai/connect", json={"api_url": WORKER, "fingerprint": PINNED, "machine_id": worker},
+                        headers=headers)
+        assert r.status_code == 200 and seen[-1]["headers"]["Authorization"] == "Bearer sk-worker"
+        assert seen[-1]["fingerprint"] == PINNED
+        r = client.patch(f"/v1/ai/machines/{worker}", json={"api_url": WORKER, "fingerprint": PINNED},
+                         headers=headers)
+        assert r.status_code == 200, r.text
+        m = _machine(r.json(), "Worker")
+        assert (m["api_url"], m["has_key"], m["fingerprint"]) == (WORKER, True, PINNED)
+        assert seen[-1] == {"url": WORKER + "/models", "headers": {"Authorization": "Bearer sk-worker"},
+                            "fingerprint": PINNED}
+        # Connect for a saved machine, nothing given: its key and its certificate.
+        assert client.post("/v1/ai/connect", json={"api_url": WORKER, "machine_id": worker},
+                           headers=headers).status_code == 200
+        assert seen[-1]["fingerprint"] == PINNED and seen[-1]["headers"]["Authorization"] == "Bearer sk-worker"
 
 
 @pytest.mark.slow

@@ -1,7 +1,9 @@
 """lumiverb ai: the account's AI machines and the model each AI job uses,
 as Settings › AI has them, for a server with no screen (an account's
 admins). A machine's key is asked for at a prompt, never on the command
-line, and never shown: the server keeps it write-only."""
+line, and never shown: the server keeps it write-only. An https machine's
+certificate fingerprint (--fingerprint: Lumiverb's AI worker prints its own)
+isn't a secret: it's given and shown as it is."""
 
 from __future__ import annotations
 
@@ -82,23 +84,40 @@ def _said(r: httpx.Response, failed: str) -> None:
     raise typer.Exit(1)
 
 
-def _machines_table(settings: dict) -> Table:
+def _tls(m: dict) -> str:
+    """How it's reached: HTTPS by its pinned certificate, or any trusted one; or none, unencrypted (http://)."""
+    if m["built_in"]:
+        return ""
+    if not m["api_url"].startswith("https://"):
+        return "none"
+    return "pinned" if m.get("fingerprint") else "trusted"
+
+
+def _print_machines(settings: dict) -> None:
+    """The machines' table, then each pinned certificate's fingerprint (too long for a column)."""
     table = Table(title="AI machines")
-    for col in ("NAME", "URL", "JOBS", "AT ONCE", "KEY", "STATUS"):
+    for col in ("NAME", "URL", "JOBS", "AT ONCE", "KEY", "TLS", "STATUS"):
         table.add_column(col)
     for m in settings["machines"]:
         key = "" if m["built_in"] else ("enter it again" if m["has_key"] and not m.get("key_readable", True)
                                         else "set" if m["has_key"] else "none")
         table.add_row(escape(m["name"]), escape(m["api_url"] or "—"), escape(", ".join(m["jobs"]) or "—"),
-                      f"{m['at_once']:d}", key, escape(_status(m)))
-    return table
+                      f"{m['at_once']:d}", key, _tls(m), escape(_status(m)))
+    console.print(table)
+    for m in settings["machines"]:
+        if m.get("fingerprint"):
+            console.print(f"{escape(m['name'])}'s certificate: {escape(m['fingerprint'])}", soft_wrap=True)
+
+
+FINGERPRINT_HELP = ("Its certificate's SHA-256 fingerprint, for an https URL whose certificate no public authority "
+                    "signed (Lumiverb's AI worker prints its own): only that certificate is taken from it.")
 
 
 @ai_app.command("list")
 def ai_list() -> None:
     """The machines, and each job's model: what Settings › AI shows."""
     settings = _settings(LumiverbClient())
-    console.print(_machines_table(settings))
+    _print_machines(settings)
     table = Table(title="Jobs")
     for col in ("JOB", "WHAT", "MODEL", "MACHINES OFFERING IT"):
         table.add_column(col)
@@ -110,22 +129,26 @@ def ai_list() -> None:
 
 @machines_app.command("list")
 def machines_list() -> None:
-    """Each machine: where it is, its jobs, how many requests at once, whether a key is set, and its status."""
-    console.print(_machines_table(_settings(LumiverbClient())))
+    """Each machine: where it is, its jobs, how many requests at once, whether a key is set, how it's reached (TLS:
+    HTTPS by its pinned certificate, whose fingerprint follows, or any trusted one; none, unencrypted), and its
+    status."""
+    _print_machines(_settings(LumiverbClient()))
 
 
 @machines_app.command("models")
 def machines_models(
     machine: Annotated[str, typer.Argument(help="A machine's name, or a URL to ask (Connect).")],
     key: Annotated[bool, typer.Option("--key", help="Ask for a key to ask a URL with (not shown).")] = False,
+    fingerprint: Annotated[str | None, typer.Option("--fingerprint", help=FINGERPRINT_HELP)] = None,
 ) -> None:
     """What a machine offers: its models, asked now (Settings › AI's Connect). Account admins."""
     client = LumiverbClient()
     if machine.startswith(("http://", "https://")):
-        body = {"api_url": machine, "api_key": _key(machine) if key else ""}
+        body = {"api_url": machine, "api_key": _key(machine) if key else "", "fingerprint": fingerprint or ""}
     else:
         m = _machine(_settings(client), machine)
-        body = {"api_url": m["api_url"], "machine_id": m["machine_id"], **({"api_key": _key(m["name"])} if key else {})}
+        body = {"api_url": m["api_url"], "machine_id": m["machine_id"], **({"api_key": _key(m["name"])} if key else {}),
+                **({"fingerprint": fingerprint} if fingerprint is not None else {})}
     r = client.raw("POST", "/v1/ai/connect", json=body)
     if r.status_code >= 400:
         _said(r, "Couldn't ask it")
@@ -164,9 +187,11 @@ def machines_test(
 def machines_add(
     name: Annotated[str, typer.Argument(help="What to call it (OpenAI, Gaming PC).")],
     url: Annotated[str, typer.Option("--url", help="Its API, OpenAI-compatible: https://api.openai.com/v1, "
-                                                   "http://192.168.1.20:11434/v1 for Ollama.")],
+                                                   "http://192.168.1.20:11434/v1 for Ollama, "
+                                                   "https://192.168.1.30:6366/v1 for Lumiverb's AI worker.")],
     jobs: Annotated[str, typer.Option("--jobs", help="The jobs it does, comma-separated (lumiverb ai list).")],
     key: Annotated[bool, typer.Option("--key", help="Ask for its key (not shown; or pipe it in).")] = False,
+    fingerprint: Annotated[str, typer.Option("--fingerprint", help=FINGERPRINT_HELP)] = "",
     at_once: Annotated[int, typer.Option("--at-once", min=1, max=32, help="Requests it takes at once.")] = 2,
     shares_gpu: Annotated[bool, typer.Option(
         "--shares-gpu", help="It runs on the GPU this server decodes video on: fewer requests while it does.")] = False,
@@ -175,7 +200,8 @@ def machines_add(
     """Add a machine. It's asked for its models first: it must offer each of its jobs' models. Account admins."""
     client = LumiverbClient()
     body = {"name": name, "api_url": url, "jobs": _jobs(_settings(client), jobs), "at_once": at_once,
-            "enabled": not off, "shares_gpu": shares_gpu, "api_key": _key(name) if key else ""}
+            "enabled": not off, "shares_gpu": shares_gpu, "api_key": _key(name) if key else "",
+            "fingerprint": fingerprint}
     r = client.raw("POST", "/v1/ai/machines", json=body)
     if r.status_code >= 400:
         _said(r, "Couldn't add it")
@@ -189,13 +215,16 @@ def machines_edit(
     url: Annotated[str | None, typer.Option("--url", help="Where it is now.")] = None,
     key: Annotated[bool, typer.Option("--key", help="Ask for a new key (not shown; or pipe it in).")] = False,
     no_key: Annotated[bool, typer.Option("--no-key", help="It needs no key: forget the one saved.")] = False,
+    fingerprint: Annotated[str | None, typer.Option(
+        "--fingerprint", help=f"{FINGERPRINT_HELP} '' forgets the one saved.")] = None,
     jobs: Annotated[str | None, typer.Option("--jobs", help="The jobs it does now, comma-separated.")] = None,
     at_once: Annotated[int | None, typer.Option("--at-once", min=1, max=32)] = None,
     on: Annotated[bool | None, typer.Option("--on/--off", help="Turn it on or off.", show_default=False)] = None,
     shares_gpu: Annotated[bool | None, typer.Option("--shares-gpu/--own-gpu", show_default=False)] = None,
 ) -> None:
-    """Change a machine: only what's given. A new URL, key or job, or turning it on, asks it again. Its key never
-    goes along to a new URL: give it again with --key. Account admins."""
+    """Change a machine: only what's given. A new URL, key, certificate or job, or turning it on, asks it again.
+    Its key never goes along to a new URL (but to the same one over https://): give it again with --key. Its
+    certificate's fingerprint stays until another is given, or its URL is http://. Account admins."""
     if key and no_key:
         console.print("[red]--key or --no-key, not both.[/red]")
         raise typer.Exit(2)
@@ -203,7 +232,7 @@ def machines_edit(
     settings = _settings(client)
     m = _machine(settings, name)
     body: dict = {k: v for k, v in {"name": new_name, "api_url": url, "at_once": at_once, "enabled": on,
-                                    "shares_gpu": shares_gpu}.items() if v is not None}
+                                    "shares_gpu": shares_gpu, "fingerprint": fingerprint}.items() if v is not None}
     if jobs is not None:
         body["jobs"] = _jobs(settings, jobs)
     if key:

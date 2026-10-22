@@ -3,20 +3,33 @@ the face process (the scheduler's Models, given factories): the key on
 every request, the models it lists as every AI machine does, a vector per
 image and a found per image, an image it doesn't read that image's error
 alone, the machine's troubles a 503, its turns, and its key kept for good,
-owner-only, printed by --show-key."""
+owner-only, printed by --show-key. Run as `lumiverb-server ai-worker` runs
+it: HTTPS with its own certificate, reached by that certificate's
+fingerprint alone; plain HTTP when it's chosen, or for a worker set up
+before it served HTTPS until it's started with --https, said loudly."""
 
 from __future__ import annotations
 
 import io
+import logging
 import stat
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from src.server.ai_worker import ensure_key, key_file
+from src.server.ai_worker import (
+    certificate_files,
+    ensure_certificate,
+    ensure_key,
+    fingerprint,
+    key_file,
+)
 from src.server.ai_worker.app import CLIP_MODELS, FACE_MODELS, MAX_IMAGES, make_app
 from src.server.scheduler.models import Models
 
@@ -270,3 +283,151 @@ def test_its_key_is_made_once_kept_owner_only_and_shown(tmp_path, capsys, monkey
 
     assert main(["ai-worker", "--env", str(env), "--show-key"]) == 0
     assert capsys.readouterr().out.strip() == key
+
+
+def test_a_new_worker_makes_its_certificate_with_its_key_kept_for_good_and_shown(tmp_path, capsys, monkeypatch) -> None:
+    """Its own, signed by nobody, its key owner-only; never made again on its own (the fingerprint it was added with
+    would no longer be its own)."""
+    from cryptography import x509
+
+    from src.server.lifecycle.cli import main
+    from src.shared.ai_requests import FINGERPRINT
+
+    ensure_key(tmp_path)
+    made = fingerprint(tmp_path)
+    assert made is not None and FINGERPRINT.fullmatch(made)
+    cert, key = certificate_files(tmp_path)
+    assert stat.S_IMODE(key.stat().st_mode) == 0o600
+    assert ensure_certificate(tmp_path) == made and ensure_key(tmp_path) and fingerprint(tmp_path) == made
+    issued = x509.load_pem_x509_certificate(cert.read_bytes())
+    assert issued.issuer == issued.subject, "its own: no authority signed it"
+    assert issued.not_valid_after_utc - issued.not_valid_before_utc > __import__("datetime").timedelta(days=3000)
+    env = tmp_path / "env"
+    env.write_text(f"DATA_DIR={tmp_path}\nCONTROL_PLANE_DATABASE_URL=postgresql://x@127.0.0.1/none\n")
+    monkeypatch.delenv("DATA_DIR")  # the test process's own (tests/conftest.py) would win over the file's
+    assert main(["ai-worker", "--env", str(env), "--show-fingerprint"]) == 0
+    assert capsys.readouterr().out.strip() == made
+    # One set up before it served HTTPS has none to show.
+    old = tmp_path / "old"
+    key_file(old).parent.mkdir(parents=True)
+    key_file(old).write_text("a-key-from-before\n")
+    env.write_text(f"DATA_DIR={old}\nCONTROL_PLANE_DATABASE_URL=postgresql://x@127.0.0.1/none\n")
+    assert main(["ai-worker", "--env", str(env), "--show-fingerprint"]) == 1
+    assert "no certificate" in capsys.readouterr().err and fingerprint(old) is None
+
+
+@contextmanager
+def _running(tmp_path, monkeypatch, *flags: str) -> Iterator[int]:
+    """`lumiverb-server ai-worker` itself on this computer, as it's run (its certificate, its uvicorn), with stand-ins
+    for its models, until the block ends. Its port."""
+    import socket
+
+    import uvicorn
+
+    from src.server.lifecycle import cli
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    env = tmp_path / "env"
+    env.write_text(f"DATA_DIR={tmp_path}\nCONTROL_PLANE_DATABASE_URL=postgresql://x@127.0.0.1/none\n")
+    # The worker puts its install's settings in the environment: these, restored after.
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTROL_PLANE_DATABASE_URL", "postgresql://x@127.0.0.1/none")
+    leave = threading.Event()
+    servers: list[uvicorn.Server] = []
+
+    class Server(uvicorn.Server):
+        def __init__(self, config) -> None:
+            super().__init__(config)
+            servers.append(self)
+
+    def until_left(command, stop, upgraded, every=0) -> None:
+        leave.wait(60)
+        stop.set()
+
+    stand_ins = Models(clip_factory=lambda m, p: FakeClip(m, p), face_factory=FakeFaces)
+    with patch.object(cli, "watch_for_upgrade", until_left), patch.object(cli, "_launched_as", lambda: tmp_path / "x"), \
+            patch("uvicorn.Server", Server), patch("src.server.scheduler.models.Models", lambda: stand_ins), \
+            patch("src.shared.logging_config.configure_api_logging", lambda: None):
+        ran: list[int] = []
+        thread = threading.Thread(target=lambda: ran.append(cli.main(
+            ["ai-worker", "--env", str(env), "--host", "127.0.0.1", "--port", str(port), *flags])), daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 60
+        while not (servers and servers[0].started) and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.025)
+        assert servers and servers[0].started, "the worker started"
+        try:
+            yield port
+        finally:
+            leave.set()
+            thread.join(60)
+    assert ran == [0]
+
+
+def test_a_worker_serves_https_with_its_own_certificate_and_is_reached_by_it_alone(tmp_path, monkeypatch, caplog):
+    """A new worker, as it runs: HTTPS from its first start, saying what to add (its https:// address, its
+    certificate's fingerprint, where its key is); the scheduler, given that fingerprint, checks it and sends it work,
+    by the code every AI machine is asked with; another certificate's fingerprint, or none, and nothing is."""
+    from src.processing.ai_worker_client import AiWorker
+    from src.processing.workers.embeddings.base import EmbeddingError
+    from src.shared.vision_endpoint import (
+        NOT_ITS_CERTIFICATE,
+        UNTRUSTED,
+        VisionEndpointError,
+        list_models,
+    )
+    from tests.ai_machine_server import certificate
+
+    _, another = certificate(tmp_path / "another")
+    with caplog.at_level(logging.INFO), _running(tmp_path, monkeypatch) as port:
+        key, pinned = key_file(tmp_path).read_text().strip(), fingerprint(tmp_path)
+        url = f"https://127.0.0.1:{port}/v1"
+        said = caplog.text
+        assert f"add a machine at {url}" in said and f"certificate fingerprint {pinned}" in said
+        assert "--show-key" in said and "over HTTPS" in said and "PLAIN HTTP" not in said
+        assert list_models(url, key, fingerprint=pinned) == sorted([*CLIP_MODELS, *FACE_MODELS])
+        vector = AiWorker(url, key, fingerprint=pinned).clip(_png((255, 0, 0)), "ViT-B-32")
+        assert vector["vector"] == [1.0, 0.0, 0.0]
+        for wrong, says in ((another, NOT_ITS_CERTIFICATE), ("", UNTRUSTED)):
+            with pytest.raises(VisionEndpointError) as raised:
+                list_models(url, key, fingerprint=wrong)
+            assert str(raised.value) == says
+        with pytest.raises(EmbeddingError, match="isn't the one it was added with"):
+            AiWorker(url, key, fingerprint=another).clip(_png(), "ViT-B-32")
+        with pytest.raises(VisionEndpointError):
+            list_models(f"http://127.0.0.1:{port}/v1", key)  # plain HTTP isn't served beside it
+
+
+def test_plain_http_when_its_chosen_said_loudly(tmp_path, monkeypatch, caplog):
+    from src.shared.vision_endpoint import list_models
+
+    with caplog.at_level(logging.INFO), _running(tmp_path, monkeypatch, "--plain-http") as port:
+        key = key_file(tmp_path).read_text().strip()
+        assert list_models(f"http://127.0.0.1:{port}/v1", key) == sorted([*CLIP_MODELS, *FACE_MODELS])
+    loud = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("PLAIN HTTP" in line for line in loud) and any("--plain-http" in line for line in loud)
+    assert f"machine at http://127.0.0.1:{port}/v1" in caplog.text
+
+
+def test_a_worker_from_before_keeps_plain_http_until_its_started_with_https(tmp_path, monkeypatch, caplog):
+    """Its Lumiverb has its http:// address: an upgrade alone changes nothing there, and says loudly how to switch.
+    Started with --https it makes its certificate and serves HTTPS from then on, its key the same."""
+    from src.shared.vision_endpoint import list_models
+
+    key_file(tmp_path).parent.mkdir(parents=True)
+    key_file(tmp_path).write_text("a-key-from-before\n")
+    with caplog.at_level(logging.INFO), _running(tmp_path, monkeypatch) as port:
+        assert list_models(f"http://127.0.0.1:{port}/v1", "a-key-from-before")
+    loud = " ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "PLAIN HTTP" in loud and "set up before the AI worker served HTTPS" in loud and "--https" in loud
+    assert fingerprint(tmp_path) is None
+    caplog.clear()
+    for flags in (("--https",), ()):  # and after, as its certificate is there
+        with caplog.at_level(logging.INFO), _running(tmp_path, monkeypatch, *flags) as port:
+            pinned = fingerprint(tmp_path)
+            assert pinned and f"certificate fingerprint {pinned}" in caplog.text
+            assert list_models(f"https://127.0.0.1:{port}/v1", "a-key-from-before", fingerprint=pinned)
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING and "PLAIN" in r.getMessage()]
+        caplog.clear()

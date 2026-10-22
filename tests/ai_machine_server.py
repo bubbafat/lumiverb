@@ -1,7 +1,9 @@
 """An AI machine on this computer, for tests: a real HTTP server on 127.0.0.1
-(loopback, where an Ollama is allowed), which lists its models at
-GET /v1/models and answers every other request as it's told. What it was
-asked is kept, so a test can say a request never reached it.
+(loopback, where an Ollama is allowed), or HTTPS with a certificate it's
+given (`certificate`: one made as Lumiverb's AI worker makes its own), which
+lists its models at GET /v1/models and answers every other request as it's
+told. What it was asked is kept, so a test can say a request never reached
+it.
 
 `works` is an answer every kind of work reads as done (a description, a
 transcript, a vector): a machine a redirect pointed at answers with it, so
@@ -11,10 +13,12 @@ a request that followed one would succeed and the test would see it.
 from __future__ import annotations
 
 import json
+import ssl
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 MODEL = "qwen3-vl:8b"
@@ -31,10 +35,11 @@ WORKS = {
 
 class LocalMachine:
     """lists: the models GET /v1/models lists (None: that's answered as everything else is). answer: (status,
-    body: JSON or bytes, headers) for everything else. asked: [(method, path)] as they came."""
+    body: JSON or bytes, headers) for everything else. tls: (certificate, key) files to serve HTTPS with. asked:
+    [(method, path)] as they came."""
 
     def __init__(self, answer: tuple[int, Any, dict[str, str]] = (200, WORKS, {}),
-                 lists: tuple[str, ...] | None = (MODEL,)) -> None:
+                 lists: tuple[str, ...] | None = (MODEL,), tls: tuple[Path, Path] | None = None) -> None:
         self.answer = answer
         self.asked: list[tuple[str, str]] = []
         outer = self
@@ -64,8 +69,12 @@ class LocalMachine:
                 pass
 
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        if tls is not None:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(*map(str, tls))
+            self._httpd.socket = context.wrap_socket(self._httpd.socket, server_side=True)
         self.port = self._httpd.server_port
-        self.url = f"http://127.0.0.1:{self.port}/v1"
+        self.url = f"{'https' if tls else 'http'}://127.0.0.1:{self.port}/v1"
         threading.Thread(target=self._httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
 
     def close(self) -> None:
@@ -73,10 +82,20 @@ class LocalMachine:
         self._httpd.server_close()
 
 
+def certificate(folder: Path) -> tuple[tuple[Path, Path], str]:
+    """A certificate made as Lumiverb's AI worker makes its own (src/server/ai_worker/), kept in folder: ((it, its
+    key), its fingerprint)."""
+    from src.server.ai_worker import certificate_files, ensure_certificate
+
+    fingerprint = ensure_certificate(folder)
+    return certificate_files(folder), fingerprint
+
+
 @contextmanager
 def local_machine(answer: tuple[int, Any, dict[str, str]] = (200, WORKS, {}),
-                  lists: tuple[str, ...] | None = (MODEL,)) -> Iterator[LocalMachine]:
-    machine = LocalMachine(answer, lists)
+                  lists: tuple[str, ...] | None = (MODEL,), tls: tuple[Path, Path] | None = None
+                  ) -> Iterator[LocalMachine]:
+    machine = LocalMachine(answer, lists, tls)
     try:
         yield machine
     finally:

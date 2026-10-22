@@ -49,6 +49,9 @@ class AiMachine(SQLModel, table=True):
     name: str = Field(nullable=False)
     api_url: str = Field(nullable=False)
     api_key: str = Field(default="", nullable=False)
+    # An https machine's certificate, by its SHA-256 fingerprint (ai_requests.FINGERPRINT): its requests take that
+    # certificate and no other. "": none (an https one is checked as any https site is).
+    fingerprint: str = Field(default="", nullable=False)
     jobs: list[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False))
     at_once: int = Field(default=2, nullable=False)
     enabled: bool = Field(default=True, nullable=False)
