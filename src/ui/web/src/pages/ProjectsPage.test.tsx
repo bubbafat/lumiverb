@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   restoreProjectClips: vi.fn(),
   emptyProjectTrash: vi.fn(),
   setProjectStatus: vi.fn(),
+  getCurrentUser: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -43,6 +44,7 @@ function project(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "editor" });
   api.trashProject.mockResolvedValue(undefined);
   api.restoreProject.mockResolvedValue({ restored_clips: 0, missing_clips: 0 });
   api.restoreProjectClips.mockResolvedValue({ restored: 2, missing: 0 });
@@ -215,9 +217,14 @@ describe("ProjectsPage", () => {
     expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
   });
 
-  it("offers archive and delete on an older project with no owner", async () => {
-    // Projects from before ownership belong to everyone, and the server lets anyone change them.
+  it("offers archive and delete on an older project with no owner to an account admin only", async () => {
+    // Nobody owns a project from before ownership: the server lets an account admin change it, and nobody else.
     api.listProjects.mockResolvedValue([project({ ownership: "shared", owner_user_id: null })]);
+    renderPage();
+    await screen.findByText("Customer Video 123");
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    cleanup();
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "admin" });
     renderPage();
     expect(await screen.findByRole("button", { name: "Delete" })).toBeTruthy();
   });

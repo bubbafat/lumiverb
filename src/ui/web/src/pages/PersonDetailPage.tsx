@@ -360,6 +360,14 @@ export default function PersonDetailPage() {
         )}
       </div>
 
+      {/* Deleting or merging takes every face they have: refused, saying why, when some are in libraries this
+          person doesn't edit (faces_in_other_libraries). */}
+      {(deleteMutation.error || mergeIntoMutation.error) && (
+        <p role="alert" className="-mt-6 mb-6 text-sm text-red-400">
+          {(deleteMutation.error || mergeIntoMutation.error)?.message || "That didn't work. Try again."}
+        </p>
+      )}
+
       {/* Their photos and videos */}
       {clips.length > 0 && (
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">

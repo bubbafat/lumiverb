@@ -188,11 +188,17 @@ describe("ProjectDetailPage", () => {
     expect(screen.queryByRole("button", { name: "Move to trash" })).toBeNull();
   });
 
-  it("offers move to trash on an older project with no owner", async () => {
+  it("offers move to trash on an older project with no owner to an account admin only", async () => {
+    // Nobody owns one from before ownership: the server lets an account admin change it, and nobody else.
     withProject({ ownership: "shared", owner_user_id: null });
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    expect(screen.getByRole("button", { name: "Move to trash" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Move to trash" })).toBeNull();
+    cleanup();
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "admin" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    expect(await screen.findByRole("button", { name: "Move to trash" })).toBeTruthy();
   });
 });
 

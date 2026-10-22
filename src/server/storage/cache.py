@@ -21,13 +21,15 @@ import contextlib
 import os
 import secrets
 import shutil
+import stat
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import BinaryIO
 
 from src.server.storage.files import PARTIAL
-from src.server.storage.store import NotFound, Stat, Unavailable, check_key
+from src.server.storage.local import through_a_link
+from src.server.storage.store import NotFound, Stat, Unavailable, UnsafeKeyError, check_key
 
 # A write in progress this old was left by a process that died.
 STALE_PARTIAL_SEC = 600
@@ -62,6 +64,8 @@ class FileCache:
         path = root / check_key(key)
         if not os.path.normpath(path).startswith(os.path.normpath(root) + os.sep):
             raise ValueError(f"Cache key leaves its folder: {key!r}")
+        if through_a_link(root, path):  # never followed, as in a previews folder (local.through_a_link)
+            raise UnsafeKeyError(f"Cache key goes through a symbolic link in {root}: {key!r}")
         return path
 
     def _found(self, key: str) -> Path:
@@ -150,7 +154,7 @@ class FileCache:
     def _files(root: Path) -> Iterator[Path]:
         for dirpath, _dirs, names in os.walk(root):
             for name in names:
-                if not name.startswith(PARTIAL):
+                if not name.startswith(PARTIAL) and not os.path.islink(os.path.join(dirpath, name)):
                     yield Path(dirpath, name)
 
     def evict(self, *, keep: Path | None = None, dry_run: bool = False) -> int:
@@ -165,9 +169,11 @@ class FileCache:
             for name in names:
                 path = Path(dirpath, name)
                 try:
-                    st = path.stat()
+                    st = path.lstat()
                 except OSError:
                     continue
+                if stat.S_ISLNK(st.st_mode):
+                    continue  # never an entry, nor followed
                 if name.startswith(PARTIAL):
                     if st.st_mtime < _now() - STALE_PARTIAL_SEC:
                         if not dry_run:

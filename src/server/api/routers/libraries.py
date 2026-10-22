@@ -797,6 +797,28 @@ def _originals_device(library) -> int | None:
     return None if originals is None else originals.device(timeout=ORIGINALS_TIMEOUT_SEC)
 
 
+def originals_here(session: Session) -> dict:
+    """Each library of the account this server reads (a trashed one too), by
+    name: its folder on this machine, by this machine's root map (as the
+    database has it where the map can't be read). What a previews folder is
+    chosen apart from (src/server/storage/move.py check_target)."""
+    from pathlib import Path
+
+    from src.processing.originals import where
+
+    folders: dict[str, Path] = {}
+    for library in LibraryRepository(session).list_all(include_trashed=True):
+        if not read_by_server(library) or not library.root_path:
+            continue
+        try:
+            folder = where({"root_path": library.root_path})
+        except Exception:  # noqa: BLE001 — a root map it can't read: the folder as stored
+            folder = Path(library.root_path)
+        if folder is not None:
+            folders[library.name] = folder
+    return folders
+
+
 def _same_device(folder, device: int | None) -> bool | None:
     if device is None:
         return None
@@ -889,9 +911,10 @@ def move_library_previews(
     data = Path(get_settings().data_dir).absolute()
     if previews_location.read(data).moving:
         raise ApiError(409, "move_running", "The previews are being moved already: wait for that to finish.")
+    originals = originals_here(session)
     try:
         with new_folder.made_if_asked(body.folder, body.make_folder, data):
-            old, chosen, need = move.plan(data, body.folder, library_id=library_id)
+            old, chosen, need = move.plan(data, body.folder, library_id=library_id, originals=originals)
             same = not body.move and _same_device(chosen, _originals_device(library)) is True
             if (need.files or same) and not body.move:
                 said = (f"Moves {library.name}'s {need.files:,} previews ({move.size_text(need.bytes)}) from {old} "
@@ -902,8 +925,8 @@ def move_library_previews(
                     {"from": str(old), "to": str(chosen), "files": need.files, "bytes": need.bytes,
                      "free": shutil.disk_usage(chosen).free, "same_drive_as_originals": same},
                 )
-            move.start(data, body.folder, library_id=library_id)
+            move.start(data, body.folder, library_id=library_id, originals=originals)
     except move.MoveError as exc:
-        raise ApiError(400, "folder_not_usable", str(exc)) from None
+        raise ApiError(exc.status, exc.code, str(exc)) from None
     move.settled(data)
     return _library_previews(request, library)

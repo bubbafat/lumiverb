@@ -333,6 +333,16 @@ function Certificate({
               </a>
             </p>
           )}
+          {(certificate.names_left_out ?? []).length > 0 && (
+            <p role="note" className="text-xs text-amber-300">
+              Its certificate doesn&apos;t name {certificate.names_left_out!.join(", ")}, so other devices can&apos;t use{" "}
+              {certificate.names_left_out!.length === 1 ? "that name" : "those names"} over HTTPS: Lumiverb&apos;s
+              authority vouches only for local network names and the names this Mac had when it was made. Use{" "}
+              {certificate.names.filter((n) => n !== "localhost" && n !== "127.0.0.1" && n !== "::1").join(", ") ||
+                "the addresses above"}{" "}
+              instead.
+            </p>
+          )}
         </>
       ) : (
         <p className="text-sm text-gray-200">

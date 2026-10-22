@@ -92,6 +92,115 @@ def test_a_key_never_leaves_either_folder(install):
             storage.delete(bad)
 
 
+@pytest.fixture
+def outside(tmp_path):
+    """A folder that isn't Lumiverb's, with a file in it: what a link in a previews folder might point at."""
+    folder = tmp_path / "someone-else"
+    (folder / "inner").mkdir(parents=True)
+    (folder / "secret.webp").write_bytes(b"not lumiverb's")
+    (folder / "inner" / ".partial-0000.mp4").write_bytes(b"not lumiverb's either")
+    return folder
+
+
+def _untouched(outside: Path) -> None:
+    assert sorted(p.relative_to(outside).as_posix() for p in outside.rglob("*")) == [
+        "inner", "inner/.partial-0000.mp4", "secret.webp"]
+    assert (outside / "secret.webp").read_bytes() == b"not lumiverb's"
+
+
+def test_a_key_through_a_link_is_refused_to_read_or_write_and_passed_by_to_delete_or_list(install, outside):
+    """Nothing under a previews folder is followed through a symbolic link, whatever it points at
+    (local.through_a_link): not a linked folder, not a linked file."""
+    from src.server.storage.files import FileStore
+
+    data, _ = install
+    (data / "ten_a" / "lib_9").symlink_to(outside, target_is_directory=True)
+    (data / "ten_a" / "lib_1" / "proxies" / "07" / "linked.webp").symlink_to(outside / "secret.webp")
+    storage = LocalStorage(str(data))
+    store = FileStore(storage)
+    for key in ("ten_a/lib_9/secret.webp", "ten_a/lib_1/proxies/07/linked.webp"):
+        for read in (store.read, store.exists, store.stat, storage.abs_path):
+            with pytest.raises(UnsafeKeyError, match="symbolic link"):
+                read(key)
+        store.delete(key)
+        assert not storage.delete(key)
+    for key in ("ten_a/lib_9/new.webp", "ten_a/lib_9/inner/new.webp"):
+        with pytest.raises(UnsafeKeyError):
+            store.write(key, b"x")
+    assert sorted(store.list("")) == sorted([PROXY, THUMB, ANALYSIS, CUT]), "a link is no key"
+    assert list(store.list("ten_a/lib_9/")) == []
+    _untouched(outside)
+    assert store.read(PROXY) == b"proxy", "the rest as before"
+
+
+def test_a_move_never_follows_a_link(install, outside, tmp_path):
+    """Links in the old folder stay where they are, uncounted and unread; a file whose place in the new folder
+    is through a link stays too; what they point at is never moved, copied or deleted."""
+    data, drive = install
+    (data / "ten_a" / "lib_9").symlink_to(outside, target_is_directory=True)
+    (data / "ten_z").symlink_to(outside, target_is_directory=True)
+    (data / "ten_a" / "lib_1" / "proxies" / "07" / "linked.webp").symlink_to(outside / "secret.webp")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (drive / "ten_a").mkdir()
+    (drive / "ten_a" / "lib_2").symlink_to(elsewhere, target_is_directory=True)
+    assert move.size_of(data) == move.Size(3, len(b"proxy") + len(b"thumb") + 800), "links aren't counted"
+    move.start(data, drive, background=False)
+    assert (drive / PROXY).read_bytes() == b"proxy" and (drive / THUMB).read_bytes() == b"thumb"
+    assert (data / ANALYSIS).read_bytes() == b"analysis" * 100, "its place is through a link: left where it was"
+    assert list(elsewhere.iterdir()) == []
+    assert not (drive / "ten_a" / "lib_9").exists() and not (drive / "ten_z").exists()
+    assert not (drive / "ten_a" / "lib_1" / "proxies" / "07" / "linked.webp").exists()
+    assert (data / "ten_a" / "lib_9").is_symlink() and (data / "ten_z").is_symlink()
+    _untouched(outside)
+
+
+def test_forgetting_a_library_or_an_account_never_goes_through_a_link(install, outside):
+    data, _ = install
+    (outside / "lib_1").mkdir()
+    (outside / "lib_1" / "kept.webp").write_bytes(b"theirs")
+    (data / "ten_b").symlink_to(outside, target_is_directory=True)
+    assert move.forget_library(data, "ten_b", "lib_1") == []
+    assert move.forget_account(data, "ten_b") == []
+    assert (outside / "lib_1" / "kept.webp").read_bytes() == b"theirs"
+    (outside / "lib_1" / "kept.webp").unlink()
+    (outside / "lib_1").rmdir()
+    _untouched(outside)
+
+
+def test_the_sweep_of_writes_a_crash_left_never_goes_through_a_link(install, outside, monkeypatch):
+    from src.server.storage import folders, local
+
+    data, _ = install
+    (data / "ten_c").symlink_to(outside, target_is_directory=True)
+    (data / "ten_a" / "lib_1" / ".partial-1111.webp").symlink_to(outside / "secret.webp")
+    old = time.time() - folders.LEFT_AFTER_SEC - 60
+    os.utime(outside / "inner" / ".partial-0000.mp4", (old, old))
+    monkeypatch.setattr(local, "get_storage", lambda: LocalStorage(str(data)))
+    folders.left_by_a_crash("ten_c", ["inner"], dry_run=False)
+    folders.left_by_a_crash("ten_a", ["lib_1"], dry_run=False)
+    _untouched(outside)
+
+
+def test_a_cache_never_follows_a_link(tmp_path, outside):
+    """A Cache (the playback cuts, in a previews folder) is held to the same."""
+    from src.server.storage.cache import FileCache
+
+    root = tmp_path / "cache"
+    root.mkdir()
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+    (root / "cut.mp4").symlink_to(outside / "secret.webp")
+    cache = FileCache(lambda: root, cap_bytes=0)
+    for key in ("linked/secret.webp", "cut.mp4"):
+        with pytest.raises(UnsafeKeyError):
+            cache.read(key)
+    with pytest.raises(UnsafeKeyError):
+        cache.write("linked/new.mp4", b"x")
+    assert list(cache.list("")) == []
+    cache.evict()
+    _untouched(outside)
+
+
 def test_nothing_is_written_to_a_chosen_folder_whose_drive_is_unplugged(install):
     """Its empty mount point is on the system disk."""
     data, drive = install
@@ -384,6 +493,47 @@ def test_not_where_they_are_nor_inside_them(install):
     sub = data / "previews"
     sub.mkdir()
     assert move.check_target(data, sub) == sub, "a folder of its own in the data folder is fine"
+
+
+def _refused(data: Path, folder: Path, code: str, status: int, **kw) -> str:
+    with pytest.raises(move.MoveError) as refused:
+        move.check_target(data, folder, **kw)
+    assert (refused.value.code, refused.value.status) == (code, status), str(refused.value)
+    return str(refused.value)
+
+
+def test_not_in_the_data_folder_s_own_folders_nor_holding_it(install, tmp_path):
+    """What's in a previews folder is moved, swept and deleted: never Lumiverb's own data."""
+    data, _ = install
+    assert "one of Lumiverb's own folders" in _refused(data, data / "postgres", "data_folder", 409)
+    assert "one of Lumiverb's own folders" in _refused(data, data / "postgres" / "base", "data_folder", 409)
+    assert "holds Lumiverb's own data folder" in _refused(data, tmp_path, "data_folder", 409)
+    (data / "previews").mkdir()
+    assert move.check_target(data, data / "previews") == data / "previews", "a new folder of its own there is fine"
+
+
+def test_never_with_a_library_s_files(install):
+    """A library's folder this server reads, a folder in one or one holding one: refused, saying which."""
+    data, drive = install
+    footage = drive / "Footage"
+    (footage / "2026").mkdir(parents=True)
+    (drive / "Previews").mkdir()
+    originals = {"Footage": footage}
+    for folder in (footage, footage / "2026", drive):
+        said = _refused(data, folder, "originals_folder", 409, originals=originals)
+        assert f"Footage's folder ({footage})" in said and "apart from every library's files" in said
+    assert move.check_target(data, drive / "Previews", originals=originals) == drive / "Previews"
+
+
+def test_never_a_folder_another_user_owns(install, monkeypatch):
+    """Whoever owns it could put anything there, links included: the service's own user's folders only."""
+    data, drive = install
+    me = os.getuid()
+    monkeypatch.setattr(move.os, "getuid", lambda: me + 1)
+    said = _refused(data, drive, "folder_not_owned", 422)
+    assert said.startswith(f"{drive} belongs to ") and "only in a folder its own user" in said
+    monkeypatch.setattr(move.os, "getuid", lambda: me)
+    assert move.check_target(data, drive) == drive
 
 
 def test_not_without_room_on_another_disk(install, monkeypatch):

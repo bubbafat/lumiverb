@@ -56,6 +56,8 @@ Editors and admins can:
 - click **Merge into...** and pick who this person really is: all their faces move there, and this person goes;
 - click **Delete person**: the name goes, and their faces go back to unnamed groups.
 
+Merging and deleting take every face the person has, in every library. If some of their faces are in libraries you can see but don't edit, the page says how many, and only an account admin can merge or delete them. The same goes for restoring someone dismissed.
+
 ## Dismissed faces
 
 **Dismissed**, at the top right of the People page, lists the groups dismissed. An editor or admin clicks **Restore & Name**, then types a new name and clicks **Restore**, or picks a person already named to add them to.
@@ -71,5 +73,5 @@ Each adds a filter you can combine with a search or other filters (see [Browse a
 ## Who can do what
 
 - Everyone signed in sees the People page, but only faces in the libraries they can see: someone with no faces there isn't listed (see [Users and roles](users-and-roles.md)).
-- Editors and admins name, change, merge, dismiss and delete.
+- Editors and admins name, change, merge, dismiss and delete. Naming a group names only the faces in libraries they edit; merging, deleting and restoring a dismissed person are an account admin's when the person has faces in libraries they don't edit.
 - Faces and names never show on public pages.

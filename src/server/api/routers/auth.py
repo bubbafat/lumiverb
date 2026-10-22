@@ -24,7 +24,19 @@ from src.server.repository.control_plane import (
     TenantRepository,
     UserRepository,
 )
-from src.server.api.rate_limit import demo_limiter, login_limiter, forgot_password_limiter, reset_password_limiter
+from src.server.api.rate_limit import (
+    demo_limiter,
+    forgot_password_anywhere,
+    forgot_password_here,
+    forgot_password_limiter,
+    login_failures,
+    login_failures_here,
+    login_limiter,
+    name_cleared,
+    name_counted,
+    name_held,
+    reset_password_limiter,
+)
 from ulid import ULID
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -121,26 +133,33 @@ def login(
     request: Request,
     session: Annotated[Session, Depends(_get_db)],
 ) -> LoginResponse:
+    # Every try by address; by email only failures, held before the password is checked (rate_limit.py says why).
     login_limiter.check(request)
-    login_limiter.check(request, key=f"email:{body.email.strip().lower()}")
+    email = f"email:{body.email.strip().lower()}"
+    name_held(request, email, login_failures_here, login_failures)
 
     settings = get_settings()
     if not settings.jwt_secret:
         raise HTTPException(status_code=500, detail="JWT_SECRET not configured")
 
+    def failed() -> HTTPException:
+        name_counted(request, email, login_failures_here, login_failures)
+        return HTTPException(status_code=401, detail="Invalid email or password")
+
     password = body.password.encode()
     if len(password) > MAX_PASSWORD_BYTES:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise failed()
 
     user_repo = UserRepository(session)
     user = user_repo.get_by_email(body.email)
 
     if user is None:
         bcrypt.checkpw(password, _DUMMY_HASH)  # as long as a known email's check
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise failed()
 
     if not bcrypt.checkpw(password, user.password_hash.encode()):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise failed()
+    name_cleared(request, email, login_failures_here)
     _account_live(session, user)  # after the password: said only to someone who knows it
 
     token = _issue_jwt(user, settings.jwt_secret)
@@ -261,8 +280,11 @@ def forgot_password(
     from src.server.api.client_address import on_this_machine
     from src.server.api.errors import ApiError
 
+    # Every request by address; each link asked for by email, from here and from anywhere (rate_limit.py says why).
     forgot_password_limiter.check(request)
-    forgot_password_limiter.check(request, key=f"email:{body.email.strip().lower()}")
+    email = f"email:{body.email.strip().lower()}"
+    name_held(request, email, forgot_password_here, forgot_password_anywhere)
+    name_counted(request, email, forgot_password_here, forgot_password_anywhere)
 
     settings = get_settings()
     if settings.lumiverb_reset_on_this_machine and on_this_machine(request):

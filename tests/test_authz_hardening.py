@@ -3,7 +3,8 @@
 - A public page's cursor carries only a date or an id (not a file name or EXIF).
 - Visitors can't probe file names (path_prefix, by-path, path search) or cameras (similar).
 - API keys don't outlive their creator's role; editors manage only their own keys.
-- Login and forgot-password: no X-Forwarded-For bypass, a per-email limit, no timing tell.
+- Login and forgot-password: no X-Forwarded-For bypass, a per-email limit that holds back guessing but
+  not the email's owner (failures counted, by email and address and from anywhere), no timing tell.
 - Passwords past bcrypt's 72 bytes are refused, not a 500.
 - Routes only the scheduler calls are admin-only.
 - A trashed library stops being public.
@@ -20,7 +21,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.server.api.main import app
-from src.server.api.rate_limit import forgot_password_limiter, login_limiter
+from src.server.api.rate_limit import (
+    forgot_password_anywhere,
+    forgot_password_here,
+    forgot_password_limiter,
+    login_failures,
+    login_failures_here,
+    login_limiter,
+)
 from src.server.api.routers import auth
 from src.server.config import get_settings
 from tests.test_public_library_middleware import _ingest, located, public_lib_client  # noqa: F401
@@ -228,13 +236,93 @@ def test_rotating_forwarded_for_doesnt_dodge_the_login_limit(no_db):
 
 @pytest.mark.fast
 def test_rotating_addresses_doesnt_dodge_the_per_email_limit(no_db):
+    """Failures for one email, one from each address, hold it back once there are as many as it takes."""
+    n = login_failures.max_requests
     codes = [TestClient(app, client=(f"198.51.100.{i}", 1)).post(
         "/v1/auth/login", json={"email": "Target@Example.com" if i % 2 else "target@example.com", "password": "x"},
-    ).status_code for i in range(6)]
-    assert codes == [401] * 5 + [429]
-    other = TestClient(app, client=("198.51.100.99", 1)).post(
+    ).status_code for i in range(n + 1)]
+    assert codes == [401] * n + [429]
+    other = TestClient(app, client=("198.51.100.200", 1)).post(
         "/v1/auth/login", json={"email": "someone@example.com", "password": "x"})
     assert other.status_code == 401
+
+
+RIGHT = "the right password, long"
+
+
+@pytest.fixture
+def target(no_db, monkeypatch):
+    """target@example.com, who signs in with RIGHT (no database: the repository answers for them)."""
+    from types import SimpleNamespace
+
+    import bcrypt
+
+    monkeypatch.setenv("JWT_SECRET", "a-test-secret-long-enough-for-hs256-signing")
+    get_settings.cache_clear()
+    person = SimpleNamespace(user_id="usr_target", tenant_id="ten_target", role="viewer", email="target@example.com",
+                             token_version=0, password_hash=bcrypt.hashpw(RIGHT.encode(), bcrypt.gensalt(4)).decode())
+    monkeypatch.setattr(auth.UserRepository, "get_by_email",
+                        lambda self, email: person if email.strip().lower() == person.email else None)
+    monkeypatch.setattr(auth.UserRepository, "update_last_login", lambda self, user_id: None)
+    monkeypatch.setattr(auth, "_account_live", lambda session, user: None)
+    return person
+
+
+def _sign_in(address: str, password: str, email: str = "target@example.com") -> int:
+    return TestClient(app, client=(address, 1)).post(
+        "/v1/auth/login", json={"email": email, "password": password}).status_code
+
+
+@pytest.mark.fast
+def test_failed_sign_ins_elsewhere_dont_keep_its_owner_out(target):
+    """Only failures count by email: anyone sending someone's email with wrong passwords, from as many
+    addresses as it takes to hold one address back, leaves its owner signing in from their own."""
+    for i in range(login_failures_here.max_requests):
+        assert _sign_in(f"203.0.113.{i}", "a guess") == 401
+    assert _sign_in("198.51.100.7", RIGHT) == 200
+    assert _sign_in("198.51.100.7", RIGHT) == 200, "a right password is never counted against the email"
+
+
+@pytest.mark.fast
+def test_one_address_guessing_is_held_back_and_its_owner_still_signs_in(target):
+    """By email and address, failures are held five times sooner than by email from anywhere: one address
+    guessing is stopped (for 15 minutes, past the per-address minute) while the owner's own goes on."""
+    for _ in range(login_failures_here.max_requests):
+        login_limiter._hits.clear()  # a minute later each time: the per-address limit isn't what holds it
+        assert _sign_in("203.0.113.9", "a guess") == 401
+    login_limiter._hits.clear()
+    assert _sign_in("203.0.113.9", RIGHT) == 429, "held back, even with the right one, for a while"
+    assert _sign_in("203.0.113.9", "x", email="someone@example.com") == 401, "another email from there isn't"
+    assert _sign_in("198.51.100.7", RIGHT) == 200, "its owner, from their own address"
+
+
+@pytest.mark.fast
+def test_signing_in_forgets_this_address_s_failures(target):
+    for _ in range(login_failures_here.max_requests - 1):
+        login_limiter._hits.clear()
+        assert _sign_in("198.51.100.7", "mistyped") == 401
+    login_limiter._hits.clear()
+    assert _sign_in("198.51.100.7", RIGHT) == 200
+    for _ in range(login_failures_here.max_requests - 1):
+        login_limiter._hits.clear()
+        assert _sign_in("198.51.100.7", "mistyped again") == 401, "counted afresh"
+
+
+@pytest.mark.fast
+def test_asking_for_someone_s_reset_link_again_and_again_doesnt_hold_back_their_own(no_db):
+    """Each link asked for counts by email and address, held sooner than by email from anywhere."""
+    def asks(address: str, email: str = "target@example.com") -> int:
+        forgot_password_limiter._hits.clear()  # a minute later each time
+        return TestClient(app, client=(address, 1)).post("/v1/auth/forgot-password", json={"email": email}).status_code
+
+    allowed = 501  # no email set up here: answered once it's let through
+    assert [asks("203.0.113.9") for _ in range(forgot_password_here.max_requests + 1)] == (
+        [allowed] * forgot_password_here.max_requests + [429])
+    assert asks("198.51.100.7") == allowed, "its owner's own request"
+    many = forgot_password_anywhere.max_requests - forgot_password_here.max_requests - 1
+    assert [asks(f"192.0.2.{i}") for i in range(many)] == [allowed] * many
+    assert asks("198.51.100.8") == 429, "from anywhere, ten in 15 minutes at most: a mailbox isn't filled"
+    assert asks("198.51.100.8", "someone@example.com") == allowed
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +587,61 @@ def test_an_editor_can_take_their_public_project_down(public_lib_client):
     assert not _public_link_works(client, project)
     assert _refused_for_not_admin(client.patch(f"/v1/projects/{project}", json={"visibility": "public"}, headers=ed))
     assert not _public_link_works(client, project)
+
+
+def _nobodys(client: TestClient, admin: dict, name: str, asset_ids: list[str]) -> str:
+    """A project from before projects had owners (owner_user_id NULL), shared as they all were."""
+    from sqlalchemy import text
+
+    from src.server.database import get_control_session, get_engine_for_url
+    from src.server.repository.control_plane import TenantDbRoutingRepository
+
+    project = client.post("/v1/projects", json={"name": name, "visibility": "shared", "asset_ids": asset_ids},
+                          headers=admin).json()["project_id"]
+    tenant_id = client.get("/v1/tenant/context", headers=admin).json()["tenant_id"]
+    with get_control_session() as session:
+        url = TenantDbRoutingRepository(session).get_by_tenant_id(tenant_id).connection_string
+    with get_engine_for_url(url).begin() as conn:
+        conn.execute(text("UPDATE projects SET owner_user_id = NULL WHERE project_id = :p"), {"p": project})
+    return project
+
+
+@pytest.mark.slow
+def test_a_project_nobody_owns_is_an_account_admin_s_to_change(public_lib_client):
+    """A project from before owners is read by whoever sees it, as any other; changing, trashing, restoring
+    and deleting it is an account admin's (403 project_without_owner; not in an editor's trash)."""
+    client, api_key, library_id, _ = public_lib_client
+    admin = _bearer(api_key)
+    _, ed = _user(client, admin, "prj-nobodys@example.com", "editor")
+    clip = _ingest(client, api_key, library_id, "nobodys/a.jpg", media_type="image")
+    project = _nobodys(client, admin, "From before owners", [clip])
+
+    assert client.get(f"/v1/projects/{project}", headers=ed).json()["owner_user_id"] is None
+    assert project in {p["project_id"] for p in client.get("/v1/projects", headers=ed).json()["items"]}
+    for who in (ed, _editor_key(client, ed)):
+        for method, path, body in (("PATCH", f"/v1/projects/{project}", {"name": "Mine now"}),
+                                   ("POST", f"/v1/projects/{project}/assets", {"asset_ids": [clip]}),
+                                   ("DELETE", f"/v1/projects/{project}/assets", {"asset_ids": [clip]}),
+                                   ("PATCH", f"/v1/projects/{project}/reorder", {"asset_ids": [clip]}),
+                                   ("DELETE", f"/v1/projects/{project}", None)):
+            r = client.request(method, path, json=body, headers=who)
+            assert (r.status_code, r.json()["error"]["code"]) == (403, "project_without_owner"), (method, path, r.text)
+    after = client.get(f"/v1/projects/{project}", headers=ed).json()
+    assert (after["name"], after["asset_count"]) == ("From before owners", 1), "nothing changed"
+
+    def trash(who: dict) -> set[str]:
+        return {p["project_id"] for p in client.get("/v1/projects", params={"status": "trashed"}, headers=who)
+                .json()["items"]}
+
+    assert client.patch(f"/v1/projects/{project}", json={"name": "Kept"}, headers=admin).status_code == 200
+    assert client.delete(f"/v1/projects/{project}", headers=admin).status_code == 204
+    assert project in trash(admin) and project not in trash(ed)
+    assert client.post(f"/v1/projects/{project}/restore", json={}, headers=ed).status_code == 404
+    assert client.post("/v1/projects/empty-trash", json={"all": True}, headers=ed).json()["deleted"] == 0
+    assert client.post(f"/v1/projects/{project}/restore", json={}, headers=admin).status_code == 200
+    assert client.delete(f"/v1/projects/{project}", headers=admin).status_code == 204
+    emptied = client.post("/v1/projects/empty-trash", json={"project_ids": [project]}, headers=admin)
+    assert emptied.json()["deleted"] == 1, emptied.text
 
 
 @pytest.mark.slow

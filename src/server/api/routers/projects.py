@@ -16,7 +16,7 @@ from src.server.api.dependencies import (
     require_editor,
     require_tenant_admin,
 )
-from src.server.api.errors import DecisionRequiredError
+from src.server.api.errors import ApiError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
 from src.server.api.library_access import edited, names, seen
 from src.server.database import get_control_session
@@ -232,9 +232,22 @@ def _get_project_or_404(repo: ProjectRepository, project_id: str):
     return col
 
 
-def _require_owner(col, user_id: str) -> None:
-    """Raise 403 if user is not the owner of the project."""
-    if col.owner_user_id is not None and col.owner_user_id != user_id:
+def _account_admin(request: Request) -> bool:
+    return getattr(request.state, "role", None) == "admin"
+
+
+NOBODYS = "Nobody owns this project (it's from before projects had owners), so only an account admin can change it."
+
+
+def _require_owner(request: Request, col, user_id: str) -> None:
+    """403 unless the caller owns the project. One nobody owns (made before
+    projects had owners) is an account admin's to change: 403
+    project_without_owner for anyone else (reading it is as for any other)."""
+    if col.owner_user_id is None:
+        if not _account_admin(request):
+            raise ApiError(403, "project_without_owner", NOBODYS)
+        return
+    if col.owner_user_id != user_id:
         raise HTTPException(status_code=403, detail="Only the project owner can perform this action")
 
 
@@ -332,11 +345,12 @@ def list_projects(
 ) -> ProjectListResponse:
     """List projects owned by user + shared projects, the ones the caller
     sees for their clips. Active only unless status says otherwise; "all"
-    is active and archived. "trashed" is the caller's own trash, and
-    trashed projects appear nowhere else."""
+    is active and archived. "trashed" is the caller's own trash (an account
+    admin's has the projects nobody owns too), and trashed projects appear
+    nowhere else."""
     repo = ProjectRepository(session, within=seen(request, session))
     if status == "trashed":
-        projects = repo.list_trashed(user_id)
+        projects = repo.list_trashed(user_id, nobodys=_account_admin(request))
     else:
         statuses = ("active", "archived") if status == "all" else (status,)
         projects = repo.list_for_user(user_id, statuses=statuses)
@@ -347,6 +361,7 @@ def list_projects(
 
 @router.post("/empty-trash", response_model=EmptyTrashResponse)
 def empty_project_trash(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
@@ -354,11 +369,11 @@ def empty_project_trash(
 ) -> EmptyTrashResponse:
     """Delete trashed projects for good: the named ones, or the caller's whole
     trash (all: true; neither or both is a 400 scope_required). Only the
-    caller's own trash; active projects are never touched. The clips stay
-    in their libraries."""
+    caller's own trash (an account admin's: the projects nobody owns too);
+    active projects are never touched. The clips stay in their libraries."""
     require_scope(body.project_ids is not None, body.all, "project_ids")
     repo = ProjectRepository(session)
-    doomed = repo.list_trashed(user_id)
+    doomed = repo.list_trashed(user_id, nobodys=_account_admin(request))
     if body.project_ids is not None:
         wanted = set(body.project_ids)
         doomed = [c for c in doomed if c.project_id in wanted]
@@ -413,7 +428,7 @@ def update_project(
     makes a project public."""
     repo = ProjectRepository(session, within=seen(request, session))
     col = _get_project_or_404(repo, project_id)
-    _require_owner(col, user_id)
+    _require_owner(request, col, user_id)
     _require_admin_to_publish(request, body.visibility)
 
     old_visibility = col.visibility
@@ -460,7 +475,7 @@ def delete_project(
     deletes it for good."""
     repo = ProjectRepository(session, within=seen(request, session))
     col = _get_project_or_404(repo, project_id)
-    _require_owner(col, user_id)
+    _require_owner(request, col, user_id)
     # The public_projects row stays, so a restored public project's link
     # works again; the public routes treat a trashed project as missing.
     repo.trash(project_id)
@@ -476,7 +491,8 @@ def restore_project(
     body: RestoreProjectRequest | None = None,
 ) -> RestoreProjectResponse:
     """Take a project out of the trash, back to active or archived as it
-    was. 404 unless it's in the caller's trash.
+    was. 404 unless it's in the caller's trash (one nobody owns: an account
+    admin's).
 
     If clips in it are in the trash, the request must say what to do with
     them (with_clips), or it's refused with 409 clips_in_trash and the
@@ -486,7 +502,7 @@ def restore_project(
     col = repo.get_by_id(project_id, include_trashed=True)
     if col is None or col.deleted_at is None:
         raise HTTPException(status_code=404, detail="Project not in the trash")
-    if col.owner_user_id is not None and col.owner_user_id != user_id:
+    if col.owner_user_id != user_id and not (col.owner_user_id is None and _account_admin(request)):
         raise HTTPException(status_code=404, detail="Project not in the trash")
     with_clips = body.with_clips if body else None
     hidden = repo.hidden_clip_counts(project_id)
@@ -558,6 +574,7 @@ def restore_project_clips(
 def add_assets_to_project(
     project_id: str,
     body: AssetIdsRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
@@ -565,7 +582,7 @@ def add_assets_to_project(
     """Add assets to a project. Only the owner can add. Idempotent."""
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
-    _require_owner(col, user_id)
+    _require_owner(request, col, user_id)
 
     asset_repo = AssetRepository(session)
     for aid in body.asset_ids:
@@ -582,6 +599,7 @@ def add_assets_to_project(
 def remove_assets_from_project(
     project_id: str,
     body: AssetIdsRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
@@ -589,7 +607,7 @@ def remove_assets_from_project(
     """Remove assets from a project. Only the owner can remove."""
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
-    _require_owner(col, user_id)
+    _require_owner(request, col, user_id)
     removed = repo.remove_assets(project_id, body.asset_ids)
     return BatchRemoveResponse(removed=removed)
 
@@ -721,7 +739,7 @@ def reorder_project(
     see; those they can't keep their places."""
     repo = ProjectRepository(session, within=seen(request, session))
     col = _get_project_or_404(repo, project_id)
-    _require_owner(col, user_id)
+    _require_owner(request, col, user_id)
 
     try:
         repo.reorder(project_id, body.asset_ids)

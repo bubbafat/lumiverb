@@ -193,6 +193,33 @@ def test_a_role_set_takes_effect_on_what_they_can_edit(env, team):
     assert env.client.get(f"/v1/assets/{clip}", headers=team.lead).status_code == 404
 
 
+def test_a_server_admin_s_role_on_a_library_is_a_server_admin_s_to_set(env, team):
+    """Whoever holds a server admin's password has the install: a library's admin, or an account admin's key,
+    sets anyone's role there but theirs (403 server_admin_user, nothing set); a server admin does."""
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import UserRepository
+
+    tag = uuid.uuid4().hex[:8]
+    keeper_email, boss_email = f"keeper-{tag}@example.com", f"boss-{tag}@example.com"
+    keeper_id, boss_id = _person(env, keeper_email, "editor"), _person(env, boss_email, "admin")
+    with get_control_session() as session:
+        for user_id in (keeper_id, boss_id):
+            UserRepository(session).name_server_admin(user_id)
+    _ok(_role(env, team.a, team.lead_id, "admin", env.admin))
+
+    for caller in (team.lead, env.admin):
+        refused = _role(env, team.a, keeper_id, "viewer", caller)
+        _error(refused, 403, "server_admin_user")
+        assert f"{keeper_email} is a server admin" in refused.json()["error"]["message"]
+    assert _people(env, team.a, env.admin)[keeper_email]["set_role"] is None, "nothing set"
+    _ok(_role(env, team.a, team.member_id, "editor", team.lead))  # anyone else's, as before
+
+    token = _ok(env.client.post("/v1/auth/login", json={"email": boss_email, "password": PASSWORD}))["access_token"]
+    boss = {"Authorization": f"Bearer {token}"}
+    assert _ok(_role(env, team.a, keeper_id, "viewer", boss))["set_role"] == "viewer"
+    assert _ok(_role(env, team.a, keeper_id, None, boss))["set_role"] is None
+
+
 # ---------------------------------------------------------------------------
 # The CLI, against the same API
 # ---------------------------------------------------------------------------

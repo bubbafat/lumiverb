@@ -210,6 +210,22 @@ def test_it_says_which_certificate_https_serves(mac):
     assert said["expires_at"].startswith(served.not_after.strftime("%Y-%m-%dT%H:%M"))
 
 
+def test_a_name_lumiverb_s_certificate_leaves_out_is_said(mac, monkeypatch):
+    """Its authority vouches for this machine's names when it was made: a name since (the Mac renamed) that
+    isn't a local one is left out, and Settings › Network says so."""
+    from src.server.lifecycle import tls
+
+    tls.served(mac, ("macstudio.local", "macstudio", "localhost", "127.0.0.1"))
+    monkeypatch.setattr(tls, "names_here", lambda: ("studio-2.local", "studio-2", "localhost", "127.0.0.1"))
+    tls.served(mac)  # run's next look: issued again for the names it may have
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+        auth = _signed_in(client)
+        network.set_choice(mac, Choice(other_devices=True, https=True))
+        said = client.get("/v1/system/network", headers=auth).json()["certificate"]
+    assert said["names_left_out"] == ["studio-2"]
+    assert "studio-2.local" in said["names"] and "studio-2" not in said["names"]
+
+
 def test_an_admin_s_own_certificate_is_kept_there_and_taken_away_again(mac):
     from tests.test_server_tls import _theirs
 

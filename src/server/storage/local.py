@@ -1,17 +1,45 @@
 """Local filesystem storage for the stored artifacts (the previews)."""
 
 import errno
+import logging
 import os
+import stat
 import threading
 from functools import lru_cache
 from pathlib import Path
+from typing import cast
 
 from src.server.config import get_settings
 from src.server.storage import store
 from src.server.storage.store import UnsafeKeyError
 from src.shared import previews_location
 
-__all__ = ["LocalStorage", "UnsafeKeyError", "get_storage"]
+__all__ = ["LocalStorage", "UnsafeKeyError", "get_storage", "through_a_link"]
+
+logger = logging.getLogger(__name__)
+
+
+def through_a_link(root: Path | str, path: Path | str) -> bool:
+    """Whether `path` (in `root`) leaves it, or a part of it below `root` is a
+    symbolic link, as the disk is now (a part not there yet is none). What
+    Lumiverb reads, writes, lists, moves and deletes in a previews folder is
+    never through one, whatever it points at: a link is refused (read,
+    written) or passed by (listed, moved, swept, deleted). The root itself
+    may be one: it's the folder an admin chose."""
+    rel = os.path.relpath(os.path.abspath(path), os.path.abspath(root))
+    if rel == os.curdir:
+        return False
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return True
+    at = os.path.abspath(root)
+    for part in rel.split(os.sep):
+        at = os.path.join(at, part)
+        try:
+            if stat.S_ISLNK(os.lstat(at).st_mode):
+                return True
+        except OSError:
+            return False  # nothing further is there yet (or it can't be looked at: neither can it be opened)
+    return False
 
 
 class LocalStorage:
@@ -19,6 +47,9 @@ class LocalStorage:
     Local filesystem storage. Keys are relative to the previews folder:
     DATA_DIR, or the one an admin chose, or the key's library's own
     (src/shared/previews_location.py).
+
+    Nothing is read, written or deleted through a symbolic link under any
+    of those folders (through_a_link).
 
     Path structure:
       {previews}/{tenant_id}/{library_id}/proxies/{bucket}/{asset_id}_{filename}.webp
@@ -70,17 +101,27 @@ class LocalStorage:
     face_crop_key_of = staticmethod(store.face_crop_key_of)
 
     @staticmethod
-    def _under(root: Path, key: str) -> Path:
-        """The key's path in `root`. A key that would leave it is refused: an
-        absolute key, one with a `..` part, or one that resolves outside it."""
+    def path_in(root: Path, key: str, *, passing_links: bool = False) -> Path | None:
+        """The key's path in `root`. A key that would leave it is refused
+        (UnsafeKeyError): an absolute key, one with a `..` part, or one that
+        resolves outside it; so is one through a symbolic link there
+        (through_a_link), or with passing_links it's None, and logged."""
         store.check_key(key)
         base = os.path.abspath(root)
         path = Path(base) / key
-        # Checked on the path itself, not through links: a link inside the
-        # folder (an operator's choice) is followed as before.
         if not os.path.normpath(path).startswith(base.rstrip(os.sep) + os.sep):
             raise UnsafeKeyError(f"Storage key leaves the previews folder: {key!r}")
+        if through_a_link(base, path):
+            if passing_links:
+                logger.warning("Passed by %s in %s: it's through a symbolic link, never followed there", key, base)
+                return None
+            raise UnsafeKeyError(f"Storage key goes through a symbolic link in the previews folder {base}: {key!r}")
         return path
+
+    @classmethod
+    def _under(cls, root: Path, key: str) -> Path:
+        """The key's path in `root`; one through a link refused, as path_in does."""
+        return cast(Path, cls.path_in(root, key))  # never None: it refuses instead
 
     def paths(self, key: str) -> list[Path]:
         """Every place the key may be: its folder, then (moving) the old one."""
@@ -118,9 +159,12 @@ class LocalStorage:
         return any(path.exists() for path in self.paths(key))
 
     def delete(self, key: str) -> bool:
-        """Removes the key wherever it is; True if a file went."""
+        """Removes the key wherever it is (never through a link); True if a file went."""
+        location = self.location
         removed = False
-        for path in self.paths(key):
+        for root in location.roots_for(location.library_of(key)):
+            if (path := self.path_in(root, key, passing_links=True)) is None:
+                continue
             try:
                 path.unlink()
                 removed = True

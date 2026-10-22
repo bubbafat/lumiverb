@@ -341,6 +341,9 @@ class NetworkCertificate(BaseModel):
     # its SHA-256 fingerprint, for a person to compare on the device.
     ca_addresses: list[str] = []
     ca_fingerprint: str | None = None
+    # This machine's names Lumiverb's own authority can't vouch for (it was made when the machine had
+    # others): not in its certificate, so other devices can't use them over HTTPS.
+    names_left_out: list[str] = []
 
 
 class HttpsSeen(BaseModel):
@@ -413,7 +416,7 @@ def _network() -> Network:
         source=served.source, names=list(served.names), expires_at=served.not_after,
         ca_url="/lumiverb-ca.crt" if ours else None,
         ca_addresses=[f"{a}/lumiverb-ca.crt" for a in network.addresses(at.http, "http")] if ours else [],
-        ca_fingerprint=tls.ca_fingerprint(data) if ours else None)
+        ca_fingerprint=tls.ca_fingerprint(data) if ours else None, names_left_out=list(served.left_out))
     seen = network.https_seen(data) if chosen.https else None
     return Network(available=True, other_devices=chosen.other_devices, https=chosen.https,
                    plain_http=chosen.plain_http, addresses=network.addresses(at.http, "http"),
@@ -774,6 +777,7 @@ def move_previews(body: PreviewsChange, request: Request,
     from src.server.api import new_folder
     from src.server.api.client_address import on_this_machine
     from src.server.api.errors import ApiError, DecisionRequiredError
+    from src.server.api.routers.libraries import originals_here
     from src.server.config import get_settings
     from src.server.storage import move
     from src.shared import previews_location
@@ -785,9 +789,10 @@ def move_previews(body: PreviewsChange, request: Request,
     if location.moving:
         raise ApiError(409, "move_running", "The previews are being moved already: wait for that to finish.")
     target = body.folder if body.folder is not None else str(data)
+    originals = originals_here(session)  # the account's libraries this server reads: never with their files
     try:
         with new_folder.made_if_asked(body.folder, body.make_folder, data):
-            _, chosen, need = move.plan(data, body.folder)
+            _, chosen, need = move.plan(data, body.folder, originals=originals)
             if need.files and not body.move:
                 raise DecisionRequiredError(
                     "move_previews",
@@ -796,9 +801,9 @@ def move_previews(body: PreviewsChange, request: Request,
                     {"from": str(location.previews), "to": str(chosen), "files": need.files, "bytes": need.bytes,
                      "free": shutil.disk_usage(chosen).free},
                 )
-            move.start(data, target)
+            move.start(data, target, originals=originals)
     except move.MoveError as exc:
-        raise ApiError(400, "folder_not_usable", str(exc)) from None
+        raise ApiError(exc.status, exc.code, str(exc)) from None
     logger.info("Moving the previews to %s (an admin's choice)", target)
     move.settled(data)
     return _storage(request, session)

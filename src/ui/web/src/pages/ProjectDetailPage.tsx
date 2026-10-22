@@ -263,12 +263,12 @@ export default function ProjectDetailPage() {
   const missingClips = project?.missing_asset_count ?? 0;
   const libraryTrashedClips = project?.library_trashed_asset_count ?? 0;
   const archivedClips = project?.archived_asset_count ?? 0;
-  // A project from before ownership belongs to everyone.
-  const isOwner = project?.ownership !== "shared" || project?.owner_user_id == null;
   // Making a project public is an admin's, as for a library. Anyone else sees
   // Public only on a project that is public already, to take it down from.
   const role = useRole();
   const isAdmin = role === "admin";
+  // Changed by its owner; one from before ownership, which nobody owns, by an account admin (the server's rule).
+  const isOwner = project?.owner_user_id == null ? isAdmin : project?.ownership !== "shared";
   const wasPublic = project?.visibility === "public";
 
   if (isProjectLoading) {

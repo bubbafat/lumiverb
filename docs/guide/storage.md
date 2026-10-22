@@ -39,6 +39,14 @@ Move them to a drive with room, such as off a Mac's system drive. A server admin
 
 New previews go to the new folder at once, and the rest move in the background. The page shows how many files and how much are across. Lumiverb keeps working meanwhile: previews not moved yet show from where they are.
 
+Lumiverb moves, sweeps and deletes what's in a previews folder as its own, so the folder must be one of its own:
+
+- Not a library's folder, not inside one, and not a folder holding one: previews stay apart from every library's files.
+- Not inside Lumiverb's own folders in the data folder, nor a folder holding the data folder. A new, empty folder in the data folder is fine.
+- One that belongs to the user Lumiverb runs as: on a Mac, you; on Linux, `lumiverb` (see below).
+
+Each is refused saying why. Lumiverb never follows a symbolic link inside a previews folder: a file or folder linked from elsewhere is left alone, never read, moved or deleted.
+
 If the move stops (the new drive full or unplugged, say), the page says why. It's tried again in 15 minutes, or click **Try again**. **Back to the data folder…** moves them back.
 
 From any other computer, the page says "Move them on the computer Lumiverb is installed on."
@@ -76,6 +84,12 @@ Save, then restart the API:
 
 ```bash
 sudo systemctl restart lumiverb-api
+```
+
+The folder must belong to the `lumiverb` user:
+
+```bash
+sudo chown lumiverb: /mnt/big/lumiverb-previews
 ```
 
 Then choose the folder in Settings.

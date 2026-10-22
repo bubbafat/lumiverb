@@ -525,11 +525,32 @@ class UserRepository:
         return any(user_id != without_user and tenant_id != without_tenant and tenant_id in live
                    for user_id, tenant_id in admins)
 
+    def name_server_admin(self, user_id: str) -> int:
+        """Make the user a server admin, and commit. Their links not yet used
+        (an invite, a reset) end with it: one an account admin made before
+        would set a server admin's password, and only a server admin gives
+        a server admin a link now. Returns how many still good ones ended;
+        none for someone who's one already (nothing changes)."""
+        user = self._session.exec(select(User).where(User.user_id == user_id).with_for_update()).first()
+        if user is None:
+            raise ValueError(f"User not found: {user_id}")
+        if user.server_admin:
+            self._session.rollback()
+            return 0
+        user.server_admin = True
+        self._session.add(user)
+        ended = PasswordResetTokenRepository(self._session).void_unused(user_id)
+        self._session.commit()
+        return ended
+
     def set_server_admin(self, user_id: str, server_admin: bool, *, keep_one: bool = False) -> bool:
-        """Make the user a server admin or not, and commit. False when
-        keep_one and they're the last one who can sign in (nothing changes):
-        keeps_a_server_admin, so two taking each other's away at once leave
-        one."""
+        """Make the user a server admin (name_server_admin) or not, and
+        commit. False when keep_one and they're the last one who can sign in
+        (nothing changes): keeps_a_server_admin, so two taking each other's
+        away at once leave one."""
+        if server_admin:
+            self.name_server_admin(user_id)
+            return True
         keeps = keep_one and self.keeps_a_server_admin(without_user=user_id)
         user = self._session.exec(select(User).where(User.user_id == user_id).with_for_update()).first()
         if user is None:
@@ -633,18 +654,22 @@ class PasswordResetTokenRepository:
             self._session.add(token)
             self._session.commit()
 
-    def void_unused(self, user_id: str) -> None:
+    def void_unused(self, user_id: str) -> int:
         """Every link the user hasn't used stops working (a new one, or a new
-        password, replaces them). Uncommitted: it goes with what replaces them."""
+        password, replaces them). Uncommitted: it goes with what replaces them.
+        Returns how many of them still worked (not expired)."""
         now = utcnow()
         stmt = (
             select(PasswordResetToken)
             .where(PasswordResetToken.user_id == user_id)
             .where(PasswordResetToken.used_at.is_(None))
         )
+        working = 0
         for token in self._session.exec(stmt).all():
+            working += token.expires_at > now
             token.used_at = now
             self._session.add(token)
+        return working
 
     def consume_valid_and_update_password(self, plaintext_token: str, password_hash: str) -> tuple[User, int] | None:
         """

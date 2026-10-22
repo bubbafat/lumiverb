@@ -585,11 +585,14 @@ def _still_theirs(session: Session, claims: dict, tenant_id: str, asset: Asset) 
 def stream(token: str, request: Request) -> StreamingResponse:
     """Stream what a playback link points at. The signature is the credential.
 
-    Skips the tenant middleware: it resolves the tenant from the token.
+    Skips the tenant middleware: it resolves the tenant from the token, and
+    refuses a deleted account's link as the middleware refuses its every
+    request (401 account_deleted; a public page's, 404 as one that isn't
+    there).
     """
     from src.server.api.streaming import stream_stored
     from src.server.database import get_control_session, get_engine_for_url
-    from src.server.repository.control_plane import TenantDbRoutingRepository
+    from src.server.repository.control_plane import TenantDbRoutingRepository, TenantRepository
 
     claims = read_stream_token(token)
     if claims is None:
@@ -598,9 +601,12 @@ def stream(token: str, request: Request) -> StreamingResponse:
     if not isinstance(tenant_id, str) or not isinstance(asset_id, str):
         raise ApiError(403, "invalid_link", "This link is invalid or expired")
     with get_control_session() as ctrl:
+        gone = TenantRepository(ctrl).gone(tenant_id)
         routing = TenantDbRoutingRepository(ctrl).get_by_tenant_id(tenant_id)
-    if routing is None:
+    if routing is None or gone and (claims.get("pl") or claims.get("pp")):
         raise HTTPException(status_code=404, detail="Not found")
+    if gone:
+        raise ApiError(401, "account_deleted", "This account was deleted")
 
     with Session(get_engine_for_url(routing.connection_string)) as session:
         asset = AssetRepository(session).get_by_id(asset_id)

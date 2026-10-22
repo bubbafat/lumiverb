@@ -350,16 +350,24 @@ def list_server_admins(session: Annotated[Session, Depends(get_db_session)]) -> 
     return _server_admins(session)
 
 
-@router.post("/server-admins", response_model=ServerAdmins)
-def name_server_admin(body: NameServerAdmin, session: Annotated[Session, Depends(get_db_session)]) -> ServerAdmins:
+class ServerAdminNamed(ServerAdmins):
+    # Their links not yet used (an invite, a reset) that ended with it: only a
+    # server admin gives a server admin a link (UserRepository.name_server_admin).
+    links_ended: int = 0
+
+
+@router.post("/server-admins", response_model=ServerAdminNamed)
+def name_server_admin(body: NameServerAdmin,
+                      session: Annotated[Session, Depends(get_db_session)]) -> ServerAdminNamed:
     """Make someone who signs in here a server admin (one already is: nothing
-    changes). 404 user_not_found when nobody here has that email. Then the
-    server admins."""
+    changes); their links not yet used end with it. 404 user_not_found when
+    nobody here has that email. Then the server admins, and how many links
+    ended."""
     user = UserRepository(session).get_by_email(body.email.strip())
     if user is None:
         raise ApiError(404, "user_not_found", "Nobody signs in here with that email.")
-    UserRepository(session).set_server_admin(user.user_id, True)
-    return _server_admins(session)
+    ended = UserRepository(session).name_server_admin(user.user_id)
+    return ServerAdminNamed(**_server_admins(session).model_dump(), links_ended=ended)
 
 
 @router.delete("/server-admins/{user_id}", status_code=204)

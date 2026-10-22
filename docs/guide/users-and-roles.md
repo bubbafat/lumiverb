@@ -59,7 +59,7 @@ Each person has a **Role here**:
 - **Editor** or **Viewer**: as in the account, on this library only.
 - **No access**: they don't see it.
 
-So an editor on one library can be a viewer everywhere else, or a viewer can be given one library to edit. The **Why** column says where each person's role comes from.
+So an editor on one library can be a viewer everywhere else, or a viewer can be given one library to edit. The **Why** column says where each person's role comes from. A server admin's role on a library is set only by a server admin.
 
 **Private** makes the library visible only to account admins and the people given a role on it. A public link is separate: anyone with it sees the library either way.
 
@@ -87,7 +87,7 @@ What belongs to the whole install rather than one account is a server admin's: t
 
 A server admin adds others in **Admin › Accounts**, under **Server admins**: type the email of someone who signs in here and click **Make server admin**. **Remove** takes it away; the last one can't be removed there, nor deleted, nor their account. One in a deleted account doesn't count: they can't sign in.
 
-Whoever has a server admin's password has the whole install, so a server admin is out of an account admin's reach: only another server admin makes them a new invite link, changes their role or libraries, or removes them.
+Whoever has a server admin's password has the whole install, so a server admin is out of an account admin's reach: only another server admin makes them a new invite link, changes their role or libraries, or removes them. So naming someone a server admin stops any invite or reset link they hadn't used yet, and the page says so: if they haven't joined, a server admin makes them a new link.
 
 On the computer Lumiverb is installed on, the command line lists them, and adds or removes one even when there's none left. On a Mac:
 
@@ -126,6 +126,8 @@ sudo /opt/lumiverb/.venv/bin/lumiverb-server reset-password --env /etc/lumiverb/
 ```
 
 A new password signs that person out everywhere, stops the API keys they made, and voids any reset or invite link they hadn't used.
+
+Wrong passwords are held back, not right ones: after a few failed sign-ins from one place, that place waits 15 minutes before trying that email again, while you still sign in from your own. Many failures for one email from many places hold it back for everyone for a while. Asking for reset links and changing your password are held back the same way.
 
 To change your own password, signed in: **Settings › Account › Change password**, with the one you have now
 and the new one twice. Every other browser and device signs in again; this one stays signed in. If you made API

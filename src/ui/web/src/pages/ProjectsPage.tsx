@@ -16,6 +16,7 @@ import { Modal } from "../components/Modal";
 import { SkeletonRow } from "../components/SkeletonRow";
 import type { ProjectItem } from "../api/types";
 import { THUMBNAIL } from "../lib/names";
+import { useRole } from "../lib/useCanEdit";
 
 type Tab = Exclude<ProjectView, "all">;
 const TABS: { id: Tab; label: string }[] = [
@@ -151,6 +152,7 @@ function ConfirmAction({
 
 export default function ProjectsPage() {
   const queryClient = useQueryClient();
+  const isAdmin = useRole() === "admin";
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createDesc, setCreateDesc] = useState("");
@@ -286,8 +288,8 @@ export default function ProjectsPage() {
       );
     }
     // Only the owner archives or deletes (the server refuses anyone else);
-    // a project from before ownership belongs to everyone.
-    if (project.ownership === "shared" && project.owner_user_id != null) return null;
+    // one from before ownership, which nobody owns, an account admin.
+    if (project.owner_user_id == null ? !isAdmin : project.ownership === "shared") return null;
     return (
       // Hidden until hover only where hovering exists; a phone can't hover.
       <div className="flex items-center gap-1 transition-opacity focus-within:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">

@@ -66,6 +66,7 @@ def change_password(body: PasswordChange, request: Request) -> PasswordChanged:
     browser gets a new session. Never with an API key: whoever holds a key mustn't take the account."""
     import bcrypt
 
+    from src.server.api import rate_limit
     from src.server.api.errors import ApiError, DecisionRequiredError
     from src.server.api.rate_limit import change_password_limiter
     from src.server.api.routers.auth import (
@@ -79,8 +80,10 @@ def change_password(body: PasswordChange, request: Request) -> PasswordChanged:
     user_id: str | None = getattr(request.state, "user_id", None)
     if not user_id or getattr(request.state, "key_id", None):
         raise ApiError(403, "signed_in_only", "A password is changed signed in with it, not with an API key.")
+    # Every try by address; by the person only wrong current passwords (rate_limit.py says why).
     change_password_limiter.check(request)
-    change_password_limiter.check(request, key=f"user:{user_id}")
+    person = f"user:{user_id}"
+    rate_limit.name_held(request, person, rate_limit.change_password_failures_here, rate_limit.change_password_failures)
     new = body.new_password
     if len(new) < MIN_PASSWORD_LENGTH or len(new.encode()) > MAX_PASSWORD_BYTES:
         raise ApiError(400, "password_length", f"Use {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_BYTES} characters.")
@@ -94,7 +97,10 @@ def change_password(body: PasswordChange, request: Request) -> PasswordChanged:
         current = body.current_password.encode()
         # 400, not 401: the session is good, and a 401 would sign this browser out.
         if user is None or len(current) > MAX_PASSWORD_BYTES or not bcrypt.checkpw(current, user.password_hash.encode()):
+            rate_limit.name_counted(request, person, rate_limit.change_password_failures_here,
+                                    rate_limit.change_password_failures)
             raise ApiError(400, "wrong_password", "That isn't your current password.")
+        rate_limit.name_cleared(request, person, rate_limit.change_password_failures_here)
         keys = ApiKeyRepository(session).live_made_by(user.tenant_id, user.user_id)
         if keys and not body.end_api_keys:
             raise DecisionRequiredError(

@@ -12,7 +12,12 @@ The certificate is one of two, in DATA_DIR/tls:
   address on the network, and localhost. It's issued again when those
   change (a new address from the router) and a month before it ends. Each
   device trusts the authority once: Settings › Network offers `ca.crt`
-  (served at /lumiverb-ca.crt, signed in or not: it's public).
+  (served at /lumiverb-ca.crt, signed in or not: it's public). It vouches
+  for nothing but local names and addresses and this machine's names when it
+  was made (its NameConstraints, `permits`); one made before it had them is
+  kept, as every device would have to trust a new one again. A name it
+  can't vouch for (the machine renamed since) is left out of the server's
+  certificate, and Settings › Network says so.
 - **Yours**: a certificate and key an admin gives (from any authority the
   devices trust: public hosting), checked before it's kept (`yours.crt`,
   `yours.key`), served instead until it's taken away.
@@ -27,6 +32,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import ipaddress
+import logging
 import os
 import socket
 from dataclasses import dataclass
@@ -36,6 +42,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+logger = logging.getLogger(__name__)
 
 TLS_DIR = "tls"
 CA_DAYS = 3650
@@ -58,6 +66,9 @@ class Served:
     names: tuple[str, ...]
     not_after: dt.datetime
     fingerprint: str  # SHA-256 of the certificate (DER), hex
+    # This machine's names Lumiverb's own authority can't vouch for (it was made
+    # when the machine had others): not in the certificate, so not for HTTPS.
+    left_out: tuple[str, ...] = ()
 
 
 def folder(data_dir: Path) -> Path:
@@ -131,16 +142,71 @@ def _first_cert(pem: bytes) -> x509.Certificate:
     return x509.load_pem_x509_certificates(pem)[0]
 
 
-def _served(cert_path: Path, key_path: Path, source: str) -> Served:
+def _served(cert_path: Path, key_path: Path, source: str, left_out: tuple[str, ...] = ()) -> Served:
     cert = _first_cert(cert_path.read_bytes())
-    return Served(cert_path, key_path, source, _names_of(cert), cert.not_valid_after_utc, _fingerprint(cert))
+    return Served(cert_path, key_path, source, _names_of(cert), cert.not_valid_after_utc, _fingerprint(cert),
+                  left_out)
 
 
 # -- Lumiverb's own authority -----------------------------------------------------------------
 
 
-def _authority(data_dir: Path, now: dt.datetime) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
-    """This install's authority: made once, kept."""
+# What Lumiverb's own authority may vouch for (its NameConstraints): names only a
+# local network has, and the addresses only one has (loopback, the private ranges,
+# link-local), with this machine's own names when it's made. A device trusting it
+# trusts it for nothing else, so its key could never stand in for another site.
+LOCAL_DOMAINS = ("local", "localhost", "home.arpa", "lan", "internal")
+LOCAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
+    "::1/128", "fc00::/7", "fe80::/10"))
+
+
+def _dns_names(names: tuple[str, ...]) -> list[str]:
+    """The names that aren't addresses, as a certificate spells them (lowercase, no trailing dot)."""
+    out = []
+    for name in names:
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            out.append(name.rstrip(".").lower())
+    return list(dict.fromkeys(out))
+
+
+def _constraints(names: tuple[str, ...]) -> x509.NameConstraints:
+    """The authority's: the local domains and this machine's names, the local addresses."""
+    dns: list[x509.GeneralName] = []
+    for domain in dict.fromkeys([*LOCAL_DOMAINS, *_dns_names(names)]):
+        try:
+            dns.append(x509.DNSName(domain))
+        except ValueError:  # not a name a certificate can carry (not ASCII): it gets none
+            continue
+    return x509.NameConstraints(permitted_subtrees=[*dns, *(x509.IPAddress(n) for n in LOCAL_NETWORKS)],
+                                excluded_subtrees=None)
+
+
+def permits(ca: x509.Certificate, name: str) -> bool:
+    """Whether the authority may vouch for `name` (a host name or an address):
+    every name when it has no NameConstraints (one made before they were
+    added: kept, as every device would have to trust a new one again)."""
+    try:
+        permitted = ca.extensions.get_extension_for_class(x509.NameConstraints).value.permitted_subtrees
+    except x509.ExtensionNotFound:
+        return True
+    if permitted is None:
+        return True
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        host = name.rstrip(".").lower()
+        return any(host == base or host.endswith("." + base)
+                   for base in (n.value.lower() for n in permitted if isinstance(n, x509.DNSName)))
+    return any(address in n.value for n in permitted if isinstance(n, x509.IPAddress))
+
+
+def _authority(data_dir: Path, now: dt.datetime,
+               names: tuple[str, ...] = ()) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
+    """This install's authority: made once, kept. A new one may vouch only for
+    local names and addresses, and `names` (this machine's, as it's made)."""
     cert_path, key_path = ca_certificate(data_dir), folder(data_dir) / "ca.key"
     if cert_path.exists() and key_path.exists():
         return (x509.load_pem_x509_certificate(cert_path.read_bytes()),
@@ -152,6 +218,7 @@ def _authority(data_dir: Path, now: dt.datetime) -> tuple[x509.Certificate, ec.E
             .serial_number(x509.random_serial_number())
             .not_valid_before(now - dt.timedelta(minutes=5)).not_valid_after(now + dt.timedelta(days=CA_DAYS))
             .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .add_extension(_constraints(names), critical=True)
             .add_extension(x509.KeyUsage(digital_signature=True, key_cert_sign=True, crl_sign=True,
                                          content_commitment=False, key_encipherment=False, data_encipherment=False,
                                          key_agreement=False, encipher_only=False, decipher_only=False), critical=True)
@@ -173,7 +240,15 @@ def _alt_names(names: tuple[str, ...]) -> list[x509.GeneralName]:
 
 
 def _issue(data_dir: Path, names: tuple[str, ...], now: dt.datetime) -> Served:
-    ca, ca_key = _authority(data_dir, now)
+    """The server's certificate, for those of `names` the authority permits:
+    one it doesn't (the machine renamed since it was made) is left out, logged,
+    and said by Settings › Network (Served.left_out)."""
+    ca, ca_key = _authority(data_dir, now, names)
+    left_out = tuple(n for n in names if not permits(ca, n))
+    if left_out:
+        logger.warning("Lumiverb's certificate leaves out %s: its authority, made for this machine's names then, "
+                       "can't vouch for them. Over HTTPS other devices use the names it has.", ", ".join(left_out))
+    names = tuple(n for n in names if n not in left_out)
     key = ec.generate_private_key(ec.SECP256R1())
     cert = (x509.CertificateBuilder()
             .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, names[0])]))
@@ -191,7 +266,7 @@ def _issue(data_dir: Path, names: tuple[str, ...], now: dt.datetime) -> Served:
     key_path, cert_path = folder(data_dir) / "server.key", folder(data_dir) / "server.crt"
     _write(key_path, _key_pem(key), private=True)
     _write(cert_path, _cert_pem(cert))
-    return _served(cert_path, key_path, LUMIVERB)
+    return _served(cert_path, key_path, LUMIVERB, left_out)
 
 
 # -- Yours ------------------------------------------------------------------------------------
@@ -248,9 +323,11 @@ def forget_yours(data_dir: Path) -> None:
 # -- What's served ------------------------------------------------------------------------------
 
 
-def describe(data_dir: Path, now: dt.datetime | None = None) -> Served | None:
+def describe(data_dir: Path, now: dt.datetime | None = None, names: tuple[str, ...] | None = None) -> Served | None:
     """What's served now, as served() would choose it but issuing nothing:
-    yours while it can be, else Lumiverb's own; None before run made one."""
+    yours while it can be, else Lumiverb's own, with this machine's names
+    (`names`, else names_here()) its authority can't vouch for; None before
+    run made one."""
     yours_cert, yours_key = _yours_paths(data_dir)
     try:
         if yours_cert.exists() and yours_key.exists():
@@ -261,10 +338,19 @@ def describe(data_dir: Path, now: dt.datetime | None = None) -> Served | None:
     server_cert, server_key = folder(data_dir) / "server.crt", folder(data_dir) / "server.key"
     try:
         if server_cert.exists() and server_key.exists():
-            return _served(server_cert, server_key, LUMIVERB)
+            return _served(server_cert, server_key, LUMIVERB, _left_out(data_dir, names or names_here()))
     except (OSError, ValueError):
         return None
     return None
+
+
+def _left_out(data_dir: Path, names: tuple[str, ...]) -> tuple[str, ...]:
+    """Those of `names` this install's authority can't vouch for (none when it can't be read)."""
+    try:
+        ca = x509.load_pem_x509_certificate(ca_certificate(data_dir).read_bytes())
+    except (OSError, ValueError):
+        return ()
+    return tuple(n for n in names if not permits(ca, n))
 
 
 def served(data_dir: Path, names: tuple[str, ...] | None = None, now: dt.datetime | None = None) -> Served:
@@ -281,13 +367,16 @@ def served(data_dir: Path, names: tuple[str, ...] | None = None, now: dt.datetim
         except (OSError, TlsError):
             pass  # ended, or broken since: Lumiverb's own meanwhile (Settings says which is served)
     names = names or names_here()
+    ca, _ = _authority(data_dir, now, names)
+    left_out = tuple(n for n in names if not permits(ca, n))
     cert_path, key_path = folder(data_dir) / "server.crt", folder(data_dir) / "server.key"
     try:
-        current = _served(cert_path, key_path, LUMIVERB) if cert_path.exists() and key_path.exists() else None
+        current = (_served(cert_path, key_path, LUMIVERB, left_out) if cert_path.exists() and key_path.exists()
+                   else None)
     except (OSError, ValueError):
         current = None
-    if (current is not None and set(current.names) == set(names) and current.not_after - now > RENEW_BEFORE
-            and _issued_by_ours(data_dir, cert_path)):
+    if (current is not None and set(current.names) == set(names) - set(left_out)
+            and current.not_after - now > RENEW_BEFORE and _issued_by_ours(data_dir, cert_path)):
         return current
     return _issue(data_dir, names, now)
 

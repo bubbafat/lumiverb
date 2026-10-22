@@ -244,9 +244,12 @@ function ServerAdmins() {
   const qc = useQueryClient();
   const { data: admins, error } = useQuery({ queryKey: SERVER_ADMINS, queryFn: listServerAdmins });
   const [email, setEmail] = useState("");
+  const [ended, setEnded] = useState<{ email: string; links: number } | null>(null);
   const add = useMutation({
     mutationFn: () => addServerAdmin(email.trim()),
-    onSuccess: () => {
+    onMutate: () => setEnded(null),
+    onSuccess: (named) => {
+      setEnded(named.links_ended ? { email: email.trim(), links: named.links_ended } : null);
       setEmail("");
       return qc.invalidateQueries({ queryKey: SERVER_ADMINS });
     },
@@ -288,6 +291,13 @@ function ServerAdmins() {
                onChange={(e) => setEmail(e.target.value)} placeholder="them@example.com" required className={`${input} min-w-0 flex-1`} />
         <button type="submit" disabled={add.isPending || !email.trim()} className={button}>Make server admin</button>
       </form>
+      {ended && (
+        <p role="status" className="text-sm text-gray-400">
+          {ended.links === 1
+            ? `The link ${ended.email} hadn't used has stopped working: only a server admin makes them a new one.`
+            : `The ${ended.links} links ${ended.email} hadn't used have stopped working: only a server admin makes them a new one.`}
+        </p>
+      )}
       {add.error && (
         <p role="alert" className="text-sm text-red-400">
           {add.error instanceof ApiError && add.error.code === "user_not_found"

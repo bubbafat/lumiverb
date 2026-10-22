@@ -8,6 +8,10 @@ the previews move (src/server/storage/move.py), a key is read where it is
 now, written to the new folder and deleted in both. All of that is this
 provider's: a caller sees keys, NotFound and Unavailable, never a folder.
 
+Nothing under those folders is followed through a symbolic link: a key
+whose path goes through one is refused when read or written (UnsafeKeyError),
+and passed by when deleted or listed (local.through_a_link).
+
 A file is never seen half written: write and writing put it beside its
 place under a name of its own (PARTIAL and a random part, ending in the
 suffix a tool reads the format from), which list never shows and a move
@@ -24,7 +28,7 @@ from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
-from src.server.storage.local import LocalStorage
+from src.server.storage.local import LocalStorage, through_a_link
 from src.server.storage.store import NotFound, Stat, Unavailable, check_key
 
 # What a write in progress is called while it's written: never a key.
@@ -41,16 +45,22 @@ class FileStore:
 
     # -- Where a key is ------------------------------------------------------------
 
-    def _places(self, key: str) -> tuple[list[Path], list[Path]]:
+    def _places(self, key: str, *, passing_links: bool = False) -> tuple[list[Path], list[Path]]:
         """Where the key may be: (its paths in the folders that can be reached,
         the folders that can't). A folder whose drive isn't plugged in is its
-        empty mount point, on the system disk: nothing there is the key's."""
+        empty mount point, on the system disk: nothing there is the key's. A
+        path through a symbolic link is refused (UnsafeKeyError), or with
+        passing_links left out (LocalStorage.path_in)."""
         location = self._storage.location
         data_dir = self._storage._data_dir
-        roots = location.roots_for(location.library_of(check_key(key)))
-        paths = self._storage.paths(key)
-        reached = [path for root, path in zip(roots, paths, strict=True) if location.available(data_dir, root)]
-        return reached, [root for root in roots if not location.available(data_dir, root)]
+        reached: list[Path] = []
+        unreachable: list[Path] = []
+        for root in location.roots_for(location.library_of(check_key(key))):
+            if not location.available(data_dir, root):
+                unreachable.append(root)
+            elif (path := self._storage.path_in(root, key, passing_links=passing_links)) is not None:
+                reached.append(path)
+        return reached, unreachable
 
     def _found(self, key: str) -> Path:
         """The key's file where it is now. NotFound; Unavailable when it may be
@@ -132,7 +142,7 @@ class FileStore:
                 shutil.copyfileobj(data, f)
 
     def delete(self, key: str) -> None:
-        reached, unreachable = self._places(key)
+        reached, unreachable = self._places(key, passing_links=True)
         for path in reached:
             path.unlink(missing_ok=True)
         if unreachable:
@@ -153,10 +163,12 @@ class FileStore:
         seen: set[str] = set()
         for root in roots:
             for account in ([root / top] if top else sorted(root.glob(f"{ACCOUNT_PREFIX}*"))):
+                if through_a_link(root, account):
+                    continue  # never followed: os.walk below goes into no linked folder either
                 for dirpath, _dirs, names in os.walk(account):
                     for name in names:
-                        if name.startswith(PARTIAL):
-                            continue  # a write in progress
+                        if name.startswith(PARTIAL) or os.path.islink(os.path.join(dirpath, name)):
+                            continue  # a write in progress, or a link (never a key's)
                         key = Path(dirpath, name).relative_to(root).as_posix()
                         if key.startswith(ACCOUNT_PREFIX) and key.startswith(prefix) and key not in seen:
                             seen.add(key)
