@@ -973,7 +973,9 @@ export interface MachineStatus {
 export interface AiMachine {
   machine_id: string;
   name: string;
-  api_url: string;
+  /** Where it is: an account admin's ("" for the built-in machine); null for anyone else, since an address can
+   * name a host on the server's own network. */
+  api_url: string | null;
   /** Whether a key is saved; the key itself is never sent back. */
   has_key: boolean;
   /** False for a saved key this install can't read (saved by another install: a backup restored here): enter it

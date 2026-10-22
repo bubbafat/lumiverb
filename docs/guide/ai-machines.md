@@ -15,7 +15,7 @@ Lumiverb's AI work is four jobs, each with one model for the whole account:
 
 Until Descriptions & text has a machine and a model, that work waits. Nothing fails, and once you add one it catches up on everything.
 
-Everyone can see Settings › AI. Only an admin changes it.
+Everyone can see Settings › AI: each machine's name, its jobs and how it's doing. Only an admin sees each machine's address, which can name a computer on your network, and only an admin changes it.
 
 ## The Built in machine
 

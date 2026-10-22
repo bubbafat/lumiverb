@@ -28,9 +28,10 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
-    if (path === "/people/per_1" && init?.method === "DELETE") {
+    if (path === "/people/per_1" && (init?.method === "DELETE" || init?.method === "PATCH")) {
+      const doing = init.method === "DELETE" ? "delete" : "rename";
       return new Response(JSON.stringify({ error: { code: "faces_in_other_libraries", details: { faces_elsewhere: 3 },
-        message: "3 of this person's faces are in libraries you don't edit, so only an account admin can delete them." } }),
+        message: `3 of this person's faces are in libraries you don't edit, so only an account admin can ${doing} them.` } }),
       { status: 403 });
     }
     if (path === "/people/per_1") {
@@ -88,6 +89,19 @@ describe("PersonDetailPage", () => {
     expect((await screen.findByRole("alert")).textContent).toBe(
       "3 of this person's faces are in libraries you don't edit, so only an account admin can delete them.");
     expect(screen.getByText("Ada")).toBeTruthy();
+  });
+
+  it("says why renaming them was refused when some of their faces are in libraries this person doesn't edit", async () => {
+    role = "editor";
+    renderPage();
+    fireEvent.click(await screen.findByTitle("Click to rename"));
+    fireEvent.change(screen.getByDisplayValue("Ada"), { target: { value: "Grace" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "3 of this person's faces are in libraries you don't edit, so only an account admin can rename them.");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("Ada")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("opens a photo as a photo", async () => {

@@ -333,10 +333,12 @@ def _named(env, face_ids: list[str]) -> set:
 
 
 @pytest.mark.slow
-def test_a_person_with_faces_in_a_library_they_dont_edit_is_an_account_admins_to_delete_merge_or_name(env, people):
-    """Deleting, merging and undismissing act on every face a person has: someone who edits A and only views B
-    is refused for a person with a face in B, saying how many, and nothing changes; for a person whose every face
-    is in A they do it; an account admin does it all (routers/people.py _edits_every_face)."""
+def test_a_person_with_faces_in_a_library_they_dont_edit_is_an_account_admins_to_rename_delete_merge_or_name(
+        env, people):
+    """Renaming, deleting, merging and undismissing act on every face a person has (a name is how they're
+    labelled in every library): someone who edits A and only views B is refused for a person with a face in B,
+    saying how many, and nothing changes; for a person whose every face is in A they do it; an account admin does
+    it all (routers/people.py _edits_every_face)."""
     from src.server.repository.people import PersonRepository
 
     clip_a, clip_b = people.a["asset_id"], people.b["asset_id"]
@@ -350,7 +352,12 @@ def test_a_person_with_faces_in_a_library_they_dont_edit_is_an_account_admins_to
         session.commit()
     before = _named(env, [a1, a2, a3, b1, b2])
 
+    def name_of(person_id: str) -> str:
+        return _ok(env.client.get(f"/v1/people/{person_id}", headers=env.admin))["display_name"]
+
     for r, doing in (
+            (env.client.patch(f"/v1/people/{both}", json={"display_name": "Someone else"}, headers=people.key),
+             "rename them"),
             (env.client.delete(f"/v1/people/{both}", headers=people.key), "delete them"),
             (env.client.post(f"/v1/people/{only_a}/merge", json={"source_person_id": both}, headers=people.key),
              "merge them"),
@@ -364,12 +371,17 @@ def test_a_person_with_faces_in_a_library_they_dont_edit_is_an_account_admins_to
         assert error["message"].startswith("1 of th") and "in libraries you don't edit" in error["message"]
         assert error["message"].endswith(f"only an account admin can {doing}."), error["message"]
     assert _named(env, [a1, a2, a3, b1, b2]) == before, "nothing changed"
+    assert name_of(both) == "Seen in A and B", "nor how they're labelled in B"
 
     # Every face in a library they edit: theirs to do.
+    _ok(env.client.patch(f"/v1/people/{only_a}", json={"display_name": "Ada"}, headers=people.key))
+    assert name_of(only_a) == "Ada"
     _ok(env.client.post(f"/v1/people/{only_a}/merge", json={"source_person_id": also_a}, headers=people.key))
     assert env.client.delete(f"/v1/people/{only_a}", headers=people.key).status_code == 204
 
     # An account admin does it all.
+    _ok(env.client.patch(f"/v1/people/{both}", json={"display_name": "Someone else"}, headers=env.admin))
+    assert name_of(both) == "Someone else"
     _ok(env.client.post(f"/v1/people/{dismissed}/undismiss", json={"display_name": "Them"}, headers=env.admin))
     assert env.client.delete(f"/v1/people/{both}", headers=env.admin).status_code == 204
     assert _named(env, [a1, a2, a3, b1]) == set()

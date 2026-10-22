@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import NamedTuple
 
 from sqlmodel import Session, select
@@ -118,6 +119,32 @@ def key_for(machine: AiMachine | None, scheduler: bool) -> str:
     an account admin too (write-only: Settings › AI says only whether one is saved), and for one this install
     can't read."""
     return (key_of(machine) or "") if machine is not None and scheduler else ""
+
+
+def address_for(machine: AiMachine | None, admin: bool) -> str | None:
+    """A machine's address as the caller may read it: an account admin's (the scheduler's own key is one, to send
+    it work), "" for the built-in machine or none at all; None for anyone else, since an address can name a host on
+    the server's own network."""
+    if not admin:
+        return None
+    return machine.api_url if machine is not None else ""
+
+
+# An address in what's said of a machine: a URL, with whatever path it was asked at, its end not the sentence's.
+_ADDRESS = re.compile(r"https?://[^\s'\"<>]*[^\s'\"<>.,:;!?)]")
+
+
+def unaddressed(said: str, name: str | None = None) -> str:
+    """What's said of a machine (its status, why a job's work waits, a clip's failure on one) as anyone but an
+    account admin reads it: each address in it said as the machine's name where it's known, else as "the AI
+    machine" (a capital at a sentence's start). The scheduler writes the address in, for the log and the admin."""
+    def instead_of(found: re.Match) -> str:
+        if name is not None:
+            return name
+        before = said[:found.start()].rstrip()
+        return "The AI machine" if not before or before[-1] in ".!?" else "the AI machine"
+
+    return _ADDRESS.sub(instead_of, said)
 
 
 def seal_stored(ctrl: Session) -> int:

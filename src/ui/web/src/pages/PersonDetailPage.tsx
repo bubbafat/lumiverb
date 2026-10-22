@@ -251,7 +251,7 @@ export default function PersonDetailPage() {
             </button>
             <button
               type="button"
-              onClick={() => setIsEditing(false)}
+              onClick={() => { setIsEditing(false); renameMutation.reset(); }}
               className="rounded-lg border border-gray-600 px-3 py-1.5 text-sm text-gray-400 hover:text-white"
             >
               Cancel
@@ -360,11 +360,12 @@ export default function PersonDetailPage() {
         )}
       </div>
 
-      {/* Deleting or merging takes every face they have: refused, saying why, when some are in libraries this
-          person doesn't edit (faces_in_other_libraries). */}
-      {(deleteMutation.error || mergeIntoMutation.error) && (
+      {/* Renaming, deleting or merging takes every face they have: refused, saying why, when some are in libraries
+          this person doesn't edit (faces_in_other_libraries). */}
+      {(renameMutation.error || deleteMutation.error || mergeIntoMutation.error) && (
         <p role="alert" className="-mt-6 mb-6 text-sm text-red-400">
-          {(deleteMutation.error || mergeIntoMutation.error)?.message || "That didn't work. Try again."}
+          {(renameMutation.error || deleteMutation.error || mergeIntoMutation.error)?.message ||
+            "That didn't work. Try again."}
         </p>
       )}
 

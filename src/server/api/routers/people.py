@@ -117,12 +117,13 @@ def _person_or_404(repo, person_id: str | None, detail: str = "Person not found"
 
 
 def _edits_every_face(request: Request, session: Session, repo, person_ids: list[str], doing: str) -> None:
-    """Deleting, merging and undismissing act on every face a person has, in
-    every library: they're an account admin's, or someone's who edits every
-    library those faces are in (library_access.edited). Anyone else is
-    refused rather than acting on part of them: 403 faces_in_other_libraries,
-    saying how many. Naming a group of faces is the way to name the ones they
-    edit (it takes only those)."""
+    """Renaming, deleting, merging and undismissing act on the person as a
+    whole, every face they have in every library (a name is how they're
+    labelled wherever they're seen): they're an account admin's, or someone's
+    who edits every library those faces are in (library_access.edited).
+    Anyone else is refused rather than acting on part of them: 403
+    faces_in_other_libraries, saying how many. Naming a group of faces is the
+    way to name the ones they edit (it takes only those)."""
     libraries = edited(request, session)
     if libraries is None:
         return
@@ -330,12 +331,15 @@ def update_person(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
-    """Update a person's display name."""
+    """Rename a person: their name in every library their faces are in. 403
+    faces_in_other_libraries when some of their faces are in libraries the
+    caller doesn't edit."""
     if not body.display_name.strip():
         raise HTTPException(status_code=400, detail="display_name must not be empty")
 
     repo = _people(request, session)
     _person_or_404(repo, person_id)
+    _edits_every_face(request, session, repo, [person_id], "rename them")
     person = repo.update_name(person_id, body.display_name.strip())
     if person is None:
         raise HTTPException(status_code=404, detail="Person not found")

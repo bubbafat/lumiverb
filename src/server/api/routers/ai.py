@@ -9,7 +9,10 @@ the encoder). An admin adds a machine by URL and presses Connect, which
 lists its models. The worker checks each machine before sending it work and
 reports what it found here; Settings shows it. Keys are never shown back:
 only an admin (the scheduler's key is one) reads them, to send machines
-work. Changing a job's model makes its artifacts stale.
+work. A machine's address is an account admin's too (it can name a host
+on the server's own network): anyone else reads its name, jobs and status,
+with the address said as its name. Changing a job's model makes its
+artifacts stale.
 
 Every tenant has one built-in machine: the worker's own computer, with no
 URL or key, doing what the worker does itself (Whisper: transcripts). It
@@ -43,7 +46,16 @@ from src.server.api.errors import (
     UpstreamError,
 )
 from src.server.models.control_plane import AiMachine, Tenant
-from src.server.repository.ai_machines import first_vision_machine, job_model, key_for, key_of, machines, set_key
+from src.server.repository.ai_machines import (
+    address_for,
+    first_vision_machine,
+    job_model,
+    key_for,
+    key_of,
+    machines,
+    set_key,
+    unaddressed,
+)
 from src.server.repository.ai_machines import set_job_model as _store_model
 from src.shared.ai_jobs import AI_JOBS, BUILT_IN_JOBS, JOBS
 from src.shared.utils import utcnow
@@ -63,7 +75,8 @@ class MachineStatus(BaseModel):
 class MachineOut(BaseModel):
     machine_id: str
     name: str
-    api_url: str
+    # Its address, for an account admin; None for anyone else (ai_machines.address_for).
+    api_url: str | None
     has_key: bool
     # False for a key this install can't read (sealed by another install's: a backup restored elsewhere): it's
     # entered again (src/server/sealing.py).
@@ -209,7 +222,8 @@ class StatusIn(BaseModel):
 class WorkerMachine(BaseModel):
     machine_id: str
     name: str
-    api_url: str
+    # Its address, for an account admin (the scheduler's key is one); None for an editor.
+    api_url: str | None
     # Its key for the scheduler's own key alone; "" for anyone else (write-only).
     api_key: str
     at_once: int
@@ -259,14 +273,22 @@ def _machine(ctrl: Session, request: Request, machine_id: str) -> AiMachine:
     return machine
 
 
-def _status(machine: AiMachine) -> MachineStatus | None:
+def _status(machine: AiMachine, admin: bool) -> MachineStatus | None:
+    """Its latest check; why it's offline with its address said as its name for anyone but an account admin."""
     if machine.online is None:
         return None
-    return MachineStatus(online=machine.online, error=machine.status_error, models=list(machine.models),
+    error = machine.status_error if admin else unaddressed(machine.status_error, machine.name)
+    return MachineStatus(online=machine.online, error=error, models=list(machine.models),
                          checked_at=machine.checked_at)
 
 
-def _settings(ctrl: Session, tenant_id: str) -> AiSettings:
+def _admin(request: Request) -> bool:
+    return getattr(request.state, "role", None) == "admin"
+
+
+def _settings(ctrl: Session, request: Request) -> AiSettings:
+    """Settings › AI as the caller may read it: each machine's address an account admin's."""
+    tenant_id, admin = request.state.tenant_id, _admin(request)
     tenant = ctrl.get(Tenant, tenant_id)
     machines = _machines(ctrl, tenant_id)
     jobs = []
@@ -278,10 +300,10 @@ def _settings(ctrl: Session, tenant_id: str) -> AiSettings:
         jobs.append(JobOut(job=job, label=label, model=model, machines=len(doing), offering=offering,
                            choices=choices, built_in=job in BUILT_IN_JOBS, fixed=AI_JOBS[job].fixed or None))
     return AiSettings(
-        machines=[MachineOut(machine_id=m.machine_id, name=m.name, api_url=m.api_url, has_key=bool(m.api_key),
-                             key_readable=key_of(m) is not None,
+        machines=[MachineOut(machine_id=m.machine_id, name=m.name, api_url=address_for(m, admin),
+                             has_key=bool(m.api_key), key_readable=key_of(m) is not None,
                              jobs=list(m.jobs), at_once=m.at_once, enabled=m.enabled, built_in=m.built_in,
-                             shares_gpu=m.shares_gpu or m.built_in, status=_status(m))
+                             shares_gpu=m.shares_gpu or m.built_in, status=_status(m, admin))
                   for m in machines],
         jobs=jobs,
     )
@@ -335,9 +357,10 @@ def _control():
 
 @router.get("", response_model=AiSettings, dependencies=[Depends(require_signed_in)])
 def get_ai(request: Request) -> AiSettings:
-    """The machines (never their keys), what each was last found doing, and each job's model."""
+    """The machines (never their keys; their addresses an account admin's), what each was last found doing, and
+    each job's model."""
     with _control() as ctrl:
-        return _settings(ctrl, request.state.tenant_id)
+        return _settings(ctrl, request)
 
 
 @router.post("/connect", response_model=Models, dependencies=[Depends(require_tenant_admin)])
@@ -373,7 +396,7 @@ def add_machine(body: MachineIn, request: Request) -> AiSettings:
         _record(machine, models, "")
         ctrl.add(machine)
         _commit_named(ctrl, body.name)
-        return _settings(ctrl, tenant_id)
+        return _settings(ctrl, request)
 
 
 def _commit_named(ctrl: Session, name: str | None) -> None:
@@ -431,7 +454,7 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiS
             _record(machine, models, "")
         ctrl.add(machine)
         _commit_named(ctrl, body.name)
-        return _settings(ctrl, tenant_id)
+        return _settings(ctrl, request)
 
 
 @router.delete("/machines/{machine_id}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
@@ -444,7 +467,7 @@ def remove_machine(machine_id: str, request: Request) -> AiSettings:
             raise _built_in_error("The built-in machine can't be removed: turn it off instead.")
         ctrl.delete(machine)
         ctrl.commit()
-        return _settings(ctrl, request.state.tenant_id)
+        return _settings(ctrl, request)
 
 
 # How long a Test waits for each answer: its requests go out at once.
@@ -630,22 +653,24 @@ def set_job_model(job: str, body: JobModelIn, request: Request,
             else:  # the newest ask wins: a stopped redo goes on with the new model
                 lineage.resume(session, lineage.JOB_ARTIFACTS.get(job, ()), lineage.REDO)
             session.commit()
-        return _settings(ctrl, tenant_id)
+        return _settings(ctrl, request)
 
 
 @router.get("/jobs/{job}", response_model=WorkerJob, dependencies=[Depends(require_editor)])
 def job_machines(job: str, request: Request) -> WorkerJob:
     """For the scheduler: a job's model and the enabled machines doing it, in
     order (built_in: it does it itself), with their keys for the scheduler's
-    own key alone (write-only otherwise). It checks each before sending it work."""
+    own key alone (write-only otherwise) and their addresses for an account
+    admin's (the scheduler's is one). It checks each before sending it work."""
     if job not in JOBS:
         raise HTTPException(status_code=404, detail="Unknown job")
     tenant_id = request.state.tenant_id
-    scheduler = getattr(request.state, "scheduler", False)
+    scheduler, admin = getattr(request.state, "scheduler", False), _admin(request)
     with _control() as ctrl:
         tenant = ctrl.get(Tenant, tenant_id)
         return WorkerJob(job=job, model=_job_model(tenant, job), machines=[
-            WorkerMachine(machine_id=m.machine_id, name=m.name, api_url=m.api_url, api_key=key_for(m, scheduler),
+            WorkerMachine(machine_id=m.machine_id, name=m.name, api_url=address_for(m, admin),
+                          api_key=key_for(m, scheduler),
                           at_once=m.at_once, built_in=m.built_in, shares_gpu=m.shares_gpu or m.built_in)
             for m in _machines(ctrl, tenant_id) if m.enabled and job in m.jobs])
 

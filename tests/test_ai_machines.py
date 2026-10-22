@@ -329,7 +329,7 @@ def test_the_scheduler_gets_a_jobs_machines_with_their_keys(env, none):
 @pytest.mark.slow
 def test_an_editor_never_sees_an_ai_machines_key(env, none):
     """An editor, signed in or by key, still reads a job's machines and the
-    vision endpoint (the Mac app's), never a key; a viewer reads no job."""
+    vision model (the Mac app's), never a key nor an address; a viewer reads no job."""
     client, headers, *_ = env
     fake, _ = _machines({GAMING_PC: (QWEN,)})
     with fake:
@@ -341,18 +341,128 @@ def test_an_editor_never_sees_an_ai_machines_key(env, none):
         assert r.status_code == 200, r.text
         [machine] = r.json()["machines"]
         assert (r.json()["model"], machine["name"], machine["api_url"], machine["api_key"]) == (
-            QWEN, "Gaming PC", GAMING_PC, "")
+            QWEN, "Gaming PC", None, "")
         assert "sk-1" not in r.text
         r = client.get("/v1/tenant/context", headers=editor)
         assert r.status_code == 200, r.text
         ctx = r.json()
-        assert (ctx["vision_api_url"], ctx["vision_api_key"], ctx["vision_model_id"]) == (GAMING_PC, "", QWEN)
+        assert (ctx["vision_api_url"], ctx["vision_api_key"], ctx["vision_model_id"]) == (None, "", QWEN)
         assert "sk-1" not in r.text
 
     viewer = _key_with_role(env, "viewer")
     assert client.get("/v1/ai/jobs/vision", headers=viewer).status_code == 403
     ctx = client.get("/v1/tenant/context", headers=viewer).json()
-    assert (ctx["vision_api_url"], ctx["vision_api_key"], ctx["vision_model_id"]) == (GAMING_PC, "", QWEN)
+    assert (ctx["vision_api_url"], ctx["vision_api_key"], ctx["vision_model_id"]) == (None, "", QWEN)
+
+
+@pytest.mark.slow
+def test_a_machines_address_is_an_account_admins(env, none):
+    """An address can name a host on the server's own network: an account admin reads each machine's (Settings ›
+    AI, the vision endpoint, a job's machines, why it's offline), and so does the scheduler's own key, which sends
+    them work. Anyone else, signed in or by a key, reads each machine's name, jobs and status: its address null,
+    and said as its name where its status says why it's offline (an AI worker's too), as "the AI machine" where
+    Processing says why a job's work waits and why a clip failed (ai_machines.address_for, unaddressed)."""
+    from sqlalchemy import text
+
+    from src.shared.utils import utcnow
+    from tests.producer_fakes import scheduler_client
+    from tests.test_lineage_api import _db
+    from tests.test_scheduler_status_api import _write
+
+    client, headers, *_ = env
+    worker = "http://10.10.10.3:6366/v1"  # lumiverb-server ai-worker
+    fake, _ = _machines({GAMING_PC: (QWEN,), worker: ("ViT-B-32", "buffalo_l")})
+    with fake:
+        assert _add(env, name="Gaming PC").status_code == 201
+        assert _add(env, name="GPU box", api_url=worker, jobs=["clip", "faces"]).status_code == 201
+        assert _model(env, "vision", QWEN, redo=False).status_code == 200
+    scheduler = scheduler_client(env[4])
+    # What the scheduler says, as it says it: a worker that didn't answer (ai_worker_client), why the job's work
+    # waits (ai_pool), a clip a machine couldn't read.
+    offline = f"{worker} didn't answer (ConnectionError)"
+    scheduler.post(f"/v1/ai/machines/{_machine(_ai(env), 'GPU box')['machine_id']}/status",
+                   json={"online": False, "error": offline, "models": []})
+    waits = (f"No machine doing descriptions & text is online (Gaming PC: {GAMING_PC} doesn't offer {QWEN}.)."
+             " Settings → AI shows each.")
+    _write(env, {"at": utcnow().isoformat(), "running": {}, "waiting": {}, "pools": {}, "ai_waits": {"vision": waits}})
+    try:
+        _addresses_said(env, scheduler, worker, offline, waits)
+    finally:  # the scheduler's word goes with the test
+        with _db(env) as session:
+            session.execute(text("DELETE FROM system_metadata WHERE key = 'scheduler.status'"))
+            session.commit()
+
+
+def _addresses_said(env, scheduler, worker: str, offline: str, waits: str) -> None:
+    from src.server.repository import lineage
+    from tests.test_lineage_api import _db
+    from tests.test_reconciler import _library
+
+    client, headers, *_ = env
+    clip = _ingest_with(_library(env, "Addresses"), "a.jpg", _sha(), None)
+    with _db(env) as session:
+        lineage.record_failure(session, clip, "lumiverb.image.text", f"{GAMING_PC}/chat/completions couldn't read it")
+
+    def said(who) -> dict:
+        ai = client.get("/v1/ai", headers=who)
+        description = {p["artifact"]: p for p in client.get("/v1/producers", headers=who).json()["producers"]}[
+            "lumiverb.image.description"]
+        [failure] = [f for f in client.get("/v1/producers/failures", headers=who).json()["items"]
+                     if f["asset_id"] == clip]
+        return {"text": ai.text, "machines": {m["name"]: m for m in ai.json()["machines"]},
+                "context": client.get("/v1/tenant/context", headers=who).json()["vision_api_url"],
+                "wait": next(w["message"] for w in description["waits"] if w["reason"] == "ai_machines"),
+                "queue": client.get("/v1/producers/queue", headers=who).json()["ai_waits"]["vision"],
+                "failure": failure["error"]}
+
+    _, signed_in = _user(client, headers, "addresses-admin@example.com", "admin")
+    for admin in (headers, signed_in):
+        seen = said(admin)
+        assert (seen["machines"]["Gaming PC"]["api_url"], seen["machines"]["GPU box"]["api_url"]) == (GAMING_PC, worker)
+        assert seen["machines"]["GPU box"]["status"]["error"] == offline
+        assert (seen["context"], seen["wait"], seen["queue"]) == (GAMING_PC, waits, waits)
+        assert seen["failure"] == f"{GAMING_PC}/chat/completions couldn't read it"
+    assert [m["api_url"] for m in scheduler.get("/v1/ai/jobs/clip").json()["machines"]] == ["", worker]
+    assert scheduler.get("/v1/tenant/context").json()["vision_api_url"] == GAMING_PC
+
+    _, editor = _user(client, headers, "addresses-editor@example.com", "editor")
+    _, viewer = _user(client, headers, "addresses-viewer@example.com", "viewer")
+    for someone in (_key_with_role(env, "editor"), editor, _key_with_role(env, "viewer"), viewer):
+        seen = said(someone)
+        assert GAMING_PC not in seen["text"] and "10.10.10.3" not in seen["text"], seen["text"]
+        assert [m["api_url"] for m in seen["machines"].values()] == [None, None, None]
+        gaming_pc, gpu_box = seen["machines"]["Gaming PC"], seen["machines"]["GPU box"]
+        assert (gaming_pc["jobs"], gaming_pc["status"]["online"], gpu_box["jobs"]) == (["vision"], True, ["clip", "faces"])
+        assert gpu_box["status"]["error"] == "GPU box didn't answer (ConnectionError)"
+        assert seen["context"] is None
+        assert seen["wait"] == seen["queue"] == (
+            f"No machine doing descriptions & text is online (Gaming PC: the AI machine doesn't offer {QWEN}.)."
+            " Settings → AI shows each.")
+        assert seen["failure"] == "The AI machine couldn't read it"
+    r = client.get("/v1/ai/jobs/clip", headers=editor)
+    assert [m["api_url"] for m in r.json()["machines"]] == [None, None], r.text
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("said", "name", "read"), [
+    ("http://10.0.0.5:8000/v1/audio/transcriptions didn't finish 30 s of speech within 120 s.", None,
+     "The AI machine didn't finish 30 s of speech within 120 s."),
+    ("Couldn't reach http://10.0.0.5:8000/v1/audio/transcriptions: it didn't answer.", None,
+     "Couldn't reach the AI machine: it didn't answer."),
+    ("http://[fd00::5]:11434/v1 is at an address that isn't allowed.", "studio box",
+     "studio box is at an address that isn't allowed."),
+    ("No machine is online (A: http://a.lan/v1 answered 500.; B: https://b.example/v1 doesn't offer x.).",
+     None, "No machine is online (A: the AI machine answered 500.; B: the AI machine doesn't offer x.)."),
+    ("Offline. http://ollama.lan:11434/v1 refused the key.", None, "Offline. The AI machine refused the key."),
+    ("Couldn't reach the AI machine.", "Studio", "Couldn't reach the AI machine."),
+])
+def test_an_address_in_whats_said_of_a_machine_is_said_another_way(said, name, read):
+    """What the scheduler says of a machine, as anyone but an account admin reads it: the address, with whatever
+    path it was asked at, said as the machine's name (as it's spelled) or "the AI machine", the sentence's own end
+    left."""
+    from src.server.repository.ai_machines import unaddressed
+
+    assert unaddressed(said, name) == read
 
 
 @pytest.mark.slow
@@ -604,11 +714,13 @@ def test_what_a_machine_answers_its_work_with_is_the_logs_not_its_status(env, no
             guard.provider().describe(picture)
     assert raised.value.endpoint_fault and elsewhere.asked == []
     says = "answered 500." if answer == "error" else "answered with a redirect, which Lumiverb doesn't follow."
+    status = _machine(_ai(env), "Studio")["status"]
+    assert status["online"] is False and status["error"] == f"{machine.url}/chat/completions {says}", status
     viewer = _key_with_role(env, "viewer")
     status = _machine(_ai(env, viewer), "Studio")["status"]
-    assert status["online"] is False and status["error"] == f"{machine.url}/chat/completions {says}", status
+    assert status["error"] == f"Studio {says}", "its address is an admin's"
     seen = _ai_text(env, viewer)
-    assert secret not in seen and elsewhere.url not in seen
+    assert secret not in seen and elsewhere.url not in seen and machine.url not in seen
     assert (secret if answer == "error" else elsewhere.url + "/chat/completions") in caplog.text
 
 
@@ -899,7 +1011,9 @@ def test_the_transcripts_model_is_one_a_machine_doing_them_offers(env, none):
         assert asked["Speaches"]["models"] == ["deepdml/faster-whisper-large-v3-turbo-ct2", "large-v3", "small"]
     # Saving asks the servers; the built-in is the worker's to check.
     assert _built_in(_ai(env))["status"] is None
-    worker = client.get("/v1/ai/jobs/transcripts", headers=_key_with_role(env, "editor")).json()
+    from tests.producer_fakes import scheduler_client
+
+    worker = scheduler_client(env[4]).get("/v1/ai/jobs/transcripts").json()  # the scheduler's own key
     assert worker["model"] == "large-v3"
     assert [(m["name"], m["api_url"], m["at_once"], m["built_in"]) for m in worker["machines"]] == [
         ("Built in", "", 1, True), ("Speaches", SPEACHES, 2, False)]

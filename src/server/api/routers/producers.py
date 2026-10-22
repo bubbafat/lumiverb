@@ -47,6 +47,7 @@ from src.server.api.limits import MAX_IDS
 from src.server.api.routers.libraries import CheckedIn
 from src.server.reader_work import FROM_ORIGINALS
 from src.server.repository import lineage
+from src.server.repository.ai_machines import unaddressed
 from src.shared.producers import (
     PAUSE_ALL,
     PAUSE_SCANS,
@@ -55,7 +56,7 @@ from src.shared.producers import (
     pause_state,
     pause_targets,
 )
-from src.shared.waits import HELD
+from src.shared.waits import AI_MACHINES, HELD
 
 logger = logging.getLogger(__name__)
 
@@ -352,11 +353,19 @@ def list_producers(
         status = read_status(session)
         for item in items:
             p = PRODUCERS[item.artifact]
-            item.waits = [Wait(**w) for w in producer_waits(
+            item.waits = [Wait(**_said_to(w, admin)) for w in producer_waits(
                 session, item.artifact, wants[item.artifact], counts=counted, paused=paused, status=status,
                 ai=waits.get(p.job) if p.job else None, library_id=library_id, asset_ids=asset_ids,
                 within=visible)]
     return ProducerList(producers=items)
+
+
+def _said_to(wait: dict, admin: bool) -> dict:
+    """A wait as the caller reads it: why a job's machines can't be used (the scheduler's words, each machine's
+    error) with their addresses said as "the AI machine" for anyone but an account admin."""
+    if admin or wait["reason"] != AI_MACHINES or not wait.get("message"):
+        return wait
+    return {**wait, "message": unaddressed(wait["message"])}
 
 
 def _admin(request: Request) -> bool:
@@ -832,6 +841,8 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
                                    paused=held_producers))
         except Exception:  # noqa: BLE001 — the time left is extra; what's running is still said
             logger.exception("producers: working out how long is left failed")
+    if not admin:  # a machine's address is an account admin's (ai_machines.unaddressed)
+        status.ai_waits = {job: unaddressed(why) for job, why in status.ai_waits.items()}
     if visible is not None:
         status.storage_waits = [i for i in status.storage_waits if i in visible]
         status.storage = {i: v for i, v in status.storage.items() if i in visible}
@@ -924,16 +935,23 @@ def list_failures(
     after: str | None = None,
 ) -> FailingClips:
     """Clips in sight whose last try failed, newest failure first, with the
-    error, how many tries and when the next one is (none once given up)."""
+    error, how many tries and when the next one is (none once given up). An
+    AI job's error says its machine's address only to an account admin."""
     if artifact is not None:
         producer_or_404(artifact)
     rows = lineage.failures(session, artifact=artifact, library_id=library_id, limit=limit + 1, after=after,
                             within=seen(request, session))
     more = len(rows) > limit
     rows = rows[:limit]
+    admin = _admin(request)
+
+    def error_of(r: dict) -> str:
+        said = r["error"] or ""
+        return said if admin or not PRODUCERS[r["artifact"]].job else unaddressed(said)
+
     items = [FailingClip(asset_id=r["asset_id"], artifact=r["artifact"], title=PRODUCERS[r["artifact"]].title,
                          rel_path=r["rel_path"], library_id=r["library_id"], library_name=r["library_name"],
-                         media_type=r["media_type"], error=r["error"] or "", attempts=int(r["attempts"] or 0),
+                         media_type=r["media_type"], error=error_of(r), attempts=int(r["attempts"] or 0),
                          failed_at=r["failed_at"], retry_at=r["retry_at"], given_up=r["given_up"])
              for r in rows if r["artifact"] in PRODUCERS]
     return FailingClips(items=items, next_cursor=rows[-1]["cursor"] if more and rows else None)
