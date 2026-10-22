@@ -55,7 +55,7 @@ def _answering(*, finish: str = "stop", status: int = 200, text: str = ""):
                                   "usage": {"prompt_tokens": 1200, "completion_tokens": 64, "total_tokens": 1264}}
         return resp
 
-    return patch("src.processing.workers.captions.openai_caption.requests.post", side_effect=post), asked
+    return patch("src.shared.ai_requests.post", side_effect=post), asked
 
 
 def json_dumps(value) -> str:
@@ -122,6 +122,22 @@ def test_a_refusal_is_said_its_own_words_to_a_server_admin(env, none):
     assert {t["problem"] for t in theirs["tries"]} == {"It answered HTTP 400."}
     assert {t["problem"] for t in full["tries"]} == {
         "It answered HTTP 400: max_tokens: 500 is too small for this model"}
+
+
+def test_a_machine_that_answers_with_a_redirect_is_said_and_it_isnt_followed(env, none):
+    """As the work's requests: a real machine on this computer lists the model, then answers with a redirect."""
+    from tests.ai_machine_server import redirecting
+
+    client, headers, *_ = env
+    with redirecting(307) as (machine, elsewhere):
+        assert _add(env, name="Redirects", api_url=machine.url).status_code == 201
+        assert client.put("/v1/ai/jobs/vision", json={"model": QWEN, "redo": False}, headers=headers).status_code == 200
+        machine_id = _machine(_ai(env), "Redirects")["machine_id"]
+        for who in (headers, _server_admin(env)):
+            out = _try(env, machine_id, headers=who).json()
+            assert {t["problem"] for t in out["tries"]} == {
+                "It answered with a redirect, which Lumiverb doesn't follow."}, out
+    assert elsewhere.asked == []
 
 
 def test_another_model_can_be_tried_and_none_is_said(env, none):

@@ -19,13 +19,13 @@ def _resolves_to(*ips: str):
     def getaddrinfo(host, port, *_args, **_kwargs):
         return [(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))
                 for ip in ips]
-    return patch("src.shared.vision_endpoint.socket.getaddrinfo", side_effect=getaddrinfo)
+    return patch("src.shared.ai_requests.socket.getaddrinfo", side_effect=getaddrinfo)
 
 
 def _answers(*models: str):
     resp = MagicMock(status_code=200)
     resp.json.return_value = {"data": [{"id": m} for m in models]}
-    return patch("src.shared.vision_endpoint.requests.get", return_value=resp)
+    return patch("src.shared.ai_requests.get", return_value=resp)
 
 
 # The machines on dev and the shapes ollama has on prod (same host, LAN).
@@ -76,7 +76,7 @@ def test_every_failure_says_the_same_and_logs_why(fail, caplog):
         resp.json.side_effect = ValueError("no")
     else:
         resp.json.return_value = {"data": []}
-    get = patch("src.shared.vision_endpoint.requests.get",
+    get = patch("src.shared.ai_requests.get",
                 **({"side_effect": fail} if isinstance(fail, Exception) else {"return_value": resp}))
     with get, caplog.at_level("WARNING", logger="src.shared.vision_endpoint"), \
             pytest.raises(VisionEndpointError) as e:
@@ -86,7 +86,7 @@ def test_every_failure_says_the_same_and_logs_why(fail, caplog):
 
 
 def test_a_host_that_doesnt_resolve_says_the_same():
-    with patch("src.shared.vision_endpoint.socket.getaddrinfo", side_effect=socket.gaierror("nope")), \
+    with patch("src.shared.ai_requests.socket.getaddrinfo", side_effect=socket.gaierror("nope")), \
             pytest.raises(VisionEndpointError) as e:
         list_models("http://nowhere.invalid/v1")
     assert str(e.value) == UNREACHABLE
@@ -112,7 +112,7 @@ def test_the_error_keeps_what_went_wrong_there_for_the_installs_operator():
     resp = MagicMock(status_code=400, text="")
     resp.json.return_value = {"type": "error", "error": {"type": "invalid_request_error",
                                                          "message": "anthropic-version: header is required"}}
-    with _resolves_to("160.79.104.10"), patch("src.shared.vision_endpoint.requests.get", return_value=resp), \
+    with _resolves_to("160.79.104.10"), patch("src.shared.ai_requests.get", return_value=resp), \
             pytest.raises(VisionEndpointError) as e:
         list_models("https://api.anthropic.com/v1")
     assert str(e.value) == UNREACHABLE
@@ -123,14 +123,14 @@ def test_the_error_keeps_what_went_wrong_there_for_the_installs_operator():
         "HTTPConnectionPool(host='10.0.0.9', port=22): Max retries exceeded with url: /v1/models (Caused by "
         "NewConnectionError('<urllib3.connection.HTTPConnection object>: Failed to establish a new connection: "
         "[Errno 111] Connection refused'))")
-    with patch("src.shared.vision_endpoint.requests.get", side_effect=refused), \
+    with patch("src.shared.ai_requests.get", side_effect=refused), \
             pytest.raises(VisionEndpointError) as e:
         list_models("http://10.0.0.9:22/v1")
     assert e.value.detail == "http://10.0.0.9:22/v1: ConnectionError: Connection refused"
 
     long = MagicMock(status_code=502, text="<html>" + "x" * 500)
     long.json.side_effect = ValueError("not json")
-    with patch("src.shared.vision_endpoint.requests.get", return_value=long), \
+    with patch("src.shared.ai_requests.get", return_value=long), \
             pytest.raises(VisionEndpointError) as e:
         list_models("http://10.0.0.9:22/v1")
     assert e.value.detail.endswith("…)") and len(e.value.detail) < 260, "a line, not a page"

@@ -111,6 +111,10 @@ Click a machine's **Test** before it gets real work. It's sent what descriptions
 
 Lumiverb checks every machine each minute. Each shows **Online**, or **Offline** with the reason; an offline one's work goes to the others. With no machine for a job online, Settings › AI shows the job as paused, with a dot beside AI in Settings. The work waits until it's fixed, and no clip is marked as failed for it.
 
+The reason is in Lumiverb's words, such as "refused the key" or "answered 500", as everyone signed in can see it. What the machine itself answered is in the server's log, **Admin › Logs**, for the server's admin.
+
+Lumiverb sends a machine's work, and its key, only to the address you gave it. A machine that answers with a redirect to somewhere else is offline: Lumiverb doesn't follow it. The address is checked again at every request, as when the machine was added: this computer and your network are fine; link-local and cloud metadata addresses never are.
+
 ## Keys stay sealed
 
 A machine's key is never shown again once saved, to anyone. Editing a machine, leave the key blank to keep it, or tick **Remove the saved key**. Keys are sealed in the database with a key from the install's env file, so a backup alone can't read them: keep a copy of the env file with your backups (see [Backups and restore](backups.md#keep-a-copy-of-the-env-file)). Restored without it, a machine says its saved key can't be read here: enter it again.

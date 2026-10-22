@@ -2,18 +2,20 @@
 
 The server asks when someone presses Connect in Settings, so they pick a
 model the endpoint actually has; the worker asks before vision work, and
-stops (saying why) when the chosen model isn't there.
+stops (saying why) when the chosen model isn't there. Asked as every AI
+machine is (src/shared/ai_requests.py: its address checked at each request,
+no redirect followed).
 """
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import re
-import socket
 from urllib.parse import urlsplit
 
 import requests
+
+from src.shared import ai_requests
 
 logger = logging.getLogger(__name__)
 
@@ -23,15 +25,6 @@ TIMEOUT_SEC = 10.0
 # network; the detail goes to the log, and to whoever reads it (the error's
 # detail: the server admin's, src/server/api/routers/ai.py).
 UNREACHABLE = "Couldn't reach the AI machine."
-
-# Link-local and cloud metadata addresses are never an AI machine. Loopback
-# and private (LAN) addresses are allowed: ollama often runs there.
-_BLOCKED = (
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("fe80::/10"),
-    ipaddress.ip_network("fd00:ec2::254/128"),
-)
-
 
 class VisionEndpointError(Exception):
     """The endpoint couldn't say which models it has; the message says why, plainly. detail: what went wrong
@@ -61,14 +54,9 @@ def check_url(api_url: str) -> str:
 
 
 def _blocked(host: str, port: int) -> bool:
-    """Whether host resolves to a link-local or metadata address. OSError when it doesn't resolve."""
-    for *_, sockaddr in socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP):
-        ip = ipaddress.ip_address(str(sockaddr[0]).split("%", 1)[0])
-        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-            ip = ip.ipv4_mapped
-        if any(ip in net for net in _BLOCKED):
-            return True
-    return False
+    """Whether host resolves to a link-local or metadata address (ai_requests.BLOCKED: loopback and the LAN are
+    allowed, as Ollama runs there). OSError when it doesn't resolve."""
+    return ai_requests.name_refused(host, port)
 
 
 def _unreachable(url: str, why: str) -> VisionEndpointError:
@@ -137,7 +125,11 @@ def list_models(api_url: str, api_key: str | None = None, *, timeout: float = TI
     headers, params = _asked_with(parts.hostname, api_key)
     try:
         # No redirects: the answer is the URL's own (and the key goes nowhere else).
-        resp = requests.get(f"{url}/models", headers=headers, params=params, timeout=timeout, allow_redirects=False)
+        resp = ai_requests.get(f"{url}/models", headers=headers, params=params, timeout=timeout)
+    except ai_requests.AddressRefused:
+        raise VisionEndpointError("That address isn't allowed.") from None
+    except ai_requests.Redirected:
+        raise _unreachable(url, "/models answered with a redirect, which Lumiverb doesn't follow") from None
     except requests.Timeout:
         raise _unreachable(url, f"no answer within {timeout:.0f} seconds") from None
     except requests.RequestException as e:

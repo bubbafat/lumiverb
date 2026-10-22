@@ -166,6 +166,28 @@ def test_post_filter_invalid_pattern_dot_dot(path_filters_client: tuple[TestClie
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize(("pattern", "says"), [
+    ("x" * 1025, "at most 1024 characters"),
+    ("**/" * 64 + "*.mov", "at most 64 parts"),
+    ("**\\" * 64 + "*.mov", "at most 64 parts"),
+])
+def test_a_pattern_too_big_is_refused_wherever_one_is_given(path_filters_client: tuple[TestClient, str, str],
+                                                            pattern: str, says: str) -> None:
+    """A filter is matched against every file a scan walks and every clip its preview counts: one far past any
+    real filter's size is a 400, as an invalid one is, by every route that takes one; the largest allowed isn't."""
+    client, api_key, library_id = path_filters_client
+    headers = {"Authorization": f"Bearer {api_key}"}
+    for path in (f"/v1/libraries/{library_id}/filters", f"/v1/libraries/{library_id}/filters/preview",
+                 "/v1/tenant/filter-defaults"):
+        r = client.post(path, json={"type": "exclude", "pattern": pattern}, headers=headers)
+        assert r.status_code == 400 and says in r.json()["error"]["message"], (path, r.text)
+    largest = "**/" * 63 + "x" * (1024 - 3 * 63)
+    r = client.post(f"/v1/libraries/{library_id}/filters/preview", json={"type": "exclude", "pattern": largest},
+                    headers=headers)
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.slow
 def test_delete_unknown_filter_404(path_filters_client: tuple[TestClient, str, str]) -> None:
     """DELETE with unknown filter_id returns 404."""
     client, api_key, library_id = path_filters_client

@@ -24,10 +24,13 @@ ENDPOINT_FAULT_STATUSES = frozenset({401, 403, 404, 408, 429})
 
 
 def is_endpoint_fault(error: BaseException) -> bool:
-    """Whether a failed call was the endpoint's fault rather than the image's."""
+    """Whether a failed call was the endpoint's fault rather than the image's: a redirect too (it's followed
+    nowhere: src/shared/ai_requests.py), and an address that isn't allowed (a ConnectionError)."""
     import requests
 
-    if isinstance(error, (requests.ConnectionError, requests.Timeout)):
+    from src.shared.ai_requests import Redirected
+
+    if isinstance(error, (requests.ConnectionError, requests.Timeout, Redirected)):
         return True
     response = getattr(error, "response", None)
     status = getattr(response, "status_code", None)

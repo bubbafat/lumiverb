@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 
-import requests
+from src.shared import ai_requests
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,8 @@ def discover_model_id(api_url: str, api_key: str | None = None) -> str:
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    resp = requests.get(f"{api_url.rstrip('/')}/models", headers=headers, timeout=10)
+    # Its address checked, no redirect followed (src/shared/ai_requests.py), as every AI machine is asked.
+    resp = ai_requests.get(f"{api_url.rstrip('/')}/models", headers=headers, timeout=10)
     resp.raise_for_status()
     models = resp.json().get("data", [])
     if not models:
