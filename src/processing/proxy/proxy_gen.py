@@ -46,6 +46,22 @@ def jpeg_format(quality: int = PROXY_JPEG_QUALITY) -> str:
 # path — pyvips streams sequentially and does not need the cap.
 TIFF_MAX_PIXELS = 25_000_000  # ~25 MP
 
+# The largest original a preview is made of: a gigapixel, about twice what
+# Lightroom opens. A file is measured from its header before anything is
+# decoded, so a size it merely declares can't hold a scan's memory or time.
+MAX_PIXELS = 1_000_000_000
+
+
+class TooLarge(ValueError):
+    """An original bigger than MAX_PIXELS: no preview is made of it."""
+
+
+def _checked(width: int, height: int) -> None:
+    """TooLarge for a picture over MAX_PIXELS, before it's decoded."""
+    if width * height > MAX_PIXELS:
+        raise TooLarge(f"Too large to make a preview of: {width:,}×{height:,} pixels "
+                       f"(at most {MAX_PIXELS // 1_000_000:,} megapixels).")
+
 
 def _pil_to_vips(pil_image: PILImage.Image) -> pyvips.Image:
     """Convert a PIL image to a pyvips image via numpy buffer."""
@@ -109,7 +125,7 @@ def _load_tiff_proxy_image(
             f"(limit={TIFF_MAX_PIXELS})."
         )
 
-    pil_img = PILImage.open(source_path)
+    pil_img = PILImage.open(source_path, formats=["TIFF"])
     try:
         if max_dim > max_long_edge:
             pil_img.thumbnail((max_long_edge, max_long_edge), PILImage.LANCZOS)
@@ -141,16 +157,19 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
             with rawpy.imread(str(source_path)) as raw:
                 thumb = raw.extract_thumb()
             if thumb.format == rawpy.ThumbFormat.JPEG:
-                img = pyvips.Image.new_from_buffer(bytes(thumb.data), "")
+                data = bytes(thumb.data)
+                img = pyvips.Image.new_from_buffer(data, "")  # its header: nothing decoded yet
                 long_edge = max(img.width, img.height)
                 if long_edge >= max_long_edge:
+                    _checked(img.width, img.height)  # too large: demosaiced instead, checked there
                     with rawpy.imread(str(source_path)) as _raw:
                         _s = _raw.sizes
                         width_orig = _s.iwidth
                         height_orig = _s.iheight
-                    proxy_img = img.thumbnail_image(
-                        max_long_edge, height=max_long_edge,
-                        size=pyvips.enums.Size.DOWN,
+                    # Shrunk as it's decoded, never whole in memory; turned as the old way did (not at all).
+                    proxy_img = pyvips.Image.thumbnail_buffer(
+                        data, max_long_edge, height=max_long_edge,
+                        size=pyvips.enums.Size.DOWN, no_rotate=True,
                     )
                     proxy_bytes = proxy_img.write_to_buffer(jpeg_format(jpeg_quality))
                     logger.info("proxy: %s — embedded JPEG %dx%d → %dpx (%d bytes)",
@@ -165,10 +184,11 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
         try:
             logger.info("proxy: %s — RAW demosaic", source_path.name)
             with rawpy.imread(str(source_path)) as raw:
-                rgb = raw.postprocess()
                 _s = raw.sizes
                 width_orig = _s.iwidth
                 height_orig = _s.iheight
+                _checked(width_orig, height_orig)
+                rgb = raw.postprocess()
             h, w, bands = rgb.shape
             img = pyvips.Image.new_from_memory(rgb.tobytes(), w, h, bands, "uchar")
             proxy_img = img.thumbnail_image(
@@ -177,6 +197,8 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
             )
             proxy_bytes = proxy_img.write_to_buffer(jpeg_format(jpeg_quality))
             return proxy_bytes, width_orig, height_orig
+        except TooLarge:
+            raise
         except Exception:
             # rawpy can't handle this file (e.g. Adobe-generated DNG) —
             # try pyvips directly, which reads a DNG as the TIFF it is (its
@@ -186,6 +208,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
             width_orig = header.width
             height_orig = header.height
             del header
+            _checked(width_orig, height_orig)
             proxy_img = thumbnail_file(
                 source_path, max_long_edge,
                 height=max_long_edge,
@@ -195,9 +218,11 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
             return proxy_bytes, width_orig, height_orig
 
     elif ext in TIFF_EXTENSIONS:
-        pil_img = PILImage.open(source_path)
+        # As a TIFF only: Pillow otherwise goes by what the file holds, whatever its name.
+        pil_img = PILImage.open(source_path, formats=["TIFF"])
         width_orig, height_orig = pil_img.size
         pil_img.close()
+        _checked(width_orig, height_orig)
         proxy_img = _load_tiff_proxy_image(
             source_path,
             width_orig=width_orig,
@@ -212,6 +237,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
         # Pillow's BMP reader reads it.
         with PILImage.open(source_path, formats=["BMP"]) as pil_img:
             width_orig, height_orig = pil_img.size
+            _checked(width_orig, height_orig)
             pil_img.thumbnail((max_long_edge, max_long_edge), PILImage.LANCZOS)
             proxy_img = _pil_to_vips(pil_img)
         proxy_bytes = proxy_img.write_to_buffer(jpeg_format(jpeg_quality))
@@ -222,6 +248,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
         width_orig = header.width
         height_orig = header.height
         del header
+        _checked(width_orig, height_orig)
 
         proxy_img = thumbnail_file(
             source_path, max_long_edge,

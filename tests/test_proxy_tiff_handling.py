@@ -65,7 +65,7 @@ def test_tiff_pyvips_failure_falls_back_to_pillow() -> None:
         )
 
     assert out is sentinel_proxy
-    pil_open.assert_called_once_with(source_path)
+    pil_open.assert_called_once_with(source_path, formats=["TIFF"])
     fake_pil_img.thumbnail.assert_called_once_with(
         (proxy_mod.PROXY_LONG_EDGE, proxy_mod.PROXY_LONG_EDGE),
         proxy_mod.PILImage.LANCZOS,

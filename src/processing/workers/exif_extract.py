@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.shared.location import is_fix
+from src.shared.path_filter import has_control_character
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,9 @@ def extract_exif(source_path: Path) -> dict:
     Returns dict of field -> value. Returns empty dict on failure.
     Strips namespace prefixes (e.g. "EXIF:Make" -> "Make").
     """
+    if not _sendable(source_path):
+        logger.warning("EXIF not read for %r: its path has a control character", str(source_path))
+        return {}
     try:
         import exiftool
 
@@ -92,6 +96,14 @@ def extract_exif(source_path: Path) -> dict:
         return {}
 
 
+def _sendable(path: Path) -> bool:
+    """Whether exiftool can be given this path: pyexiftool hands it paths a
+    line each, so a line break (or any control character) in one would be
+    read as more of exiftool's arguments. A library's names never have one
+    (the scan refuses them), but where its root is might."""
+    return not has_control_character(str(path))
+
+
 def _cleaned(raw: dict) -> dict:
     return {(k.split(":")[-1] if ":" in k else k): v for k, v in raw.items()
             if (k.split(":")[-1] if ":" in k else k) != "SourceFile"}
@@ -101,6 +113,7 @@ def extract_exif_many(paths: list[Path]) -> dict[str, dict]:
     """extract_exif for several files with one exiftool: {str(path): tags}.
     A file exiftool can't read is left out (the caller reads it alone).
     OSError (no exiftool, the mount's I/O) goes up."""
+    paths = [p for p in paths if _sendable(p)]  # one left out is read alone, and refused there
     if not paths:
         return {}
     import exiftool
