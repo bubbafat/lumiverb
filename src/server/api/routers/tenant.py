@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, StrictBool
 from sqlmodel import Session
 
+from src.server.api import account_folders
 from src.server.api.dependencies import get_tenant_session, require_editor, require_tenant_admin
 from src.server.api.errors import DecisionRequiredError
 from src.server.tenant_settings import (
@@ -53,6 +54,9 @@ class TenantSettingsResponse(BaseModel):
     # Days a key a person made may go unused before upkeep ends it; None (the
     # default) when keys end only when someone revokes them.
     key_idle_days: int | None = None
+    # The folders on this server its libraries may be in, a server admin's to give
+    # (src/server/api/account_folders.py); None: every folder the server reads. Read only here.
+    folders: list[str] | None = None
 
 
 class TenantSettingsUpdate(BaseModel):
@@ -118,6 +122,7 @@ def _settings(session: Session, tenant_id: str) -> TenantSettingsResponse:
         follow_moves=get_follow_moves(session),
         trash_days=get_trash_days(session),
         key_idle_days=_key_idle_days(tenant_id),
+        folders=account_folders.of(tenant_id),
     )
 
 

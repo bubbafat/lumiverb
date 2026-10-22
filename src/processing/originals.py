@@ -110,8 +110,9 @@ def reach(library: Mapping[str, Any], *, require_entries: bool = False, timeout:
           root_map: dict[str, str] | None = None) -> Originals | None:
     """The library's originals if they can be read on this machine now, else
     None (roots.reachable_root: within `timeout`, never a root this machine
-    refuses; require_entries takes an empty folder, an unmounted mount
-    point, for unreachable). The scheduler never reaches a library a device
+    refuses, nor one outside its account's folders when the library carries
+    them; require_entries takes an empty folder, an unmounted mount point,
+    for unreachable). The scheduler never reaches a library a device
     reads."""
     from src.processing.machine import current
     from src.shared.readers import read_by_server

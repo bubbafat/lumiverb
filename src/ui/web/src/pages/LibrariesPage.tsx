@@ -15,6 +15,7 @@ import {
   type ProjectUsage,
   updateLibraryVisibility,
 } from "../api/client";
+import { AccountFoldersNote } from "../components/AccountFoldersNote";
 import { Badge } from "../components/Badge";
 import { Modal } from "../components/Modal";
 import { ProjectUsageList, clipCount } from "../components/ProjectUsageList";
@@ -579,6 +580,7 @@ export default function LibrariesPage() {
               required
               className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
             />
+            {!addDevice && <AccountFoldersNote folders={settings?.folders} />}
           </div>
           <label className="flex items-start gap-2 text-sm text-gray-300">
             <input type="checkbox" className="mt-0.5" checked={addInfer} onChange={(e) => setAddInfer(e.target.checked)} />

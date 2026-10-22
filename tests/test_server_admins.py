@@ -41,7 +41,7 @@ ALL_STEPS = ["storage", "network", "find", "ai", "people", "library"]
 SERVER_ROUTES = {
     ("POST", "/v1/admin/tenants"), ("GET", "/v1/admin/tenants"), ("PATCH", "/v1/admin/tenants/{tenant_id}"),
     ("DELETE", "/v1/admin/tenants/{tenant_id}"), ("POST", "/v1/admin/tenants/{tenant_id}/keys"),
-    ("GET", "/v1/admin/tenants/{tenant_id}/keys"),
+    ("GET", "/v1/admin/tenants/{tenant_id}/keys"), ("PUT", "/v1/admin/tenants/{tenant_id}/folders"),
     ("GET", "/v1/admin/server-admins"), ("POST", "/v1/admin/server-admins"),
     ("DELETE", "/v1/admin/server-admins/{user_id}"),
     ("PUT", "/v1/system/network"), ("PUT", "/v1/system/network/certificate"),

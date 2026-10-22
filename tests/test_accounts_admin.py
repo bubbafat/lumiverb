@@ -107,6 +107,28 @@ def test_what_an_account_holds_is_counted_from_its_database(install):  # noqa: F
     assert _holds(own, 1) == {"users": 1, "libraries": 1, "clips": 0}
 
 
+def test_a_server_admin_gives_an_account_its_folders_and_its_own_admin_can_t(install, monkeypatch):  # noqa: F811
+    """Each account's folders on this server (account_folders.py): a server admin's, signed in; an account admin
+    who isn't one gets 403. An account whose libraries can't be read isn't given folders (they'd go unchecked);
+    lifting them needs nothing read."""
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", "{}")
+    client, robert, own = install
+    ana_s, ana = _account(client, robert)
+    assert {t["folders"] for t in _listed(client, robert).values()} == {None}, "every account's until given some"
+    r = client.put(f"/v1/admin/tenants/{own}/folders", json={"folders": ["/Volumes/Robert"]}, headers=robert)
+    assert r.status_code == 200 and r.json() == {"tenant_id": own, "folders": ["/Volumes/Robert"]}, r.text
+    assert _listed(client, robert)[own]["folders"] == ["/Volumes/Robert"]
+    r = client.put(f"/v1/admin/tenants/{ana_s}/folders", json={"folders": None}, headers=ana)
+    assert (r.status_code, r.json()["error"]["code"]) == (403, "server_admin_required"), r.text
+    # This fixture's new accounts' databases can't be reached.
+    r = client.put(f"/v1/admin/tenants/{ana_s}/folders", json={"folders": ["/Volumes/Ana"]}, headers=robert)
+    assert (r.status_code, r.json()["error"]["code"]) == (503, "account_unavailable"), r.text
+    assert r.json()["error"]["message"] == ("Ana's: its database can't be read now, so its libraries can't be "
+                                            "checked against these folders. Try again later.")
+    assert _listed(client, robert)[ana_s]["folders"] is None, "nothing changed"
+    assert client.put(f"/v1/admin/tenants/{ana_s}/folders", json={"folders": None}, headers=robert).status_code == 200
+
+
 def test_a_server_admin_cant_delete_their_own_account_nor_leave_no_server_admin(install):  # noqa: F811
     client, robert, own = install
     r = client.delete(f"/v1/admin/tenants/{own}", headers=robert)

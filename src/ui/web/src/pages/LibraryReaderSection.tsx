@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, chooseLibraryReader, getCurrentUser, getLibrary, listDevices } from "../api/client";
+import { ApiError, chooseLibraryReader, getCurrentUser, getLibrary, getTenantSettings, listDevices } from "../api/client";
+import { AccountFoldersNote } from "../components/AccountFoldersNote";
 import { roleOn, runsIt } from "../lib/libraryRoles";
 import { DEVICES_QUERY_KEY } from "./settings/DevicesSection";
 
@@ -10,7 +11,8 @@ const SERVER = "server";
 /** Who reads the library's files (ADR-018 decision 1): this server, or a device (Settings › Devices), never both at
  * once. The reader scans the library and makes what needs its files; this server does everything else either way.
  * An account admin's choice, with the folder as the new reader sees it, as adding a library is: the library's own
- * admin sees who reads it and where, and that an account admin chooses them. */
+ * admin sees who reads it and where, and that an account admin chooses them. A folder on this server is in the
+ * account's folders when a server admin gave it any: said under the folder. */
 export default function LibraryReaderSection({ libraryId }: { libraryId: string }) {
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const { data: library } = useQuery({ queryKey: ["library", libraryId], queryFn: () => getLibrary(libraryId) });
@@ -62,6 +64,7 @@ function ReaderForm({ libraryId, reader, readerName, root, devices }: {
   const queryClient = useQueryClient();
   const [choice, setChoice] = useState(reader);
   const [folder, setFolder] = useState(root);
+  const { data: settings } = useQuery({ queryKey: ["tenant-settings"], queryFn: getTenantSettings, staleTime: 60_000 });
   const save = useMutation({
     mutationFn: () => chooseLibraryReader(libraryId, choice, folder.trim() !== root ? folder.trim() : undefined),
     onSuccess: (next) => {
@@ -122,6 +125,7 @@ function ReaderForm({ libraryId, reader, readerName, root, devices }: {
             className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100"
           />
         </label>
+        {choice === SERVER && <AccountFoldersNote folders={settings?.folders} />}
         {choice !== reader && (
           <p className="text-sm text-amber-100/90">
             {choice === SERVER

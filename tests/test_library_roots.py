@@ -450,6 +450,53 @@ def test_the_scheduler_refuses_a_root_symlinked_out(server: Path) -> None:
 
 
 @pytest.mark.fast
+def test_the_scheduler_reads_a_library_only_inside_its_account_s_folders(
+        server: Path, caplog: pytest.LogCaptureFixture) -> None:
+    # This server's check-in gives each library its account's folders (src/server/api/account_folders.py).
+    for folder in ("Ana/Trips", "Ana2", "Bob"):
+        (server / "mnt" / folder).mkdir(parents=True)
+        (server / "mnt" / folder / "a.jpg").write_bytes(b"x")
+    inside = {"library_id": "lib_1", "name": "Trips", "root_path": f"{MAC}/Ana/Trips", "folders": [f"{MAC}/Ana"]}
+    assert reachable_root(inside, require_entries=True) == (server / "mnt" / "Ana" / "Trips").resolve()
+    assert reachable_root({**inside, "root_path": f"{MAC}/Ana"}) is not None, "the folder itself"
+    assert reachable_root({**inside, "root_path": f"{MAC}/Bob", "folders": None}) is not None, \
+        "None: every folder the server reads, as before"
+    for i, (root, folders) in enumerate([(f"{MAC}/Bob", [f"{MAC}/Ana"]), (f"{MAC}/Ana2", [f"{MAC}/Ana"]),
+                                         (f"{MAC}/Ana", [])]):
+        assert reachable_root({"library_id": f"lib_x{i}", "name": "Out", "root_path": root, "folders": folders}) is None
+    assert "Out (lib_x0) refused: root is outside its account's folders" in caplog.text
+
+
+@pytest.mark.fast
+def test_a_root_linked_out_of_its_account_s_folders_is_never_read(server: Path, caplog: pytest.LogCaptureFixture) -> None:
+    # A library's folder can be a link: written inside the account's folders, it must lead inside them too.
+    (server / "mnt" / "Ana").mkdir()
+    (server / "mnt" / "Bob" / "Trips").mkdir(parents=True)
+    (server / "mnt" / "Bob" / "Trips" / "b.jpg").write_bytes(b"x")
+    (server / "mnt" / "Ana" / "bobs").symlink_to(server / "mnt" / "Bob")
+    lib = {"library_id": "lib_x", "name": "Link", "root_path": f"{MAC}/Ana/bobs/Trips", "folders": [f"{MAC}/Ana"]}
+    assert reachable_root(lib) is None
+    assert "Link (lib_x) refused: root leaves its account's folders" in caplog.text
+    # The account's folder itself may be a link (the admin's choice): it's resolved too.
+    (server / "mnt" / "bob-link").symlink_to(server / "mnt" / "Bob")
+    there = {"library_id": "lib_y", "name": "Linked", "root_path": f"{MAC}/bob-link/Trips",
+             "folders": [f"{MAC}/bob-link"]}
+    assert reachable_root(there, require_entries=True) == (server / "mnt" / "Bob" / "Trips").resolve()
+    assert reachable_root({**lib, "library_id": "lib_z", "folders": None}) is not None, "None: as before"
+
+
+@pytest.mark.fast
+def test_a_folder_is_inside_another_by_whole_parts_in_one_form() -> None:
+    from src.shared.io_utils import in_folder, root_in_form
+
+    assert in_folder("/a/b", "/a") and in_folder("/a", "/a") and in_folder("/a/b/c", "/a/b")
+    assert not in_folder("/a/bc", "/a/b") and not in_folder("/a", "/a/b")
+    assert in_folder(unicodedata.normalize("NFD", "/Fotos/José"), "/Fotos/José"), "macOS's NFD names"
+    assert [root_in_form(p) for p in ("/a", "/a/b c", "/a/", "/", "a", "/a/../b", "/a/./b", "/a//b", "/a\\b",
+                                      "/a\nb", "")] == [True, True] + [False] * 9
+
+
+@pytest.mark.fast
 def test_the_servers_data_is_never_read_even_when_mapped(server: Path, monkeypatch, caplog) -> None:
     from src.server.scheduler.settings import SchedulerSettings
 

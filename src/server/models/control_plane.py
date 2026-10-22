@@ -25,6 +25,10 @@ class Tenant(SQLModel, table=True):
     # Days a key a person made may go unused before upkeep ends it; None keeps
     # keys until someone revokes them (ApiKeyRepository.end_unused).
     key_idle_days: int | None = Field(default=None, nullable=True)
+    # The folders on this server its libraries may be in (the server admin's: PUT
+    # /v1/admin/tenants/{id}/folders, src/server/api/account_folders.py); None, every account's until one is
+    # given, is every folder the server reads. Assign a new list to change it.
+    folders: list[str] | None = Field(default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True))
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

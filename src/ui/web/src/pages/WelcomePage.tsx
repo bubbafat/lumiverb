@@ -9,10 +9,12 @@ import {
   getNetworkAccess,
   getProducers,
   getSetupProgress,
+  getTenantSettings,
   setProducerSettings,
   setSetupProgress,
   type Producer,
 } from "../api/client";
+import { AccountFoldersNote } from "../components/AccountFoldersNote";
 import { FACES, VIDEO_FACES } from "../lib/names";
 import AiSection from "./settings/AiSection";
 import { FolderChoice, BACKUPS_QUERY_KEY } from "./settings/BackupsSection";
@@ -284,6 +286,7 @@ function LibraryStep() {
   const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
   const [guess, setGuess] = useState(false);
+  const { data: settings } = useQuery({ queryKey: ["tenant-settings"], queryFn: getTenantSettings, staleTime: 60_000 });
   const add = useMutation({
     mutationFn: () => createLibrary(name.trim(), folder.trim(), undefined, guess),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["libraries"] }),
@@ -313,6 +316,7 @@ function LibraryStep() {
         <input aria-label="Library folder" className={inputClass} value={folder} placeholder="/Volumes/Media/Photos"
                onChange={(e) => setFolder(e.target.value)} />
       </label>
+      <AccountFoldersNote folders={settings?.folders} />
       <label className="flex items-start gap-3 text-sm text-gray-200">
         <input type="checkbox" className="mt-0.5" checked={guess} onChange={(e) => setGuess(e.target.checked)} />
         <span>

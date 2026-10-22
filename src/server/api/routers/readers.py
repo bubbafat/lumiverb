@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server import check_ins
+from src.server.api import account_folders
 from src.server.api.dependencies import get_tenant_session, require_editor, require_reader
 from src.server.api.devices import may_call
 from src.server.api.errors import ApiError, ConflictError
@@ -67,6 +68,9 @@ class LibraryToRead(BaseModel):
     mark: int
     # A scan of the whole library was asked for.
     scan_now: bool
+    # This server's libraries: the account's folders, which it reads them only inside, resolved on disk too
+    # (src/server/api/account_folders.py); None: every folder the server reads, and a device's.
+    folders: list[str] | None = None
 
 
 class CheckInResponse(BaseModel):
@@ -130,7 +134,9 @@ def check_in(body: CheckInRequest, request: Request,
     asked for. Every minute or so (check_in_every_sec). This server's
     reader with an admin's key, as the scheduler's is; a device with its
     own, which reads the libraries naming it (src/server/api/devices.py).
-    426 reader_too_old for a protocol the server no longer speaks."""
+    This server's reader hears the account's folders with each library: it
+    reads one only inside them. 426 reader_too_old for a protocol the server
+    no longer speaks."""
     if body.protocol < check_ins.OLDEST_PROTOCOL:
         raise ApiError(426, "reader_too_old", "This reader is too old for this server: update it.",
                        {"oldest_protocol": check_ins.OLDEST_PROTOCOL, "protocol": check_ins.PROTOCOL})
@@ -141,7 +147,8 @@ def check_in(body: CheckInRequest, request: Request,
     libraries, gone = check_ins.check_in(session, reader=reader, client=body.client, version=body.version,
                                          said=said, now=utcnow())
     session.commit()
-    return CheckInResponse(libraries=[LibraryToRead(**lib) for lib in libraries], gone=gone,
+    folders = account_folders.of(request.state.tenant_id) if reader == SERVER else None
+    return CheckInResponse(libraries=[LibraryToRead(**lib, folders=folders) for lib in libraries], gone=gone,
                            check_in_every_sec=check_ins.CHECK_IN_EVERY_SEC)
 
 

@@ -241,6 +241,34 @@ describe("LibrariesPage adding a library", () => {
     expect(screen.queryByLabelText("Read by")).toBeNull();
   });
 
+  it("says the account's folders when a server admin gave it some, and the server's refusal as it says it", async () => {
+    api.getTenantSettings.mockResolvedValue({ trash_days: 30, folders: ["/Volumes/Ana"] });
+    api.createLibrary.mockRejectedValue(new ApiError(403, "This account's folders are /Volumes/Ana: choose one inside "
+      + "them, or ask a server admin.", "outside_account_folders"));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Add library" }));
+    expect((await screen.findByText(/This account's folders:/)).textContent).toBe("This account's folders: /Volumes/Ana");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Bob's" } });
+    fireEvent.change(screen.getByLabelText("Root path"), { target: { value: "/Volumes/Bob" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create library" }));
+    expect(await screen.findByText("This account's folders are /Volumes/Ana: choose one inside them, or ask a server admin."))
+      .toBeTruthy();
+  });
+
+  it("says when the account has no folders on this server", async () => {
+    api.getTenantSettings.mockResolvedValue({ trash_days: 30, folders: [] });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Add library" }));
+    expect(await screen.findByText(/This account has no folders on this server/)).toBeTruthy();
+  });
+
+  it("says nothing of folders while the account may choose any the server reads", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Add library" }));
+    expect(screen.getByLabelText("Root path")).toBeTruthy();
+    expect(screen.queryByText(/This account/)).toBeNull();
+  });
+
   it("makes one whose locations are guessed when asked (ADR-017)", async () => {
     api.createLibrary.mockResolvedValue({ library_id: "lib_9", name: "Trips", root_path: "/Volumes/Trips" });
     renderPage();

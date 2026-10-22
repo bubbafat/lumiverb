@@ -12,6 +12,7 @@ import {
   listServerAdmins,
   removeServerAdmin,
   renameAccount,
+  setAccountFolders,
 } from "../api/client";
 import { decodeJwtClaims } from "../api/jwt";
 import type { AccountItem } from "../api/types";
@@ -35,8 +36,8 @@ function plural(n: number, one: string, many = `${one}s`): string {
 }
 
 /** The install's accounts and its server admins: a server admin's (ADR-018 decision 8). An account is made with
- * its first admin invited, renamed, or deleted once what it holds is said and its name typed: nobody signs in to
- * a deleted account again. */
+ * its first admin invited, renamed, given the folders on this server its libraries may be in, or deleted once what
+ * it holds is said and its name typed: nobody signs in to a deleted account again. */
 export default function AdminAccountsPage() {
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   if (user && !user.server_admin) {
@@ -70,12 +71,20 @@ function Accounts() {
   const [made, setMade] = useState<MadeLink | null>(null);
   const live = (accounts ?? []).filter((a) => a.status !== "deleted");
   const deleted = (accounts ?? []).filter((a) => a.status === "deleted");
+  // With one account there's nobody else's folder to reach: nothing is said.
+  const unbounded = live.length > 1 ? live.filter((a) => a.folders == null) : [];
 
   return (
     <>
       {made && <InviteLinkPanel link={made} thisMacOnly={thisMacOnly} onDone={() => setMade(null)} />}
       <section className="space-y-3">
         {error && <p role="alert" className="text-sm text-red-400">{said(error, "Couldn't list the accounts.")}</p>}
+        {unbounded.length > 0 && (
+          <p role="note" className="rounded-lg border border-amber-500/40 bg-amber-950/20 px-3 py-2 text-sm text-amber-100/90">
+            Each account without folders of its own ({unbounded.map((a) => a.name).join(", ")}) can choose any folder
+            the server reads for a library, the other accounts&apos; too. Give each its folders below.
+          </p>
+        )}
         {isLoading ? (
           <div className="h-24 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />
         ) : (
@@ -210,6 +219,7 @@ function AccountRow({ account, own, onChanged }: { account: AccountItem; own: bo
           </div>
         </div>
       )}
+      <Folders account={account} onChanged={onChanged} />
       {held && (
         <form role="alertdialog" aria-label="Delete this account?" className="space-y-2 rounded-lg border border-red-500/40 bg-red-950/20 p-3"
               onSubmit={(e) => {
@@ -237,6 +247,69 @@ function AccountRow({ account, own, onChanged }: { account: AccountItem; own: bo
         <p role="alert" className="text-sm text-red-400">{said(rename.error ?? remove.error, "Try again.")}</p>
       )}
     </li>
+  );
+}
+
+/** The folders on this server the account's libraries may be in (null: every folder the server reads), one per
+ * line; what the server refuses (another account's folder, a library left outside) said as it says it. */
+function Folders({ account, onChanged }: { account: AccountItem; onChanged: () => void }) {
+  const folders = account.folders ?? null;
+  const [editing, setEditing] = useState(false);
+  const [every, setEvery] = useState(folders === null);
+  const [typed, setTyped] = useState((folders ?? []).join("\n"));
+  const save = useMutation({
+    mutationFn: () => setAccountFolders(account.tenant_id, every ? null : typed.split("\n").map((f) => f.trim()).filter(Boolean)),
+    onSuccess: () => {
+      setEditing(false);
+      onChanged();
+    },
+  });
+  const shown = folders === null
+    ? "Every folder the server reads"
+    : folders.length === 0 ? "None on this server: only its own computers read its libraries" : folders.join(", ");
+
+  if (!editing) {
+    return (
+      <p className="flex flex-wrap items-baseline gap-x-3 text-sm text-gray-400">
+        <span>Folders: <span className={folders?.length ? "break-all font-mono text-gray-300" : "text-gray-300"}>{shown}</span></span>
+        <button type="button" onClick={() => {
+          setEvery(folders === null);
+          setTyped((folders ?? []).join("\n"));
+          save.reset();
+          setEditing(true);
+        }} className="text-indigo-400 hover:text-indigo-300">
+          Change folders
+        </button>
+      </p>
+    );
+  }
+  return (
+    <form aria-label={`Folders for ${account.name}`} className="space-y-2 rounded-lg border border-gray-700/60 p-3" onSubmit={(e) => {
+      e.preventDefault();
+      save.mutate();
+    }}>
+      <p className="text-sm text-gray-300">Where its libraries this server reads may be:</p>
+      <label className="flex items-center gap-2 text-sm text-gray-200">
+        <input type="radio" name={`folders-${account.tenant_id}`} checked={every} onChange={() => setEvery(true)} />
+        Every folder the server reads
+      </label>
+      <label className="flex items-center gap-2 text-sm text-gray-200">
+        <input type="radio" name={`folders-${account.tenant_id}`} checked={!every} onChange={() => setEvery(false)} />
+        Only these folders
+      </label>
+      <textarea aria-label="Its folders, one per line" value={typed} disabled={every} rows={3}
+                onChange={(e) => setTyped(e.target.value)} placeholder={"/srv/media/ana\n/Volumes/Ana"}
+                className={`${input} font-mono disabled:opacity-50`} />
+      <p className="text-xs text-gray-500">
+        One full path per line. A library this server reads for it must be in one of them; its own computers
+        (Settings › Devices) read theirs anywhere.
+      </p>
+      {save.error && <p role="alert" className="text-sm text-red-400">{said(save.error, "Try again.")}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={save.isPending} className={button}>Save folders</button>
+        <button type="button" onClick={() => setEditing(false)} className="text-sm text-gray-400">Cancel</button>
+      </div>
+    </form>
   );
 }
 

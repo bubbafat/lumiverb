@@ -3,9 +3,11 @@ who its server admins are. A server admin who signed in, or the install's
 own key (ADMIN_KEY, for its scripts and the CLI's `lumiverb admin`):
 dependencies.require_server_admin. The web app's Admin › Accounts is a
 server admin's: an account made with its first admin's invite, renamed, or
-deleted once what it holds is said and its name typed. A deleted account is
-kept and never reached again: nobody signs in to it, its keys and public
-links answer nothing, and it isn't worked on (TenantRepository.gone)."""
+deleted once what it holds is said and its name typed, and given the
+folders on this server its libraries may be in (account_folders.py). A
+deleted account is kept and never reached again: nobody signs in to it, its
+keys and public links answer nothing, and it isn't worked on
+(TenantRepository.gone)."""
 
 import logging
 from datetime import datetime
@@ -16,6 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
 from src.server.accounts import AccountError, create_account, remove_account
+from src.server.api import account_folders
 from src.server.api.dependencies import get_db_session, require_server_admin
 from src.server.api.errors import ApiError, ConflictError, DecisionRequiredError
 from src.server.repository.control_plane import (
@@ -71,6 +74,18 @@ class TenantListItem(BaseModel):
     status: str
     users: int = 0  # the people who sign in to it
     created_at: datetime | None = None
+    # The folders on this server its libraries may be in; None: every folder the server reads.
+    folders: list[str] | None = None
+
+
+class FoldersChoice(BaseModel):
+    # Folders on this server, as library roots are kept, or null for every folder the server reads.
+    folders: list[str] | None = Field(max_length=account_folders.MAX_FOLDERS)
+
+
+class AccountFolders(BaseModel):
+    tenant_id: str
+    folders: list[str] | None
 
 
 class UpdateTenantRequest(BaseModel):
@@ -174,6 +189,7 @@ def list_tenants(
             status=t.status,
             users=people.get(t.tenant_id, 0),
             created_at=t.created_at,
+            folders=t.folders,
         )
         for t in tenants
     ]
@@ -206,6 +222,24 @@ def update_tenant(
         vision_api_url=machine.api_url if machine is not None else "",
         vision_model_id=job_model(tenant, "vision"),
     )
+
+
+@router.put("/tenants/{tenant_id}/folders", response_model=AccountFolders)
+def set_tenant_folders(
+    tenant_id: str,
+    body: FoldersChoice,
+    session: Annotated[Session, Depends(get_db_session)],
+) -> AccountFolders:
+    """The folders on this server an account's libraries may be in, or null
+    for every folder the server reads (every account's until given some).
+    422 invalid_folder for one not as library roots are kept, folder_not_read
+    for one outside the server's root map; 409 folders_overlap for one equal
+    to, inside or holding another live account's; 409 libraries_outside when
+    a library the server reads for it would be outside them; 503
+    account_unavailable when its libraries can't be read now; 404 for no
+    such account, or a deleted one (account_folders.set_folders)."""
+    return AccountFolders(tenant_id=tenant_id,
+                          folders=account_folders.set_folders(session, tenant_id, body.folders))
 
 
 @router.post("/tenants/{tenant_id}/keys", response_model=CreateTenantKeyResponse)

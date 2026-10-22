@@ -11,6 +11,8 @@ let role = "admin";
 let serverAdmin = true;
 let done: string[] = [];
 let detail = "normal";
+// The account's folders on this server (a server admin's to give); null: every folder the server reads.
+let folders: string[] | null = null;
 const sent: { method: string; path: string; body: unknown }[] = [];
 
 function json(body: unknown, status = 200) {
@@ -33,6 +35,7 @@ beforeEach(() => {
   serverAdmin = true;
   done = [];
   detail = "normal";
+  folders = null;
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("scrollTo", () => {});
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -58,6 +61,7 @@ beforeEach(() => {
                     last_error: null, last_failed_at: null, next_at: new Date().toISOString(), backups: [] });
     }
     if (path === "/system/network") return json({ available: true, other_devices: false, addresses: [] });
+    if (path === "/tenant/settings") return json({ trash_days: 30, folders });
     if (path === "/producers") {
       return json({ producers: [producer("lumiverb.image.faces", [levelField(detail)]), producer("lumiverb.video.faces", [levelField("low")]),
                                 producer("lumiverb.location.guess", [{ key: "inference_minutes", label: "Inference window", kind: "int",
@@ -147,6 +151,22 @@ describe("WelcomePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
     expect(await screen.findByText("Libraries page")).toBeTruthy();
     expect(done).toEqual(STEPS);
+  });
+
+  it("says where its first library may be when a server admin gave the account folders", async () => {
+    done = STEPS.slice(0, 5);
+    folders = ["/srv/media/ana"];
+    renderPage();
+    expect(await screen.findByText("/srv/media/ana")).toBeTruthy();
+    expect(screen.getByText(/This account's folders:/)).toBeTruthy();
+  });
+
+  it("says nothing of folders where the account may choose any the server reads", async () => {
+    done = STEPS.slice(0, 5);
+    renderPage();
+    expect(await screen.findByRole("heading", { level: 2, name: "Your first library" })).toBeTruthy();
+    await vi.waitFor(() => expect(sent.some((s) => s.path === "/tenant/settings")).toBe(true));
+    expect(screen.queryByText(/This account/)).toBeNull();
   });
 
   it("can be left and finished later", async () => {

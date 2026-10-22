@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   getLibrary: vi.fn(),
   listDevices: vi.fn(),
   chooseLibraryReader: vi.fn(),
+  getTenantSettings: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -24,6 +25,8 @@ beforeEach(() => {
   api.getLibrary.mockResolvedValue({ library_id: "lib_1", name: "Trips", root_path: "/Volumes/Trips", is_public: false,
                                      reader: "server", reader_name: null });
   api.listDevices.mockResolvedValue([STUDIO]);
+  api.getTenantSettings.mockResolvedValue({ video_preview_max_seconds: null, public_video_preview_max_seconds: 10,
+                                           folders: null });
 });
 
 afterEach(() => {
@@ -66,6 +69,29 @@ describe("LibraryReaderSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(api.chooseLibraryReader).toHaveBeenCalledWith("lib_1", "server", undefined));
     expect((await screen.findByRole("alert")).textContent).toContain("on the computer Lumiverb is installed on");
+  });
+
+  it("says the account's folders under a folder on this server, as a server admin gave them", async () => {
+    api.getTenantSettings.mockResolvedValue({ video_preview_max_seconds: null, public_video_preview_max_seconds: 10,
+                                             folders: ["/Volumes/Ana", "/srv/ana"] });
+    api.chooseLibraryReader.mockRejectedValue(new ApiError(403, "This account's folders are /Volumes/Ana, /srv/ana: "
+      + "choose one inside them, or ask a server admin.", "outside_account_folders"));
+    renderSection();
+    expect(await screen.findByText("/Volumes/Ana, /srv/ana")).toBeTruthy();
+    expect(screen.getByText(/This account's folders:/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Its folder on this server"), { target: { value: "/Volumes/Bob" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "This account's folders are /Volumes/Ana, /srv/ana: choose one inside them, or ask a server admin.");
+    fireEvent.change(screen.getByLabelText("Read by"), { target: { value: "dev_1" } });
+    expect(screen.queryByText(/This account's folders:/)).toBeNull();
+  });
+
+  it("says nothing of folders while the account may choose any the server reads", async () => {
+    renderSection();
+    expect(await screen.findByLabelText("Its folder on this server")).toBeTruthy();
+    await waitFor(() => expect(api.getTenantSettings).toHaveBeenCalled());
+    expect(screen.queryByText(/This account/)).toBeNull();
   });
 
   it("points to Settings › Devices when there are none", async () => {
