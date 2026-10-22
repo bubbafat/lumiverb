@@ -139,7 +139,7 @@
 </tr>
 <tr>
 <td>Admin</td>
-<td>All of that, and invite people and set their roles, add libraries, run every library, delete for good, make a library public, and change Settings › AI, Processing, Files, Playback, Devices and Plug-ins</td>
+<td>All of that, and invite people and set their roles, add libraries, run every library, set the path filters every library starts with, delete for good, make a library public, and change Settings › AI, Processing, Files, Playback, Devices and Plug-ins</td>
 </tr>
 </tbody>
 </table></div>
@@ -155,7 +155,7 @@
 </ol>
 <p>The link works once, for 7 days. Opening it, they choose their own password (at least 12 characters) and are signed in. If the first link doesn't open on their device, send the second one shown: the same link at the computer's network address instead of its name.</p>
 <p>On a Mac, the link opens only on that Mac until Settings › Network lets other devices use Lumiverb. See <a href="network.html">Network, phones and HTTPS</a>.</p>
-<p>Lost the link, or it ran out? In the users list, click <strong>New link</strong> beside them. The old one stops working. Once they've signed in, there's no link to make: they use Forgot password.</p>
+<p>Lost the link, or it ran out? In the users list, click <strong>New link</strong> beside them. The old one stops working. Once they've signed in, there's no link to make: they use Forgot password. A server admin's link is made only by another server admin (see <a href="#server-admins">Server admins</a>).</p>
 <p>From the command line, an admin's key can do the same:</p>
 <div class="cmd"><pre><code>lumiverb user create --email them@example.com --role editor</code></pre></div>
 <div class="cmd"><pre><code>lumiverb user invite --email them@example.com</code></pre></div>
@@ -166,6 +166,7 @@
 <li><strong>Libraries</strong>: <strong>Every library</strong>, or <strong>Only those given</strong> (see <a href="#seeing-only-what-theyre-given">Seeing only what they're given</a>).</li>
 <li><strong>Remove</strong>: they can no longer sign in. Their ratings, saved searches and API keys go with them. You can't remove yourself or the last admin.</li>
 </ul>
+<p>Someone marked <strong>Server admin</strong> in the list is changed or removed only by another server admin: anyone else sees &quot;Only a server admin changes a server admin.&quot; in place of the controls.</p>
 <h2 id="roles-on-one-library">Roles on one library<a class="anchor" href="#roles-on-one-library" aria-label="Link to this section">#</a></h2>
 <p>A person's account role holds on every library unless that library says otherwise. Its admin sets that in <strong>Library settings › People</strong>. An account admin is every library's admin.</p>
 <p>Each person has a <strong>Role here</strong>:</p>
@@ -185,7 +186,8 @@
 <div class="cmd"><pre><code>lumiverb user libraries --email them@example.com --only-given</code></pre></div>
 <h2 id="server-admins">Server admins<a class="anchor" href="#server-admins" aria-label="Link to this section">#</a></h2>
 <p>What belongs to the whole install rather than one account is a server admin's: the accounts on it, where previews are kept (Settings › Storage), the network (Settings › Network), backups (Settings › Backups) and the log (Admin › Logs). The admin made when Lumiverb was set up is one.</p>
-<p>A server admin adds others in <strong>Admin › Accounts</strong>, under <strong>Server admins</strong>: type the email of someone who signs in here and click <strong>Make server admin</strong>. <strong>Remove</strong> takes it away; the last one can't be removed there.</p>
+<p>A server admin adds others in <strong>Admin › Accounts</strong>, under <strong>Server admins</strong>: type the email of someone who signs in here and click <strong>Make server admin</strong>. <strong>Remove</strong> takes it away; the last one can't be removed there, nor deleted, nor their account. One in a deleted account doesn't count: they can't sign in.</p>
+<p>Whoever has a server admin's password has the whole install, so a server admin is out of an account admin's reach: only another server admin makes them a new invite link, changes their role or libraries, or removes them.</p>
 <p>On the computer Lumiverb is installed on, the command line lists them, and adds or removes one even when there's none left. On a Mac:</p>
 <div class="cmd"><pre><code>lumiverb-server server-admins add you@example.com --env "$(brew --prefix)/etc/lumiverb/env"</code></pre></div>
 <p>On Linux:</p>
@@ -217,6 +219,7 @@ you registered) needs a new one. <strong>Change it and end them</strong> goes ah
 <p>Then give it to the command line (it asks you to paste the key):</p>
 <div class="cmd"><pre><code>lumiverb config set --api-url http://your-server:6464 --api-key -</code></pre></div>
 <p>The list shows when each key was last used. <strong>Revoke</strong> stops one. A key also stops when the person who made it gets a new password, is given a lower role, or is removed.</p>
+<p>The label <code>scheduler</code> belongs to the key Lumiverb makes for itself to process with, so no other key can have it.</p>
 <p>An admin can end keys nobody uses: under <strong>Unused keys</strong>, tick <strong>End keys not used for</strong> a number of days, then <strong>Save</strong>. If some keys would end at once, it names them and asks first. Keys Lumiverb makes for itself, devices' keys and the last admin key are never ended this way.</p>
 <p>More in <a href="command-line.html">The command line</a>.</p>
 

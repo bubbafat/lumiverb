@@ -265,9 +265,11 @@ def create_filter_default(
     request: Request,
     body: CreateTenantFilterDefaultRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_editor)],
+    _: Annotated[None, Depends(require_tenant_admin)],
 ) -> TenantFilterDefaultItemWithType:
-    """Add a path filter default for the tenant. Returns 400 if pattern invalid."""
+    """Add a path filter default for the tenant. Returns 400 if pattern invalid.
+    An account admin's: the defaults reach every library's reader, so what
+    every library's scans keep."""
     if body.type not in ("include", "exclude"):
         raise HTTPException(status_code=400, detail="type must be 'include' or 'exclude'")
     try:
@@ -292,9 +294,9 @@ def delete_filter_default(
     default_id: str,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_editor)],
+    _: Annotated[None, Depends(require_tenant_admin)],
 ) -> None:
-    """Remove a path filter default. Returns 404 if not found."""
+    """Remove a path filter default. Returns 404 if not found. An account admin's, as adding one is."""
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
         raise HTTPException(status_code=500, detail="Tenant context missing")

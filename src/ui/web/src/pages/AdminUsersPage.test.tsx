@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import AdminUsersPage from "./AdminUsersPage";
@@ -11,15 +11,32 @@ const BY_ADDRESS = "http://192.168.86.55:6464/join?token=abc";
 let network = { available: true, other_devices: true, addresses: ["http://macstudio.local:6464"] };
 let posts: { url: string; body: unknown }[] = [];
 let patches: { url: string; body: unknown }[] = [];
+let deletes: string[] = [];
+// Who's looking (/v1/me), and whether u2 is a server admin.
+let viewerIsServerAdmin = false;
+let u2ServerAdmin = false;
 
 beforeEach(() => {
   network = { available: true, other_devices: true, addresses: ["http://macstudio.local:6464"] };
   posts = [];
   patches = [];
+  deletes = [];
+  viewerIsServerAdmin = false;
+  u2ServerAdmin = false;
   vi.stubGlobal("fetch", fetchMock);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if (init?.method === "POST") posts.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
+    if (init?.method === "DELETE") {
+      deletes.push(url);
+      return new Response(JSON.stringify({ error: { code: "last_server_admin",
+                                                    message: "They're the last server admin: name another first.",
+                                                    details: {} } }), { status: 409 });
+    }
+    if (url.endsWith("/v1/me")) {
+      return new Response(JSON.stringify({ user_id: "u1", email: "a@b.c", role: "admin",
+                                           server_admin: viewerIsServerAdmin }), { status: 200 });
+    }
     if (init?.method === "PATCH") {
       const body = JSON.parse(String(init.body));
       patches.push({ url, body });
@@ -41,7 +58,8 @@ beforeEach(() => {
       return new Response(
         JSON.stringify([
           { user_id: "u1", email: "a@b.c", role: "admin", created_at: hoursAgo(100), last_login_at: hoursAgo(2) },
-          { user_id: "u2", email: "d@e.f", role: "viewer", created_at: hoursAgo(100), last_login_at: null },
+          { user_id: "u2", email: "d@e.f", role: "viewer", server_admin: u2ServerAdmin, created_at: hoursAgo(100),
+            last_login_at: null },
         ]),
         { status: 200 },
       );
@@ -117,6 +135,32 @@ describe("AdminUsersPage", () => {
     expect(screen.queryByLabelText("Libraries a@b.c sees")).toBeNull(); // an admin sees every library
     fireEvent.change(viewer, { target: { value: "given" } });
     await waitFor(() => expect(patches).toEqual([{ url: "/v1/users/u2", body: { every_library: false } }]));
+  });
+
+  it("offers an account admin nothing to change on a server admin", async () => {
+    u2ServerAdmin = true;
+    renderPage();
+    expect(await screen.findByText("Only a server admin changes a server admin.")).toBeTruthy();
+    const row = within(screen.getByText("d@e.f").closest("tr")!);
+    expect(row.getByText("Server admin")).toBeTruthy();
+    expect((row.getByLabelText("Role of d@e.f") as HTMLSelectElement).disabled).toBe(true);
+    expect((row.getByLabelText("Libraries d@e.f sees") as HTMLSelectElement).disabled).toBe(true);
+    expect(row.queryByRole("button", { name: "New link" })).toBeNull();
+    expect(row.queryByRole("button", { name: "Remove" })).toBeNull();
+    // Anyone else's row is as it was.
+    expect(within(screen.getByText("a@b.c").closest("tr")!).getByRole("button", { name: "Remove" })).toBeTruthy();
+  });
+
+  it("offers a server admin another's controls, and says why one can't go", async () => {
+    u2ServerAdmin = true;
+    viewerIsServerAdmin = true;
+    renderPage();
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "New link" })).toHaveLength(1));
+    expect(screen.queryByText("Only a server admin changes a server admin.")).toBeNull();
+    expect((screen.getByLabelText("Role of d@e.f") as HTMLSelectElement).disabled).toBe(false);
+    fireEvent.click(within(screen.getByText("d@e.f").closest("tr")!).getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText("They're the last server admin: name another first.")).toBeTruthy();
+    expect(deletes).toEqual(["/v1/users/u2"]);
   });
 
   it("invites someone who sees only the libraries they're given", async () => {

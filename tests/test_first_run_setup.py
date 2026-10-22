@@ -263,6 +263,34 @@ def test_the_command_line_makes_nothing_after_three_tries(control, tmp_path, mon
     assert _rows(control, User) == []
 
 
+def test_a_first_admin_who_hasnt_signed_in_is_no_key_s_to_invite(control, tmp_path, monkeypatch):
+    """Linux: deploy-api.sh makes the account with its first key (made by no person), then `lumiverb-server setup`
+    its first admin, a server admin who hasn't signed in yet. That key, an account admin's, never makes them an
+    invite link (whoever followed it would have the install), changes or deletes them: 403 server_admin_user."""
+    monkeypatch.setenv("ADMIN_KEY", "the-install-s-own-key")
+    get_settings.cache_clear()
+    with _client() as client:
+        made = client.post("/v1/admin/tenants", json={"name": "Media"},
+                           headers={"Authorization": "Bearer the-install-s-own-key"})
+    assert made.status_code == 200, made.text
+    first_key = {"Authorization": f"Bearer {made.json()['api_key']}"}
+    typed = iter([PASSWORD, PASSWORD])
+    monkeypatch.setattr(cli, "getpass", lambda _prompt: next(typed))
+    assert cli.main(["setup", "--env", str(_env_file(tmp_path, control)), "--email", "robert@example.com"]) == 0
+    [user] = _rows(control, User)
+    assert (user.server_admin, user.last_login_at, user.tenant_id) == (True, None, made.json()["tenant_id"])
+
+    with _client() as client:
+        for method, path, body in (("POST", f"/v1/users/{user.user_id}/invite", None),
+                                   ("PATCH", f"/v1/users/{user.user_id}", {"role": "viewer"}),
+                                   ("DELETE", f"/v1/users/{user.user_id}", None)):
+            r = client.request(method, path, json=body, headers=first_key)
+            assert (r.status_code, r.json()["error"]["code"]) == (403, "server_admin_user"), (method, r.text)
+        assert client.post("/v1/auth/login", json={"email": "robert@example.com", "password": PASSWORD}
+                           ).status_code == 200, "their password as they set it"
+    assert [(u.role, u.password_hash) for u in _rows(control, User)] == [("admin", user.password_hash)]
+
+
 def test_the_command_line_checks_the_email_before_asking_for_a_password(control, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "getpass", lambda _prompt: pytest.fail("nothing more may be asked"))
     assert cli.main(["setup", "--env", str(_env_file(tmp_path, control)), "--email", "robert"]) == 1

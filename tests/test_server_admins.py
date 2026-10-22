@@ -166,6 +166,112 @@ def test_two_taking_each_other_s_away_at_once_leave_one(install):
         assert len(UserRepository(session).server_admins()) == 1
 
 
+def _never_signed_in_server_admin(tenant_id: str, email: str = "first@example.com") -> str:
+    """A server admin in the account who hasn't signed in yet (as `lumiverb-server setup` or `server-admins add`
+    leave one), with an invite of their own: their user id."""
+    from src.server.invites import new_invite, unusable_password_hash
+
+    with get_control_session() as session:
+        user = UserRepository(session).create(tenant_id, email, unusable_password_hash(), role="admin",
+                                              server_admin=True)
+        new_invite(session, user.user_id)
+        return user.user_id
+
+
+def test_a_server_admin_is_out_of_an_account_admin_s_reach(install):
+    """Whoever holds a server admin's password has the install: an account admin, signed in or by any key of the
+    account's (one a person made, its first key, one the server admin's API made), never makes them a new invite
+    link, changes them or deletes them (403 server_admin_user, nothing done); another server admin does."""
+    client, robert, tenant_id = install
+    first = _never_signed_in_server_admin(tenant_id)
+    other = someone(client, tenant_id, "admin")
+    theirs = client.post("/v1/keys", json={"label": "a script", "role": "admin"}, headers=other)
+    nobody_s = client.post(f"/v1/admin/tenants/{tenant_id}/keys", json={"name": "ops"}, headers=robert)
+    assert theirs.status_code == 200 and nobody_s.status_code == 200, (theirs.text, nobody_s.text)
+    callers = [other, {"Authorization": f"Bearer {theirs.json()['plaintext']}"},
+               {"Authorization": f"Bearer {nobody_s.json()['api_key']}"}]
+    for caller in callers:
+        for method, body in (("POST", None), ("PATCH", {"role": "viewer"}), ("PATCH", {"every_library": False}),
+                             ("DELETE", None)):
+            path = f"/v1/users/{first}/invite" if method == "POST" else f"/v1/users/{first}"
+            r = client.request(method, path, json=body, headers=caller)
+            assert (r.status_code, r.json()["error"]["code"]) == (403, "server_admin_user"), (method, body, r.text)
+            assert "first@example.com is a server admin" in r.json()["error"]["message"]
+    with get_control_session() as session:
+        still = UserRepository(session).get_by_id(first)
+        assert (still.role, still.every_library, still.server_admin) == ("admin", True, True)
+
+    # Anyone else is the account admin's as before.
+    invited = client.post("/v1/users", json={"email": "guest@example.com", "role": "viewer"}, headers=other)
+    guest = invited.json()["user_id"]
+    assert client.post(f"/v1/users/{guest}/invite", headers=other).status_code == 200
+    assert client.patch(f"/v1/users/{guest}", json={"role": "editor"}, headers=other).status_code == 200
+    assert client.delete(f"/v1/users/{guest}", headers=other).status_code == 204
+
+    # Another server admin does all of it.
+    link = client.post(f"/v1/users/{first}/invite", headers=robert)
+    assert link.status_code == 200 and link.json()["invite_urls"], link.text
+    changed = client.patch(f"/v1/users/{first}", json={"role": "editor", "every_library": False}, headers=robert)
+    assert changed.status_code == 200 and changed.json()["server_admin"] is True, changed.text
+    listed = {u["email"]: u["server_admin"] for u in client.get("/v1/users", headers=other).json()}
+    assert listed == {"robert@example.com": True, "first@example.com": True, "admin@example.com": False}
+    assert client.delete(f"/v1/users/{first}", headers=robert).status_code == 204
+    assert [a["email"] for a in client.get("/v1/admin/server-admins", headers=robert).json()["server_admins"]] == [
+        "robert@example.com"]
+
+
+def _waiting_on_locks() -> int:
+    """How many connections wait for a lock now (a session of its own: a transaction sees pg_stat_activity once)."""
+    from sqlalchemy import text
+
+    with get_control_session() as session:
+        return session.execute(text("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                                    "AND datname = current_database()")).scalar_one()
+
+
+def _at_once(client: TestClient, requests: list[tuple[str, str, dict, dict]]) -> list[tuple[int, str | None]]:
+    """Requests (method, path, headers, params) sent together while the server admins are held, as a change
+    deciding about them holds them (UserRepository.keeps_a_server_admin): each has passed every check before
+    them and waits, so none decides before the others are as far. Their statuses and error codes, in order."""
+    import time
+
+    statuses: list[tuple[int, str | None] | None] = [None] * len(requests)
+
+    def send(i: int, method: str, path: str, headers: dict, params: dict) -> None:
+        r = client.request(method, path, headers=headers, params=params)
+        statuses[i] = (r.status_code, r.json()["error"]["code"] if r.status_code >= 400 else None)
+
+    threads = [threading.Thread(target=send, args=(i, *r)) for i, r in enumerate(requests)]
+    with get_control_session() as holding:
+        assert UserRepository(holding).keeps_a_server_admin()
+        for thread in threads:
+            thread.start()
+        deadline = time.monotonic() + 30
+        while _waiting_on_locks() < len(requests):
+            assert time.monotonic() < deadline, ("they never got as far as the server admins", statuses)
+            time.sleep(0.05)
+        holding.rollback()
+    for thread in threads:
+        thread.join(30)
+    return statuses
+
+
+def test_two_server_admins_deleting_each_other_at_once_leave_one(install):
+    client, robert, tenant_id = install
+    other = someone(client, tenant_id, "admin")
+    with get_control_session() as session:
+        users = UserRepository(session)
+        ids = {e: users.get_by_email(e).user_id for e in ("admin@example.com", "robert@example.com")}
+        users.set_server_admin(ids["admin@example.com"], True)
+        # A third account admin, so the last-admin rule isn't what stops either.
+        users.create(tenant_id, "third@example.com", "x", role="admin")
+    statuses = _at_once(client, [("DELETE", f"/v1/users/{ids['admin@example.com']}", robert, {}),
+                                 ("DELETE", f"/v1/users/{ids['robert@example.com']}", other, {})])
+    assert sorted(statuses) == [(204, None), (409, "last_server_admin")], statuses
+    with get_control_session() as session:
+        assert len(UserRepository(session).server_admins()) == 1
+
+
 def test_the_install_s_own_key_still_looks_after_its_accounts(install):
     client, _, tenant_id = install
     key = {"Authorization": f"Bearer {INSTALL_KEY}"}

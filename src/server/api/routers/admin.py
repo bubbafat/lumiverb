@@ -20,9 +20,11 @@ from src.server.api.dependencies import get_db_session, require_server_admin
 from src.server.api.errors import ApiError, ConflictError, DecisionRequiredError
 from src.server.repository.control_plane import (
     DELETED,
+    SCHEDULER_LABEL_TAKEN,
     ApiKeyRepository,
     TenantRepository,
     UserRepository,
+    scheduler_label,
 )
 from src.shared.path_filter import has_control_character
 
@@ -214,7 +216,8 @@ def create_tenant_key(
 ) -> CreateTenantKeyResponse:
     """
     Create a new API key for a tenant. Returns the raw key once; it is never stored.
-    Returns 404 if the tenant does not exist or is soft-deleted.
+    Returns 404 if the tenant does not exist or is soft-deleted; 400
+    scheduler_label for the name of Lumiverb's own key, whatever its case.
     """
     tenant_repo = TenantRepository(session)
     key_repo = ApiKeyRepository(session)
@@ -223,6 +226,8 @@ def create_tenant_key(
         raise HTTPException(status_code=404, detail="Tenant not found")
     if tenant.status == "deleted":
         raise HTTPException(status_code=404, detail="Tenant not found")
+    if scheduler_label(body.name):
+        raise ApiError(400, "scheduler_label", SCHEDULER_LABEL_TAKEN)
 
     api_key_row, plaintext_key = key_repo.create(
         tenant_id=tenant_id,
@@ -300,20 +305,20 @@ def delete_tenant(
     if getattr(request.state, "tenant_id", None) == tenant_id and not getattr(request.state, "install_key", False):
         raise ConflictError("own_account", "That's the account you're signed in to: another server admin deletes it.")
     users = UserRepository(session)
-    admins = users.server_admins()
-    others = [u for u in admins if u.tenant_id != tenant_id and not tenant_repo.gone(u.tenant_id)]
-    if not others and any(u.tenant_id == tenant_id for u in admins):
+    # The server admins are held (keeps_a_server_admin) until the account's deletion is committed.
+    if not users.keeps_a_server_admin(without_tenant=tenant_id) and any(
+            u.tenant_id == tenant_id for u in users.server_admins()):
         raise ConflictError("last_server_admin", "No server admin would be left in an account that isn't deleted: "
                             "name one in another account first.")
     if confirm != tenant.name:
+        session.rollback()  # they aren't held while what it holds is counted
         held = _holds(tenant_id, users.count_by_tenant().get(tenant_id, 0))
         raise DecisionRequiredError(
             "confirm_delete_account",
             f"{tenant.name} will be deleted: nobody signs in to it again. Send confirm: its name, to go ahead.",
             {"name": tenant.name, **held})
-    for key in key_repo.list_by_tenant_id(tenant_id):
-        key_repo.revoke(key.key_id)
-    tenant_repo.update_status(tenant_id, DELETED)
+    key_repo.revoke_all(tenant_id)
+    tenant_repo.update_status(tenant_id, DELETED)  # commits the keys with it
     return None
 
 

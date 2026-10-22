@@ -115,3 +115,36 @@ def test_a_server_admin_cant_delete_their_own_account_nor_leave_no_server_admin(
     r = client.delete(f"/v1/admin/tenants/{own}", params={"confirm": "x"}, headers=install_key)
     assert r.status_code == 409 and r.json()["error"]["code"] == "last_server_admin", r.text
     assert client.get("/v1/me", headers=robert).status_code == 200
+
+
+def _ana_a_server_admin(client, robert) -> tuple[str, dict]:
+    tenant_id, ana = _account(client, robert)
+    named = client.post("/v1/admin/server-admins", json={"email": "ana@example.com"}, headers=robert)
+    assert named.status_code == 200, named.text
+    return tenant_id, ana
+
+
+def test_a_server_admin_in_a_deleted_account_isnt_one_left(install):  # noqa: F811
+    """One rule for taking the last server admin away (UserRepository.keeps_a_server_admin): one in a deleted
+    account can't sign in, so removing the last other one is refused as deleting their account is."""
+    client, robert, own = install
+    ana_s, _ana = _ana_a_server_admin(client, robert)
+    assert client.delete(f"/v1/admin/tenants/{ana_s}", params={"confirm": "Ana's"}, headers=robert).status_code == 204
+    me = client.get("/v1/me", headers=robert).json()["user_id"]
+    last = client.delete(f"/v1/admin/server-admins/{me}", headers=robert)
+    assert (last.status_code, last.json()["error"]["code"]) == (409, "last_server_admin"), last.text
+    assert client.get("/v1/admin/tenants", headers=robert).status_code == 200
+
+
+def test_two_server_admins_deleting_each_other_s_accounts_at_once_leave_one(install):  # noqa: F811
+    from tests.test_server_admins import _at_once
+
+    client, robert, own = install
+    ana_s, ana = _ana_a_server_admin(client, robert)
+    statuses = _at_once(client, [("DELETE", f"/v1/admin/tenants/{ana_s}", robert, {"confirm": "Ana's"}),
+                                 ("DELETE", f"/v1/admin/tenants/{own}", ana, {"confirm": "Lumiverb"})])
+    assert sorted(statuses) == [(204, None), (409, "last_server_admin")], statuses
+    from src.server.database import get_control_session
+
+    with get_control_session() as session:
+        assert len({t.tenant_id for t in TenantRepository(session).list_live()} & {own, ana_s}) == 1

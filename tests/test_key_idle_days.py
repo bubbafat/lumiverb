@@ -51,10 +51,10 @@ def _last_used(control_url: str, key_id: str, at: datetime | None, made: datetim
     engine.dispose()
 
 
-def _ours(tenant_id: str, label: str) -> tuple[str, dict[str, str]]:
-    """A key nobody made, as the scheduler's is."""
+def _the_scheduler_s(tenant_id: str) -> tuple[str, dict[str, str]]:
+    """The scheduler's own key, which nobody made."""
     with get_control_session() as ctrl:
-        api_key, plaintext = ApiKeyRepository(ctrl).create(tenant_id, label=label, role="admin")
+        api_key, plaintext = ApiKeyRepository(ctrl).new_scheduler_key(tenant_id)
         return api_key.key_id, {"Authorization": f"Bearer {plaintext}"}
 
 
@@ -67,7 +67,7 @@ def test_unused_keys_end_once_an_admin_sets_the_days(account):
     _last_used(control_url, old_script, now - timedelta(days=200), now - timedelta(days=300))
     _last_used(control_url, laptop, None, now - timedelta(days=120))  # never used: since it was made
     _last_used(control_url, fresh, now - timedelta(days=10), now - timedelta(days=400))
-    scheduler, scheduler_auth = _ours(tenant_id, "scheduler")
+    scheduler, scheduler_auth = _the_scheduler_s(tenant_id)
     _last_used(control_url, scheduler, now - timedelta(days=500), now - timedelta(days=500))
     device = client.post("/v1/devices", json={"name": "Studio Mac"}, headers=robert).json()
     _last_used(control_url, _device_key_id(tenant_id), now - timedelta(days=500), now - timedelta(days=500))

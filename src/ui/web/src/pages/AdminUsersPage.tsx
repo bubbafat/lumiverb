@@ -8,6 +8,7 @@ import {
   updateUserRole,
   setUserEveryLibrary,
   deleteUser,
+  getCurrentUser,
   getNetworkAccess,
   ApiError,
 } from "../api/client";
@@ -26,9 +27,13 @@ function relativeTime(iso: string | null): string {
   return iso ? timeAgo(iso) : "never";
 }
 
+/** Said instead of a server admin's controls to someone who isn't one: the API refuses them (403 server_admin_user). */
+const SERVER_ADMINS_OWN ="Only a server admin changes a server admin.";
+
 function UserRow({
   user,
   currentUserId,
+  viewerIsServerAdmin,
   onRoleChange,
   onLibrariesChange,
   onRemove,
@@ -36,20 +41,28 @@ function UserRow({
 }: {
   user: UserItem;
   currentUserId: string | null;
+  viewerIsServerAdmin: boolean;
   onRoleChange: (userId: string, role: string) => void;
   onLibrariesChange: (userId: string, everyLibrary: boolean) => void;
   onRemove: (user: UserItem) => void;
   onNewLink: (user: UserItem) => void;
 }) {
   const isSelf = user.user_id === currentUserId;
+  // Whoever holds a server admin's password has the whole install: they're out of an account admin's reach.
+  const outOfReach = !!user.server_admin && !viewerIsServerAdmin;
 
   return (
     <tr className="border-b border-gray-800">
-      <td className="px-4 py-3 text-sm text-gray-200">{user.email}</td>
+      <td className="px-4 py-3 text-sm text-gray-200">
+        {user.email}
+        {user.server_admin && <span className="ml-2 text-xs text-gray-500">Server admin</span>}
+      </td>
       <td className="px-4 py-3">
         <select
+          aria-label={`Role of ${user.email}`}
           value={user.role}
-          disabled={isSelf}
+          disabled={isSelf || outOfReach}
+          title={outOfReach ? SERVER_ADMINS_OWN : undefined}
           onChange={(e) => onRoleChange(user.user_id, e.target.value)}
           className="rounded-sm border border-gray-700 bg-gray-800 px-2 py-1 text-sm text-gray-200 disabled:opacity-50"
         >
@@ -67,8 +80,10 @@ function UserRow({
           <select
             aria-label={`Libraries ${user.email} sees`}
             value={user.every_library === false ? "given" : "every"}
+            disabled={outOfReach}
+            title={outOfReach ? SERVER_ADMINS_OWN : undefined}
             onChange={(e) => onLibrariesChange(user.user_id, e.target.value === "every")}
-            className="rounded-sm border border-gray-700 bg-gray-800 px-2 py-1 text-sm text-gray-200"
+            className="rounded-sm border border-gray-700 bg-gray-800 px-2 py-1 text-sm text-gray-200 disabled:opacity-50"
           >
             <option value="every">Every library</option>
             <option value="given">Only those given</option>
@@ -77,12 +92,13 @@ function UserRow({
       </td>
       <td className="px-4 py-3 text-sm text-gray-400">{relativeTime(user.last_login_at)}</td>
       <td className="px-4 py-3 text-right whitespace-nowrap space-x-4">
-        {user.last_login_at === null && !isSelf && (
+        {outOfReach && <span className="text-xs text-gray-500">{SERVER_ADMINS_OWN}</span>}
+        {user.last_login_at === null && !isSelf && !outOfReach && (
           <button onClick={() => onNewLink(user)} className="text-sm text-indigo-300 hover:text-indigo-200">
             New link
           </button>
         )}
-        {!isSelf && (
+        {!isSelf && !outOfReach && (
           <button
             onClick={() => onRemove(user)}
             className="text-sm text-red-400 hover:text-red-300"
@@ -103,6 +119,9 @@ export default function AdminUsersPage() {
     queryKey: ["admin", "users"],
     queryFn: listUsers,
   });
+  // A server admin's row is theirs alone to change (the API's 403 server_admin_user).
+  const { data: me } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
+  const viewerIsServerAdmin = me?.server_admin === true;
 
   const roleMutation = useMutation({
     mutationFn: ({ userId, role }: { userId: string; role: string }) =>
@@ -114,8 +133,8 @@ export default function AdminUsersPage() {
     mutationFn: ({ userId, everyLibrary }: { userId: string; everyLibrary: boolean }) =>
       setUserEveryLibrary(userId, everyLibrary),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
-    onError: () => {
-      setRoleError("Failed to update which libraries they see.");
+    onError: (err) => {
+      setRoleError(err instanceof ApiError && err.status === 403 ? err.message : "Failed to update which libraries they see.");
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
     },
   });
@@ -153,6 +172,8 @@ export default function AdminUsersPage() {
         onError: (err) => {
           if (err instanceof ApiError && err.status === 409) {
             setRoleError("Cannot demote the last admin.");
+          } else if (err instanceof ApiError && err.status === 403) {
+            setRoleError(err.message);
           } else {
             setRoleError("Failed to update role.");
           }
@@ -167,8 +188,10 @@ export default function AdminUsersPage() {
     if (!window.confirm(`Remove ${user.email}? They will lose access immediately.`)) return;
     deleteMutation.mutate(user.user_id, {
       onError: (err) => {
-        if (err instanceof ApiError && err.status === 409) {
+        if (err instanceof ApiError && err.code === "last_admin") {
           setDeleteError("Cannot remove the last admin.");
+        } else if (err instanceof ApiError && (err.status === 403 || err.status === 409)) {
+          setDeleteError(err.message); // a server admin's, or the last one
         } else {
           setDeleteError("Failed to remove user.");
         }
@@ -229,6 +252,7 @@ export default function AdminUsersPage() {
                     key={u.user_id}
                     user={u}
                     currentUserId={currentUserId}
+                    viewerIsServerAdmin={viewerIsServerAdmin}
                     onRoleChange={handleRoleChange}
                     onLibrariesChange={(userId, everyLibrary) => {
                       setRoleError(null);

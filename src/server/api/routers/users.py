@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from src.server.api.dependencies import require_tenant_admin
-from src.server.api.errors import ApiError
+from src.server.api.errors import ApiError, ConflictError
 from src.server.api.middleware import _error_response
 from src.server.database import get_control_session, get_engine_for_url
 from src.server.api.routers.auth import MAX_PASSWORD_BYTES
@@ -35,6 +35,8 @@ class UserItem(BaseModel):
     # Their account role on every library but those set otherwise; false: only the libraries
     # they're given a role on (ADR-018 decision 8).
     every_library: bool = True
+    # A server admin (the install's): only another server admin invites, changes or deletes them.
+    server_admin: bool = False
     created_at: str
     last_login_at: str | None
     # Made just now by an invite: the link to send them (the same link at each
@@ -65,12 +67,23 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt is not None else None
 
 
+def _within_reach(request: Request, user) -> None:
+    """A server admin is out of an account admin's reach: whoever holds their
+    password has the install, so only a server admin makes them a new invite
+    link, changes them or deletes them (request.state.server_admin, as they
+    are now). 403 server_admin_user for anyone else, a key included."""
+    if user.server_admin and getattr(request.state, "server_admin", False) is not True:
+        raise ApiError(403, "server_admin_user",
+                       f"{user.email} is a server admin: only a server admin can do that.")
+
+
 def _user_item(user, invite: Invite | None = None) -> UserItem:
     return UserItem(
         user_id=user.user_id,
         email=user.email,
         role=user.role,
         every_library=user.every_library,
+        server_admin=user.server_admin,
         created_at=_iso(user.created_at) or "",
         last_login_at=_iso(user.last_login_at),
         invite_urls=list(invite.urls) if invite else None,
@@ -141,7 +154,8 @@ def new_invite_link(
     request: Request,
     _: Annotated[None, Depends(require_tenant_admin)],
 ) -> InviteResponse:
-    """A new link for someone who hasn't signed in yet; their old one stops working."""
+    """A new link for someone who hasn't signed in yet; their old one stops
+    working. A server admin's only by another (403 server_admin_user)."""
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
         raise HTTPException(status_code=500, detail="Tenant context missing")
@@ -150,6 +164,7 @@ def new_invite_link(
         user = UserRepository(session).get_by_id(user_id)
         if user is None or user.tenant_id != tenant_id:
             raise HTTPException(status_code=404, detail="User not found")
+        _within_reach(request, user)
         if user.last_login_at is not None:
             raise ApiError(409, "already_joined",
                            f"{user.email} has signed in already. If they've forgotten their password, "
@@ -167,7 +182,8 @@ def update_user_role(
     _: Annotated[None, Depends(require_tenant_admin)],
 ) -> UserItem:
     """Update a user's role, and whether they see every library or only the
-    ones they're given (every_library). Enforces the last-admin invariant."""
+    ones they're given (every_library). Enforces the last-admin invariant. A
+    server admin's only by another (403 server_admin_user)."""
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
         raise HTTPException(status_code=500, detail="Tenant context missing")
@@ -180,6 +196,7 @@ def update_user_role(
         user = repo.get_by_id(user_id)
         if user is None or user.tenant_id != tenant_id:
             raise HTTPException(status_code=404, detail="User not found")
+        _within_reach(request, user)
         updated = user
 
         if body.role is not None:
@@ -202,7 +219,10 @@ def delete_user(
     request: Request,
     _: Annotated[None, Depends(require_tenant_admin)],
 ) -> None:
-    """Delete a user. Enforces the last-admin invariant and blocks self-deletion."""
+    """Delete a user. Enforces the last-admin invariant and blocks self-deletion.
+    A server admin only by another (403 server_admin_user), and never the
+    last one who can sign in (409 last_server_admin, as removing one as a
+    server admin: UserRepository.keeps_a_server_admin)."""
     tenant_id = getattr(request.state, "tenant_id", None)
     caller_user_id = getattr(request.state, "user_id", None)
     if not tenant_id:
@@ -216,10 +236,14 @@ def delete_user(
         user = repo.get_by_id(user_id)
         if user is None or user.tenant_id != tenant_id:
             raise HTTPException(status_code=404, detail="User not found")
+        _within_reach(request, user)
 
         if user.role == "admin":
             if repo.count_admins_locked(tenant_id) <= 1:
                 return _error_response(409, "last_admin", "Cannot remove the last admin")
+        # Held locked until the delete is committed (keeps_a_server_admin).
+        if user.server_admin and not repo.keeps_a_server_admin(without_user=user_id):
+            raise ConflictError("last_server_admin", "They're the last server admin: name another first.")
 
         ApiKeyRepository(session).revoke_created_by(tenant_id, user_id)
         repo.delete(user_id)

@@ -8,7 +8,7 @@ Everyone signs in with their own email and password, and has a role that says wh
 |---|---|
 | Viewer | Browse, search and play what they can see, and keep their own ratings, favorites and saved searches |
 | Editor | All of that, and change clips: descriptions, tags, locations, people's names, archive and trash. Make projects. Change a library's path filters, ask for a scan, move a library to the trash and restore it. Make API keys |
-| Admin | All of that, and invite people and set their roles, add libraries, run every library, delete for good, make a library public, and change Settings › AI, Processing, Files, Playback, Devices and Plug-ins |
+| Admin | All of that, and invite people and set their roles, add libraries, run every library, set the path filters every library starts with, delete for good, make a library public, and change Settings › AI, Processing, Files, Playback, Devices and Plug-ins |
 
 An admin here is the account's admin. A **server admin** looks after the install itself: see [Server admins](#server-admins).
 
@@ -26,7 +26,7 @@ The link works once, for 7 days. Opening it, they choose their own password (at 
 
 On a Mac, the link opens only on that Mac until Settings › Network lets other devices use Lumiverb. See [Network, phones and HTTPS](network.md).
 
-Lost the link, or it ran out? In the users list, click **New link** beside them. The old one stops working. Once they've signed in, there's no link to make: they use Forgot password.
+Lost the link, or it ran out? In the users list, click **New link** beside them. The old one stops working. Once they've signed in, there's no link to make: they use Forgot password. A server admin's link is made only by another server admin (see [Server admins](#server-admins)).
 
 From the command line, an admin's key can do the same:
 
@@ -45,6 +45,8 @@ In **Admin › Manage users**:
 - **Role**: choose another. You can't change your own, and the last admin can't be made anything else. API keys they made with a higher role than their new one stop working.
 - **Libraries**: **Every library**, or **Only those given** (see [Seeing only what they're given](#seeing-only-what-theyre-given)).
 - **Remove**: they can no longer sign in. Their ratings, saved searches and API keys go with them. You can't remove yourself or the last admin.
+
+Someone marked **Server admin** in the list is changed or removed only by another server admin: anyone else sees "Only a server admin changes a server admin." in place of the controls.
 
 ## Roles on one library
 
@@ -83,7 +85,9 @@ lumiverb user libraries --email them@example.com --only-given
 
 What belongs to the whole install rather than one account is a server admin's: the accounts on it, where previews are kept (Settings › Storage), the network (Settings › Network), backups (Settings › Backups) and the log (Admin › Logs). The admin made when Lumiverb was set up is one.
 
-A server admin adds others in **Admin › Accounts**, under **Server admins**: type the email of someone who signs in here and click **Make server admin**. **Remove** takes it away; the last one can't be removed there.
+A server admin adds others in **Admin › Accounts**, under **Server admins**: type the email of someone who signs in here and click **Make server admin**. **Remove** takes it away; the last one can't be removed there, nor deleted, nor their account. One in a deleted account doesn't count: they can't sign in.
+
+Whoever has a server admin's password has the whole install, so a server admin is out of an account admin's reach: only another server admin makes them a new invite link, changes their role or libraries, or removes them.
 
 On the computer Lumiverb is installed on, the command line lists them, and adds or removes one even when there's none left. On a Mac:
 
@@ -142,6 +146,8 @@ lumiverb config set --api-url http://your-server:6464 --api-key -
 ```
 
 The list shows when each key was last used. **Revoke** stops one. A key also stops when the person who made it gets a new password, is given a lower role, or is removed.
+
+The label `scheduler` belongs to the key Lumiverb makes for itself to process with, so no other key can have it.
 
 An admin can end keys nobody uses: under **Unused keys**, tick **End keys not used for** a number of days, then **Save**. If some keys would end at once, it names them and asks first. Keys Lumiverb makes for itself, devices' keys and the last admin key are never ended this way.
 
