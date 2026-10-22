@@ -24,8 +24,10 @@ on one worker (`--dist loadfile` unless you pick another `--dist`).
 import contextlib
 import itertools
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
@@ -59,6 +61,18 @@ os.environ.setdefault("LUMIVERB_SECRETS_KEY", "bHVtaXZlcmItdGVzdHMtc2VjcmV0cy1rZ
 # of going to the internet (and its process gets closed proxies besides:
 # _plugins_reach_no_internet).
 os.environ["LUMIVERB_GEONAMES_URL"] = "http://tests-serve-their-own-geonames.invalid/"
+# Nor does a test write in the checkout (tests/left_behind.py fails a run that does). DATA_DIR's default is
+# ./data (src/server/config.py), the checkout's data/ when tests run from its root, and `lumiverb-server`'s
+# the install's data/ (lifecycle/cli.py data_dir: the checkout again): every account's previews, uploads and
+# Lumiverb's own plug-ins went there. Each test process has a DATA_DIR of its own in the system's temp folder
+# instead, gone when it ends (pytest_unconfigure); never a developer's exported one either (their install's).
+# A test that wants its own still sets it. Its models stay this machine's (below).
+os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="lumiverb-tests-data-")
+# Nor does a `uv run` a test starts (scripts/migrate.sh's, tests/test_own_plugins.py) sync the virtualenv it
+# runs in: that built the project into the checkout (lumiverb.egg-info) and installed it into the virtualenv
+# the tests run with, pointed at whichever checkout ran it last (a worktree's, where checkouts share one). It
+# runs what's installed.
+os.environ["UV_NO_SYNC"] = "1"
 
 # pyvips imports libvips via cffi.dlopen, which on macOS only searches the
 # system dyld paths. uv's standalone Python builds do not have
@@ -83,6 +97,20 @@ import testcontainers.postgres
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
+
+from src.processing.cache_dir import cache_dir
+from src.processing.models_dir import FACES, HF
+from tests import left_behind
+
+# This process's DATA_DIR (above), removed as it ends.
+TEST_DATA_DIR = Path(os.environ["DATA_DIR"])
+# Its models stay this machine's (src/processing/models_dir.py: DATA_DIR/models, else this machine's cache
+# folder's), where they were before DATA_DIR was set here: the opt-in ai tests load the weights already
+# downloaded, never again into each process's DATA_DIR. Named as an operator's folder is (HF_HOME,
+# INSIGHTFACE_HOME), nothing is moved into it or pruned from it; a test of where models go unsets them.
+# Before anything imports Hugging Face, which reads HF_HOME as it's imported.
+os.environ.setdefault("HF_HOME", str(cache_dir("models", HF)))
+os.environ.setdefault("INSIGHTFACE_HOME", str(cache_dir("models", FACES)))
 
 # The Postgres image tests run against. Keep it the version production runs
 # (scripts/deploy-api.sh); LUMIVERB_TEST_PG_IMAGE overrides it to try another.
@@ -364,7 +392,17 @@ def _run_line(session: pytest.Session) -> str:
             f"{' '.join(session.config.invocation_params.args)}\n")
 
 
+# What the checkout held as the run started (tests/left_behind.py), read by the run that checks it at the end:
+# the xdist controller (before its workers start and after they've finished), or the run without -n.
+_checkout_before: frozenset[str] | None = None
+# What the run left there, one line each.
+_left_in_checkout: list[str] = []
+
+
 def pytest_sessionstart(session: pytest.Session) -> None:
+    global _checkout_before
+    if not hasattr(session.config, "workerinput"):
+        _checkout_before = left_behind.paths(session.config.rootpath)
     for log in (_failures_log, _skips_log):
         if log is not None:
             log.parent.mkdir(parents=True, exist_ok=True)
@@ -395,7 +433,34 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
                   f"{report.longreprtext}\n\n")
 
 
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """A run that left something in the checkout fails, naming it: in its summary (its stats line too: "2 left in
+    the checkout") and in the failures log."""
+    if _checkout_before is None:
+        return
+    root = session.config.rootpath
+    _left_in_checkout[:] = left_behind.left(root, _checkout_before, left_behind.paths(root))
+    if not _left_in_checkout:
+        return
+    if session.exitstatus == pytest.ExitCode.OK:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.stats["left in the checkout"] = list(_left_in_checkout)
+    if _failures_log is not None:
+        with _failures_log.open("a") as out:
+            out.write(f"=== {datetime.now().isoformat(timespec='seconds')} LEFT IN THE CHECKOUT {root}\n"
+                      + "".join(f"{line}\n" for line in _left_in_checkout) + "\n")
+
+
 def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Config) -> None:
+    if _left_in_checkout:
+        terminalreporter.write_sep("=", "left in the checkout", red=True)
+        terminalreporter.write_line(f"This run left these in {config.rootpath}, which tests never write in "
+                                    "(their tmp_path, or the DATA_DIR conftest gives each test process):", red=True)
+        for line in left_behind.summary(_left_in_checkout):
+            terminalreporter.write_line(f"  {line}", red=True)
     if _failures_log is not None and terminalreporter.stats.get("failed"):
         terminalreporter.write_line(f"Failures (with tracebacks) also in {_failures_log}")
 
@@ -443,6 +508,11 @@ def pytest_configure_node(node) -> None:
 def pytest_unconfigure(config: pytest.Config) -> None:
     if _server is not None and _server.container is not None:
         _server.container.stop()
+    # This process's DATA_DIR, an installed plug-in's read-only program folder and all.
+    for folder, _subfolders, _files in os.walk(TEST_DATA_DIR):
+        with contextlib.suppress(OSError):
+            os.chmod(folder, 0o700)
+    shutil.rmtree(TEST_DATA_DIR, ignore_errors=True)
 
 
 class _AuthClient:

@@ -141,6 +141,7 @@ def test_migrate_to_starts_a_stopped_install_s_own_postgresql_for_the_while(tmp_
         migrate(control_url, say=lambda _: None)
     assert not answers(control_url), "stopped, as a stopped service's is"
     monkeypatch.delenv("CONTROL_PLANE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATA_DIR")  # the test process's own (tests/conftest.py) would win over the file's
     env_file = tmp_path / "env"
     env_file.write_text(f"CONTROL_PLANE_DATABASE_URL={control_url}\nDATA_DIR={data}\nPG_BIN={pg_bin}\n")
     back, head = _before("alembic-tenant.ini"), _head("alembic-tenant.ini")
