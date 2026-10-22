@@ -79,11 +79,11 @@ echo "=== Ensuring ADMIN_KEY exists ==="
 if [[ ! -f .env.local ]] || ! grep -q '^ADMIN_KEY=.\+' .env.local 2>/dev/null; then
   new_key=$(python3 -c "import secrets; print(secrets.token_hex(32))")
   if [[ -f .env.local ]] && grep -q '^ADMIN_KEY=' .env.local 2>/dev/null; then
-    if sed --version >/dev/null 2>&1; then
-      sed -i "s/^ADMIN_KEY=.*/ADMIN_KEY=$new_key/" .env.local
-    else
-      sed -i.bak "s/^ADMIN_KEY=.*/ADMIN_KEY=$new_key/" .env.local
-    fi
+    # Written by Python, the key in its environment: never an argument (sed's), which every local user can see.
+    NEW_KEY="$new_key" python3 -c '
+import os, re
+text = open(".env.local").read()
+open(".env.local", "w").write(re.sub(r"(?m)^ADMIN_KEY=.*$", lambda _: "ADMIN_KEY=" + os.environ["NEW_KEY"], text))'
   else
     echo "ADMIN_KEY=$new_key" >> .env.local
   fi
@@ -118,9 +118,12 @@ if [[ -z "${ADMIN_KEY:-}" ]]; then
   exit 1
 fi
 
+# The key reaches curl through a pipe (-H @file), never as an argument: every local user can see command lines.
+admin_header() { printf 'Authorization: Bearer %s\n' "$ADMIN_KEY"; }
+
 echo ""
 echo "=== Checking if default tenant already exists ==="
-tenants_json=$(curl -sf -H "Authorization: Bearer $ADMIN_KEY" "$API_URL/v1/admin/tenants" || echo "[]")
+tenants_json=$(curl -sf -H @<(admin_header) "$API_URL/v1/admin/tenants" || echo "[]")
 has_default=$(TENANTS_JSON="$tenants_json" python3 -c "
 import json, os
 raw = os.environ.get('TENANTS_JSON', '[]')
@@ -166,14 +169,14 @@ except Exception:
     fi
   fi
   echo -e "${YELLOW}⚠ Warning: CLI not configured. Re-run after running:${NC}"
-  echo "  lumiverb config set --api-key <your-api-key>"
+  echo "  lumiverb config set --api-key -   (it asks for the key, and doesn't show it)"
   echo "  (API key was shown when tenant was first created)"
   exit 0
 fi
 
 echo ""
 echo "=== Creating default tenant ==="
-create_resp=$(curl -s -w "\n%{http_code}" -X POST -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
+create_resp=$(curl -s -w "\n%{http_code}" -X POST -H @<(admin_header) -H "Content-Type: application/json" \
   -d '{"name": "default", "plan": "free"}' "$API_URL/v1/admin/tenants")
 http_code=$(echo "$create_resp" | tail -n1)
 create_body=$(echo "$create_resp" | sed '$d')
@@ -194,7 +197,7 @@ fi
 
 echo ""
 echo "=== Configuring CLI ==="
-lumiverb config set --api-url "$API_URL" --api-key "$api_key"
+printf '%s\n' "$api_key" | lumiverb config set --api-url "$API_URL" --api-key -  # the key on its stdin
 echo "CLI configured."
 
 echo ""

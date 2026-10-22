@@ -467,7 +467,7 @@ curl -X POST http://localhost:8000/v1/admin/tenants \
 ### 7. Create a library, scan and enrich
 
 ```bash
-uv run lumiverb config set --api-url http://localhost:8000 --api-key <your-key>
+uv run lumiverb config set --api-url http://localhost:8000 --api-key -   # asks for it, not shown
 uv run lumiverb library create --name "My Photos" --path /path/to/photos
 uv run lumiverb scan --library "My Photos"
 uv run lumiverb enrich --library "My Photos"
@@ -585,7 +585,10 @@ uv run alembic -c alembic-tenant.ini upgrade head
 on one machine; run them yourself to split the API and the web app across
 machines. It's safe to run again. Options it passes on include `--tenant
 <name>` (the account's name), `--data-dir <path>` (proxies, thumbnails and
-search indexes; e.g. a mounted volume) and `--skip-certbot` (no certificate
+search indexes; e.g. a mounted volume), `--vision-api-url <url>` (the
+account's first AI machine for descriptions; its key from
+`--vision-api-key-file <file>`, or typed when asked at a terminal, never on
+the command line, which every local user can see) and `--skip-certbot` (no certificate
 yet: run `certbot --nginx -d app.example.com` once DNS resolves).
 
 Its account has nobody to log in until you create the first one, with

@@ -27,6 +27,7 @@ from src.server import backups
 from src.server.backups import BackupError
 from src.server.lifecycle import cli
 from src.server.lifecycle.migrate import APP_DIR, migrate, pending
+from tests.app_role import make_app_role
 from tests.conftest import PG_IMAGE, _RealPostgresContainer, _the_server
 
 pytestmark = pytest.mark.slow
@@ -231,8 +232,8 @@ def test_as_linux_s_database_role_which_may_only_create_databases(tmp_path):
         root = make_url(pg.get_connection_url()).set(drivername="postgresql+psycopg2")
         admin = root.set(database="postgres").render_as_string(hide_password=False)
         _run(root.set(database="template1").render_as_string(hide_password=False), "CREATE EXTENSION IF NOT EXISTS vector")
-        _run(admin, "CREATE ROLE app LOGIN PASSWORD 'apppw' CREATEDB",
-             "CREATE DATABASE control_plane OWNER app", f'CREATE DATABASE "{TEN}" OWNER app', autocommit=True)
+        make_app_role(admin, "app", "apppw", tmp_path / "role")  # by deploy-api.sh's own lines
+        _run(admin, "CREATE DATABASE control_plane OWNER app", f'CREATE DATABASE "{TEN}" OWNER app', autocommit=True)
         base = root.set(username="app", password="apppw", database="postgres").render_as_string(hide_password=False)
         control_url, tenant_url = _install(base, "control_plane", TEN, create=False)
         _run(tenant_url, "INSERT INTO system_metadata (key, value, updated_at) VALUES ('note', 'before', now())")

@@ -145,11 +145,15 @@ apt install -y postgresql-16 postgresql-16-pgvector
 Bootstrap:
 
 ```sql
-CREATE USER app WITH PASSWORD '<password>';
+CREATE USER app;
+\password app
 CREATE DATABASE control_plane OWNER app;
 \c control_plane
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
+
+psql's `\password` asks for the password and sends PostgreSQL only its SCRAM verifier: a password written in a
+statement would be in PostgreSQL's log and `pg_stat_activity`.
 
 Tenant databases are provisioned by the admin tenant-creation flow.
 

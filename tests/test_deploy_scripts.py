@@ -1953,7 +1953,10 @@ def test_root_reads_and_writes_nothing_in_the_service_users_home():
         assert "--from-cli-config -" in text and '--from-cli-config "' not in text
         assert "as_svc timeout 10 head -c 1048576 -- " in text
     tenant = deploy.split("# 12. Provision default tenant", 1)[1].split("# 13.", 1)[0]
-    assert 'if sudo -u "${SVC_USER}" grep -qs ' in tenant and "grep -q '\"api_key\"" not in tenant
+    # Whether the first account is made, asked before the install's long steps too: account_made.
+    made = deploy.split("account_made() {", 1)[1].split("\n}\n", 1)[0]
+    assert 'sudo -u "${SVC_USER}" grep -qs ' in made and "if account_made; then" in tenant
+    assert "grep -q '\"api_key\"" not in deploy and deploy.count("grep -qs '\"api_key\"") == 1
     assert 'sudo -u "${SVC_USER}" -H python3 -I -' in tenant
     assert '\nchmod 600 "$CLI_CONFIG"' not in tenant and 'sudo -u "${SVC_USER}" chmod 600 "$CLI_CONFIG"' in tenant
     assert '(umask 077 && sudo -u "${SVC_USER}" tee "$CLI_CONFIG"' in tenant
