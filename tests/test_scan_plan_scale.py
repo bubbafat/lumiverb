@@ -5,9 +5,13 @@ v0.1.73's plan joined every clip's lineage and ranked its remakes in one
 statement: with the statistics a live install has (the scan's listing is
 filled and emptied by every scan, so the planner takes it for empty), it
 went nested-loop, quadratic in the files found, and a 14,000-clip library's
-plan ran for minutes. The plan is planned twice here, 4x the files the
-second time, the listing's statistics as a live install's, and the time
-must grow about 4x, never anything like 16x.
+plan ran for minutes. The plan is planned for a library and for one 8x
+its size, the listing's statistics as a live install's, and the time must
+grow about 8x, never anything like 64x. Wall time, so measured apart from
+load: the two sizes in turn, three times each, each size's quickest run
+compared, and a bound (24x) far from both, as this test runs beside others
+(it failed once at 8.3x for 4x the files, the bound then 8x, with two other
+test runs on the machine).
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared serve
 
 pytestmark = pytest.mark.slow
 
-SMALL, LARGE = 3000, 12000
+SMALL, LARGE = 2000, 16000
 ARTIFACTS = ("lumiverb.preview", "lumiverb.video.preview", "lumiverb.video.format", "lumiverb.capture_time", "lumiverb.video.analysis_proxy", "lumiverb.image.likeness", "lumiverb.image.faces", "lumiverb.image.description", "lumiverb.image.text",
              "lumiverb.video.scenes", "lumiverb.video.transcript", "lumiverb.video.faces")
 
@@ -80,12 +84,14 @@ def test_a_plan_grows_with_the_files_found_not_their_square(env):
             session.execute(text("ANALYZE assets"))
             session.execute(text("ANALYZE artifact_lineage"))
             session.commit()
-            small = min(_planned(session, "lib_scale_s")[0] for _ in range(2))
-            runs = [_planned(session, "lib_scale_l") for _ in range(2)]
-            large = min(took for took, _ in runs)
+            smalls, runs = [], []
+            for _ in range(3):  # in turn, so a busy moment falls on both sizes alike
+                smalls.append(_planned(session, "lib_scale_s")[0])
+                runs.append(_planned(session, "lib_scale_l"))
+            small, large = min(smalls), min(took for took, _ in runs)
             counts = runs[0][1]
     finally:
         engine.dispose()
     # Every preview is to be remade: REMAKES_PER_SCAN of them in this scan.
     assert counts["upload"] == scans.REMAKES_PER_SCAN and counts["found"] == LARGE
-    assert large < 8 * max(small, 0.02), f"{SMALL:,} files: {small:.2f}s; {LARGE:,}: {large:.2f}s"
+    assert large < 24 * max(small, 0.02), f"{SMALL:,} files: {small:.2f}s; {LARGE:,}: {large:.2f}s"
