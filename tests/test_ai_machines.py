@@ -54,7 +54,7 @@ def _machines(answers: dict):
                                   "data": [{"id": m, "object": "model"} for m in (answer if isinstance(answer, tuple) else ())]}
         return resp
 
-    return patch("src.shared.vision_endpoint.requests.get", side_effect=get), seen
+    return patch("src.shared.ai_requests.get", side_effect=get), seen
 
 
 def _ai(env, headers=None) -> dict:
@@ -528,6 +528,48 @@ def test_the_workers_check_shows_per_machine_until_fixed(env, none):
         r = client.patch(f"/v1/ai/machines/{studio}", json={"api_url": GAMING_PC + "/"}, headers=headers)
     assert r.status_code == 200, r.text
     assert _machine(r.json(), "Studio")["status"]["models"] == [QWEN]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("answer", ["error", "redirect"])
+def test_what_a_machine_answers_its_work_with_is_the_logs_not_its_status(env, none, tmp_path, caplog, answer):
+    """Every signed-in person sees a machine's status (GET /v1/ai): it says what went wrong in Lumiverb's words.
+    What the machine said is the log's (Admin › Logs, the server admin's), as Connect's detail is; a redirect is
+    followed nowhere. The machine is a real server on this computer, asked by the scheduler's own code."""
+    from PIL import Image
+
+    from src.processing.vision_guard import VisionGuard
+    from src.processing.workers.captions.base import CaptionError
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from tests.ai_machine_server import local_machine
+    from tests.producer_fakes import scheduler_client
+
+    secret = "upstream db 10.1.2.3:5432 refused user admin"
+    with local_machine() as elsewhere, local_machine(
+            (500, {"error": {"message": secret}}, {}) if answer == "error"
+            else (307, b"", {"Location": elsewhere.url + "/chat/completions"})) as machine:
+        assert _add(env, name="Studio", api_url=machine.url).status_code == 201
+        assert _model(env, "vision", QWEN, redo=False).status_code == 200
+        guard = VisionGuard(scheduler_client(env[4]))
+        assert guard.check() is True, guard.error
+        picture = tmp_path / "picture.jpg"
+        Image.new("RGB", (16, 16)).save(picture)
+        with patch.object(OpenAICompatibleCaptionProvider, "_sleep_with_countdown"), \
+                caplog.at_level("WARNING"), pytest.raises(CaptionError) as raised:
+            guard.provider().describe(picture)
+    assert raised.value.endpoint_fault and elsewhere.asked == []
+    says = "answered 500." if answer == "error" else "answered with a redirect, which Lumiverb doesn't follow."
+    viewer = _key_with_role(env, "viewer")
+    status = _machine(_ai(env, viewer), "Studio")["status"]
+    assert status["online"] is False and status["error"] == f"{machine.url}/chat/completions {says}", status
+    seen = _ai_text(env, viewer)
+    assert secret not in seen and elsewhere.url not in seen
+    assert (secret if answer == "error" else elsewhere.url + "/chat/completions") in caplog.text
+
+
+def _ai_text(env, headers) -> str:
+    client, *_ = env
+    return client.get("/v1/ai", headers=headers).text
 
 
 @pytest.mark.slow

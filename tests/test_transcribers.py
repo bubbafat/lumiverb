@@ -119,25 +119,31 @@ def test_nothing_said_is_no_segments(server, speech):
 
 
 @pytest.mark.parametrize(("answer", "fault", "says"), [
-    ((401, {"error": "bad key"}), True, "refused the key"),
-    ((404, {"detail": "Model 'small' is not installed"}), True, "has no small"),
-    ((429, {"error": "busy"}), True, "answered 429"),
-    ((500, {"error": "CUDA out of memory"}), True, "CUDA out of memory"),
+    ((401, {"error": "bad key"}), True, "refused the key."),
+    ((404, {"detail": "Model 'small' is not installed"}), True, "has no small or no transcription API there."),
+    ((429, {"error": "busy"}), True, "answered 429."),
+    ((500, {"error": "CUDA out of memory"}), True, "answered 500."),
     ((503, b""), True, "answered 503."),
     # The server took it but couldn't make sense of this clip's audio.
-    ((400, {"error": "audio too short"}), False, "audio too short"),
-    ((413, {"error": "too large"}), False, "answered 413"),
+    ((400, {"error": "audio too short"}), False, "answered 400."),
+    ((413, {"error": "too large"}), False, "answered 413."),
     # It isn't speaking the API this needs.
     ((200, b"<html>hello</html>"), True, "OpenAI's JSON"),
     ((200, {"text": "said without times"}), True, "without times"),
     ((200, {"segments": [], "text": "said without times"}), True, "without times"),
     ((200, {"segments": [{"text": "no times"}]}), True, "without times"),
 ])
-def test_a_failure_says_whose_it_is(server, speech, answer, fault, says):
+def test_a_failure_says_whose_it_is(server, speech, answer, fault, says, caplog):
+    """In Lumiverb's words: what the server said with a failure is the log's (Admin › Logs), never the error's,
+    which every signed-in person sees (the machine's status, why work waits, a clip's failure)."""
     s = server(answer)
-    with pytest.raises(TranscriptError) as e:
+    with caplog.at_level("WARNING", logger="src.shared.ai_requests"), pytest.raises(TranscriptError) as e:
         OpenAITranscriber(s.url, None, "small").transcribe(speech)
-    assert e.value.endpoint_fault is fault and says in str(e.value)
+    assert e.value.endpoint_fault is fault and says in str(e.value), str(e.value)
+    status, said = answer
+    if status >= 400 and said:
+        reply = said if isinstance(said, bytes) else json.dumps(said).encode()
+        assert reply.decode() not in str(e.value) and reply.decode() in caplog.text
 
 
 def test_a_server_that_isnt_there_or_breaks_off_is_the_machines_fault(speech):
@@ -146,7 +152,7 @@ def test_a_server_that_isnt_there_or_breaks_off_is_the_machines_fault(speech):
     assert e.value.endpoint_fault and "Couldn't reach" in str(e.value)
     for error, says in ((requests.ConnectTimeout(), "didn't answer"),
                         (requests.exceptions.ChunkedEncodingError(), "broke off")):
-        with patch("src.processing.workers.transcripts.openai_compatible.requests.post", side_effect=error):
+        with patch("src.shared.ai_requests.post", side_effect=error):
             with pytest.raises(TranscriptError) as e:
                 OpenAITranscriber("http://gaming-pc/v1", None, "small").transcribe(speech)
         assert e.value.endpoint_fault and says in str(e.value)
@@ -167,7 +173,7 @@ def test_a_server_gets_time_for_the_speech_it_was_sent_and_running_out_is_the_cl
     """Ten minutes and four times the speech; a server reached but not done in
     that time is stuck on this clip, which is charged once the machine checks out."""
     wav = _real_wav(tmp_path / "speech.wav", 100)
-    with patch("src.processing.workers.transcripts.openai_compatible.requests.post",
+    with patch("src.shared.ai_requests.post",
                side_effect=requests.ReadTimeout()) as post:
         with pytest.raises(TranscriptError) as e:
             OpenAITranscriber("http://gaming-pc/v1", None, "small").transcribe(wav)

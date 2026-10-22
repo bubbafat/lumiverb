@@ -64,6 +64,8 @@ Patterns are matched against each file's path inside the library, ignoring case.
 
 Examples: `Photos/**` takes in only the Photos folder; `**/Proxy/**` leaves out every folder called Proxy; `**/*.mov` leaves out every MOV file (`**.mov` would match only those directly in the library's folder).
 
+A pattern can be up to 1,024 characters long, in up to 64 parts between slashes.
+
 An exclude pattern that matches clips already in Lumiverb asks first: they move to the trash, and are deleted for good after the trash days unless restored. If some are in projects, it says which and asks again.
 
 A shortcut: in the sidebar's folder list, click the clip count beside a folder, then **Exclude folder** (or **Archive folder**).

@@ -462,6 +462,7 @@ def _try_one(machine: AiMachine, model: str, artifacts: list[str], settings: dic
     from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
     from src.producers.names import TEXT
     from src.server import ai_sample
+    from src.shared import ai_requests
     from src.shared.producers import PRODUCERS
     from src.shared.vision_endpoint import answer_said, failed
 
@@ -475,6 +476,12 @@ def _try_one(machine: AiMachine, model: str, artifacts: list[str], settings: dic
     except requests.Timeout:
         return Tried(titles=titles, problem=f"No answer within {TRY_WAIT_SEC:.0f} seconds.",
                      limit=int(settings["max_tokens"]), seconds=round(time.monotonic() - started, 1))
+    except (ai_requests.Redirected, ai_requests.AddressRefused) as e:
+        # Followed nowhere, as the work's requests aren't (where it pointed is the log's).
+        problem = ("It answered with a redirect, which Lumiverb doesn't follow."
+                   if isinstance(e, ai_requests.Redirected) else "That address isn't allowed.")
+        return Tried(titles=titles, problem=problem, limit=int(settings["max_tokens"]),
+                     seconds=round(time.monotonic() - started, 1))
     except requests.HTTPError as e:
         status = e.response.status_code if e.response is not None else 0
         why = answer_said(e.response) if said_in_full and e.response is not None else ""

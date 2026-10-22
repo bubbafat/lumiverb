@@ -22,6 +22,7 @@ import requests
 from PIL import Image
 
 from src.processing.workers.captions.base import CaptionError, CaptionProvider, is_endpoint_fault
+from src.shared import ai_requests
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +178,8 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             logger.warning("AI reply cut off (%d chars); kept its description and %d whole tags",
                            len(clean), len(salvaged["tags"]))
             return salvaged
-        raise ValueError(f"No JSON object found in response ({len(clean)} chars): {clean[:100]!r}")
+        # Not the reply itself: a clip's failure is seen by everyone who sees the clip; the log keeps the reply.
+        raise ValueError(f"No JSON object found in response ({len(clean)} chars)")
 
     _WHOLE_DESCRIPTION = re.compile(r'"description"\s*:\s*("(?:[^"\\]|\\.)*")\s*[,}]', re.DOTALL)
     _WHOLE_TAG = re.compile(r'("(?:[^"\\]|\\.)*")\s*(?=[,\]])')
@@ -508,26 +510,23 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         headers = {}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        resp = requests.post(
-            f"{self._base_url}/chat/completions",
-            json=payload,
-            headers=headers,
-            timeout=timeout,
-        )
+        url = f"{self._base_url}/chat/completions"
+        # Its address checked, no redirect followed (Redirected: the machine's fault, as is_endpoint_fault says).
+        resp = ai_requests.post(url, json=payload, headers=headers, timeout=timeout)
         if resp.status_code == 400 and "temperature" in payload and "temperature" in resp.text.lower():
             logger.warning("%s won't take a temperature (%s): asking it without one from now on",
                            self._base_url, resp.text[:200])
             self._sends_temperature = False
             return self._asked(content, settings, timeout=timeout)
         if not resp.ok:
-            logger.warning("Error from AI Provider: %s: %s", resp.status_code, resp.text)
+            # In Lumiverb's words: what the machine said is the log's (it reaches every signed-in person otherwise,
+            # as the machine's status, why work waits, or a clip's failure).
+            err = requests.HTTPError(f"{url} {ai_requests.answered(resp, model=self._model, api='chat completions')}.",
+                                     response=resp)
             if resp.status_code == 429:
                 from src.processing.workers.captions.retry_after import parse_retry_after
-                retry_after = parse_retry_after(resp)
-                err = requests.HTTPError(response=resp)
-                err.retry_after = retry_after  # type: ignore[attr-defined]
-                raise err
-        resp.raise_for_status()
+                err.retry_after = parse_retry_after(resp)  # type: ignore[attr-defined]
+            raise err
 
         choice = resp.json()["choices"][0]
         msg = choice["message"]

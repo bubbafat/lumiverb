@@ -67,7 +67,7 @@ def test_openai_provider_sends_auth_header_when_api_key_set() -> None:
         "choices": [{"message": {"content": '{"description": "test", "tags": []}'}}]
     }
 
-    with patch("requests.post", return_value=mock_resp) as mock_post:
+    with patch("src.shared.ai_requests.post", return_value=mock_resp) as mock_post:
         p._chat("data:image/jpeg;base64,abc", "describe this", p._vision)
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert headers.get("Authorization") == "Bearer sk-test"
@@ -89,7 +89,7 @@ def test_openai_provider_omits_auth_header_when_no_api_key() -> None:
         "choices": [{"message": {"content": '{"description": "test", "tags": []}'}}]
     }
 
-    with patch("requests.post", return_value=mock_resp) as mock_post:
+    with patch("src.shared.ai_requests.post", return_value=mock_resp) as mock_post:
         p._chat("data:image/jpeg;base64,abc", "describe this", p._vision)
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert "Authorization" not in headers
@@ -120,7 +120,7 @@ def test_openai_provider_retries_once_on_empty_completion(tmp_path) -> None:
         "choices": [{"message": {"content": '{"description": "hi", "tags": ["a"]}'}}]
     }
 
-    with patch("requests.post", side_effect=[empty_resp, ok_resp]) as mock_post:
+    with patch("src.shared.ai_requests.post", side_effect=[empty_resp, ok_resp]) as mock_post:
         out = p.describe(img_path)
 
     assert out == {"description": "hi", "tags": ["a"]}
@@ -139,7 +139,7 @@ def test_openai_provider_sends_the_settings_it_was_given() -> None:
     p = OpenAICompatibleCaptionProvider("http://x/v1", "m", settings=settings)
     resp = MagicMock(status_code=200)
     resp.json.return_value = {"choices": [{"message": {"content": "{}"}}]}
-    with patch("src.processing.workers.captions.openai_caption.requests.post", return_value=resp) as post:
+    with patch("src.shared.ai_requests.post", return_value=resp) as post:
         p._chat("data:image/jpeg;base64,abc", p._vision["prompt"], p._vision)
     payload = post.call_args.kwargs["json"]
     assert (payload["temperature"], payload["max_tokens"]) == (0.7, 99)
@@ -197,7 +197,7 @@ def test_a_failure_says_whether_the_endpoint_was_at_fault(tmp_path, answer, endp
     else:
         effect = None
     kwargs = {"side_effect": effect} if effect else {"return_value": ok if answer == "garbage" else _http(answer)}
-    with patch("requests.post", **kwargs), patch.object(OpenAICompatibleCaptionProvider, "_sleep_with_countdown"):
+    with patch("src.shared.ai_requests.post", **kwargs), patch.object(OpenAICompatibleCaptionProvider, "_sleep_with_countdown"):
         with pytest.raises(CaptionError) as e:
             p.describe(_image(tmp_path))
     assert e.value.endpoint_fault is endpoint_fault
@@ -212,7 +212,7 @@ def test_ocr_that_fails_raises_instead_of_saying_no_text(tmp_path):
     from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "m", api_key=None)
-    with patch("requests.post", side_effect=requests.Timeout()), \
+    with patch("src.shared.ai_requests.post", side_effect=requests.Timeout()), \
             patch.object(OpenAICompatibleCaptionProvider, "_sleep_with_countdown"):
         with pytest.raises(CaptionError) as e:
             p.extract_text(_image(tmp_path))
@@ -306,7 +306,7 @@ def test_the_reply_and_its_finish_reason_are_logged(caplog):
     resp = MagicMock(ok=True, status_code=200)
     reply = '{"description": "' + "x" * 3000
     resp.json.return_value = {"choices": [{"message": {"content": reply}, "finish_reason": "length"}]}
-    post = "src.processing.workers.captions.openai_caption.requests.post"
+    post = "src.shared.ai_requests.post"
     logger_name = "src.processing.workers.captions.openai_caption"
     with patch(post, return_value=resp), caplog.at_level(logging.DEBUG, logger=logger_name):
         assert p._chat("data:image/jpeg;base64,abc", "describe", p._vision) == reply
@@ -337,7 +337,7 @@ def test_a_videos_scenes_are_described_as_text_alone_with_its_own_settings() -> 
     reply = MagicMock(ok=True)
     reply.json.return_value = {"choices": [{"message": {
         "content": '{"description": "Waves, then a walk at sunset.", "tags": ["beach", "sunset"]}'}}]}
-    with patch("requests.post", return_value=reply) as post:
+    with patch("src.shared.ai_requests.post", return_value=reply) as post:
         assert p.describe_text("1. (0:00) Waves.\n2. (0:05) A walk at sunset.") == {
             "description": "Waves, then a walk at sunset.", "tags": ["beach", "sunset"]}
     body = post.call_args.kwargs["json"]
@@ -348,7 +348,7 @@ def test_a_videos_scenes_are_described_as_text_alone_with_its_own_settings() -> 
 
     refused = MagicMock(ok=False, status_code=503, text="overloaded")
     refused.raise_for_status.side_effect = __import__("requests").HTTPError(response=refused)
-    with patch("requests.post", return_value=refused), patch.object(p, "_sleep_with_countdown"), \
+    with patch("src.shared.ai_requests.post", return_value=refused), patch.object(p, "_sleep_with_countdown"), \
             pytest.raises(CaptionError) as caught:
         p.describe_text("1. (0:00) Waves.")
     assert caught.value.endpoint_fault
@@ -366,7 +366,7 @@ def test_a_machine_that_refuses_a_temperature_is_asked_without_one_from_then_on(
     refused = MagicMock(ok=False, status_code=400, text='{"error": {"message": "temperature is deprecated for this model"}}')
     answered = MagicMock(ok=True, status_code=200)
     answered.json.return_value = {"choices": [{"message": {"content": "A dog."}}]}
-    with patch("requests.post", side_effect=[refused, answered, answered]) as post:
+    with patch("src.shared.ai_requests.post", side_effect=[refused, answered, answered]) as post:
         assert p._chat("data:image/jpeg;base64,abc", "describe", p._vision) == "A dog."
         assert p._chat("data:image/jpeg;base64,abc", "describe", p._vision) == "A dog."
     sent = [c.kwargs["json"] for c in post.call_args_list]
@@ -375,7 +375,7 @@ def test_a_machine_that_refuses_a_temperature_is_asked_without_one_from_then_on(
     other = MagicMock(ok=False, status_code=400, text='{"error": {"message": "image too large"}}')
     other.raise_for_status.side_effect = __import__("requests").HTTPError(response=other)
     fresh = OpenAICompatibleCaptionProvider("http://10.0.0.7:11434/v1", "qwen")
-    with patch("requests.post", return_value=other) as post, pytest.raises(__import__("requests").HTTPError):
+    with patch("src.shared.ai_requests.post", return_value=other) as post, pytest.raises(__import__("requests").HTTPError):
         fresh._chat("data:image/jpeg;base64,abc", "describe", fresh._vision)
     assert post.call_count == 1 and "temperature" in post.call_args.kwargs["json"]
 

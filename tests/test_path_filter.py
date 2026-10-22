@@ -223,3 +223,50 @@ def test_doublestar_slash_ext_matches_nested() -> None:
     assert _glob_match("folder/**/*.mp4", "folder/sub/video.mp4") is True
     assert _glob_match("folder/**/*.mp4", "folder/a/b/video.mp4") is True
     assert _glob_match("folder/**/*.mp4", "folder/photo.jpg") is False
+
+
+# --- Matching time and a pattern's size ---
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("pattern", "path", "matches"), [
+    ("**", "", True), ("a", "", False), ("*", "", False), ("", "", False), ("", "a", False),
+    ("**/**", "a/b", True), ("a/**/**", "a", True), ("a/**", "a", True), ("**/b", "b", True),
+    ("A\\*", "a/X.jpg", True), ("a/*", "a/", True), ("a/", "a", False), ("**/", "a/", True),
+    ("*/**/*.mov", "x.mov", False), ("**/**/x/**", "x", True),
+])
+def test_the_edges_match_as_they_always_have(pattern: str, path: str, matches: bool) -> None:
+    """An empty path, a trailing slash, ** at either end or twice running: as the matcher always said (it was
+    rewritten to take time in step with the pattern and the path, not to change an answer)."""
+    assert _glob_match(pattern, path) is matches
+
+
+@pytest.mark.fast
+def test_a_pattern_of_many_doublestars_matches_at_once() -> None:
+    """Each ** once tried every way it could go: 200 of them before a name took longer than anyone would wait,
+    for a scan's every file and a preview's every clip. Matched in step with the pattern's parts times the
+    path's now (a generous bound: milliseconds here)."""
+    import time
+
+    deep = "/".join(f"folder{i}" for i in range(300)) + "/clip.mov"
+    started = time.monotonic()
+    assert _glob_match("**/" * 200 + "elsewhere.mov", deep) is False
+    assert _glob_match("**/" * 200 + "clip.mov", deep) is True
+    assert _glob_match("**/folder1/" * 60 + "x", deep) is False
+    assert is_path_included(deep, [PathFilter("exclude", "**/" * 200 + "nothing")]) is True
+    assert time.monotonic() - started < 10
+
+
+@pytest.mark.fast
+def test_a_pattern_far_past_any_real_filters_size_is_refused() -> None:
+    from src.shared.path_filter import MAX_PATTERN_LENGTH, MAX_PATTERN_PARTS
+
+    assert (MAX_PATTERN_LENGTH, MAX_PATTERN_PARTS) == (1024, 64)
+    longest = "**/" * 63 + "x" * (1024 - 3 * 63)
+    assert validate_pattern(longest) == longest
+    with pytest.raises(ValueError, match="at most 1024 characters"):
+        validate_pattern(longest + "x")
+    for slash in ("/", "\\"):
+        with pytest.raises(ValueError, match="at most 64 parts"):
+            validate_pattern(slash.join(["a"] * 65))
+    assert validate_pattern("/".join(["a"] * 64))

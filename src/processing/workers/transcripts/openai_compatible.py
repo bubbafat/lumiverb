@@ -8,6 +8,11 @@ asked not to skip silences of its own (vad_filter=false: none are left to
 skip) and to time its segments (without_timestamps=false: speaches
 otherwise answers in pieces of up to 30 s). Servers that don't know those
 fields ignore them; current speaches skips short silences whatever it's told.
+
+Its address is checked at each request and no redirect is followed
+(src/shared/ai_requests.py). What it says when it fails is the log's: a
+failure says what went wrong in Lumiverb's words, as it reaches every
+signed-in person (the machine's status, why work waits, a clip's failure).
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ import requests
 from src.processing.workers.captions.base import ENDPOINT_FAULT_STATUSES
 from src.processing.workers.transcripts.base import Heard, Segment, Transcriber, TranscriptError
 from src.processing.workers.transcripts.speech import speech_seconds, time_allowed
+from src.shared import ai_requests
 
 CONNECT_TIMEOUT_SEC = 10
 # Segments may end a little past the speech; far past it, the times aren't seconds.
@@ -38,11 +44,13 @@ class OpenAITranscriber(Transcriber):
         allowed = self._timeout or time_allowed(seconds)
         try:
             with open(speech_wav, "rb") as audio:
-                resp = requests.post(self._url, headers=headers, timeout=(CONNECT_TIMEOUT_SEC, allowed),
-                                     files={"file": ("speech.wav", audio, "audio/wav")},
-                                     data={"model": self._model, "response_format": "verbose_json",
-                                           "timestamp_granularities[]": "segment",
-                                           "vad_filter": "false", "without_timestamps": "false"})
+                resp = ai_requests.post(self._url, headers=headers, timeout=(CONNECT_TIMEOUT_SEC, allowed),
+                                        files={"file": ("speech.wav", audio, "audio/wav")},
+                                        data={"model": self._model, "response_format": "verbose_json",
+                                              "timestamp_granularities[]": "segment",
+                                              "vad_filter": "false", "without_timestamps": "false"})
+        except (ai_requests.AddressRefused, ai_requests.Redirected) as e:
+            raise TranscriptError(str(e), endpoint_fault=True) from None
         except requests.ConnectTimeout as e:
             raise TranscriptError(f"Couldn't reach {self._url}: it didn't answer.", endpoint_fault=True) from e
         except requests.ConnectionError as e:
@@ -55,15 +63,9 @@ class OpenAITranscriber(Transcriber):
         except requests.RequestException as e:
             raise TranscriptError(f"{self._url} broke off: {type(e).__name__}.", endpoint_fault=True) from e
         if resp.status_code >= 400:
-            said = (resp.text or "").strip()[:300]
-            if resp.status_code in (401, 403):
-                why = "refused the key"
-            elif resp.status_code == 404:
-                why = f"has no {self._model} or no transcription API there"
-            else:
-                why = f"answered {resp.status_code}"
             fault = resp.status_code in ENDPOINT_FAULT_STATUSES or resp.status_code >= 500
-            raise TranscriptError(f"{self._url} {why}" + (f": {said}" if said else "."), endpoint_fault=fault)
+            raise TranscriptError(f"{self._url} {ai_requests.answered(resp, model=self._model, api='transcription')}.",
+                                  endpoint_fault=fault)
         try:
             data = resp.json()
         except ValueError:

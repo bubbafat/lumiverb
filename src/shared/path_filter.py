@@ -29,38 +29,45 @@ def _glob_match(pattern: str, path: str) -> bool:
     Case-insensitive glob match supporting ** for cross-segment matching.
     Both pattern and path are lowercased before comparison.
     * and ? match within a single path segment; ** matches zero or more segments.
+
+    Worked out a pattern segment at a time, last to first, over every place in
+    the path at once: steps grow with the pattern's segments times the path's,
+    however many ** it has (trying each way a ** could go, as this once did,
+    took twice as long for each more).
     """
     pl = pattern.lower().replace("\\", "/")
     path_l = path.lower().replace("\\", "/")
     # Preserve empty path as single empty segment for edge cases
     path_segs = path_l.split("/") if path_l else [""]
     pattern_segs = pl.split("/")
+    n = len(path_segs)
+    empty = path_segs == [""]
+    # Whether pattern_segs[j:] is all ** (what's left of a pattern once the path is used up).
+    stars_from = [True] * (len(pattern_segs) + 1)
+    for j in range(len(pattern_segs) - 1, -1, -1):
+        stars_from[j] = stars_from[j + 1] and pattern_segs[j] == "**"
 
-    def match_segment(pat: str, seg: str) -> bool:
-        """Single segment: fnmatch; ? and * don't cross /."""
-        return fnmatch.fnmatch(seg, pat)
-
-    def match_from(pi: int, pseg_i: int) -> bool:
-        """Match path_segs[pi:] against pattern_segs[pseg_i:]. ** consumes 0+ path segments."""
-        if pseg_i >= len(pattern_segs):
-            return pi >= len(path_segs) or (pi == 0 and path_segs == [""])
-        if pi >= len(path_segs) and path_segs != [""]:
-            return all(s == "**" for s in pattern_segs[pseg_i:])
-        pseg = pattern_segs[pseg_i]
-        if pseg == "**":
-            # Consume 0 or more path segments
-            max_skip = len(path_segs) - pi + 1
-            for skip in range(max_skip):
-                if match_from(pi + skip, pseg_i + 1):
-                    return True
-            return False
-        if path_segs == [""]:
-            return False
-        if not match_segment(pseg, path_segs[pi]):
-            return False
-        return match_from(pi + 1, pseg_i + 1)
-
-    return match_from(0, 0)
+    # rest[pi]: whether path_segs[pi:] matches the pattern's segments after the one at hand. With none left,
+    # the path must be used up too (an empty path matches nothing left as well).
+    rest = [pi >= n or (pi == 0 and empty) for pi in range(n + 1)]
+    for j in range(len(pattern_segs) - 1, -1, -1):
+        pseg = pattern_segs[j]
+        here = [False] * (n + 1)
+        later = False  # whether rest matches from pi or any place after it: where a ** may stop
+        for pi in range(n, -1, -1):
+            later = later or rest[pi]
+            if pi >= n and not empty:
+                here[pi] = stars_from[j]
+            elif pseg == "**":
+                # Consume 0 or more path segments
+                here[pi] = later
+            elif empty:
+                here[pi] = False
+            else:
+                # Single segment: fnmatch; ? and * don't cross /.
+                here[pi] = rest[pi + 1] and fnmatch.fnmatch(path_segs[pi], pseg)
+        rest = here
+    return rest[0]
 
 
 def is_path_included(rel_path: str, filters: list[PathFilter]) -> bool:
@@ -127,13 +134,24 @@ def is_path_included_merged(
     return True
 
 
+# A pattern's size: far past any real filter's (a folder a few deep, a name, an extension), as each is matched
+# against every file a scan walks and every clip a filter's preview counts.
+MAX_PATTERN_LENGTH = 1024
+MAX_PATTERN_PARTS = 64
+
+
 def validate_pattern(pattern: str) -> str:
     """
     Validate and return the pattern, or raise ValueError if invalid.
-    Rejects patterns containing '..' or null bytes.
+    Rejects patterns containing '..' or null bytes, longer than MAX_PATTERN_LENGTH
+    characters, or of more than MAX_PATTERN_PARTS parts (between its slashes).
     """
     if "\x00" in pattern:
         raise ValueError("Pattern must not contain null bytes")
     if ".." in pattern:
         raise ValueError("Pattern must not contain '..'")
+    if len(pattern) > MAX_PATTERN_LENGTH:
+        raise ValueError(f"Pattern must be at most {MAX_PATTERN_LENGTH} characters")
+    if len(pattern.replace("\\", "/").split("/")) > MAX_PATTERN_PARTS:
+        raise ValueError(f"Pattern must have at most {MAX_PATTERN_PARTS} parts between slashes")
     return pattern
