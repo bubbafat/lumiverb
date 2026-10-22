@@ -942,6 +942,9 @@ export interface TenantSettings {
   trash_days?: number | null;
   /** Days a key a person made may go unused before it ends; null (the default) when keys end only when revoked. */
   key_idle_days?: number | null;
+  /** The folders on this server its libraries may be in, a server admin's to give (Admin › Accounts); null, or left
+   * out by an older server: every folder the server reads. */
+  folders?: string[] | null;
 }
 
 export async function getTenantSettings(): Promise<TenantSettings> {
@@ -1829,6 +1832,14 @@ export async function createAccount(name: string, email: string): Promise<Accoun
 
 export async function renameAccount(tenantId: string, name: string): Promise<void> {
   await apiFetch(apiPath`/admin/tenants/${tenantId}`, { method: "PATCH", body: { name } });
+}
+
+/** The folders on this server an account's libraries may be in, or null for every folder the server reads. 422
+ * invalid_folder or folder_not_read; 409 folders_overlap (another account's) or libraries_outside (its libraries
+ * that would be left outside, in details). */
+export async function setAccountFolders(tenantId: string, folders: string[] | null): Promise<string[] | null> {
+  return (await apiFetch<{ tenant_id: string; folders: string[] | null }>(
+    apiPath`/admin/tenants/${tenantId}/folders`, { method: "PUT", body: { folders } })).folders;
 }
 
 /** 409 confirm_delete_account (details: name, users, libraries, clips) until confirm is its name; own_account and

@@ -103,6 +103,22 @@ sudo /opt/lumiverb/.venv/bin/lumiverb-server server-admins add you@example.com -
 
 **Admin › Accounts** also makes a new account, with its own libraries, people and settings. Its first admin gets an invite link.
 
+### Each account's folders
+
+With one account, nothing here needs doing: its admins choose any folder the server reads for a library, as always.
+
+With more than one, each account's admins could otherwise point a library at another account's folder. So a server admin gives each account its folders: in **Admin › Accounts**, click **Change folders** beside it, choose **Only these folders**, type one full path per line (such as `/srv/media/ana`), and click **Save folders**. **Every folder the server reads** takes them away again. While more than one account has none of its own, the page says so.
+
+Then a library this server reads for that account must be in one of its folders: added, moved, or handed to the server in Library settings › Who reads it. Anywhere else, its admin sees "This account's folders are …: choose one inside them, or ask a server admin." A library one of the account's own computers reads (Settings › Devices) can be anywhere on that computer. Left with no folders at all, only its own computers read its libraries.
+
+A library's folder can be a link to another folder. The server follows it, and reads the library only if it leads inside the account's folders; otherwise it never reads it, and its log says why.
+
+Saving folders is refused when:
+
+- one is inside, the same as, or holds another account's folder (a deleted account's don't count);
+- one of the account's libraries the server reads, in the trash too, would be left outside them: move it first, or include its folder;
+- on Linux, one isn't under the root map (`LUMIVERB_ROOT_MAP`), so the server doesn't read it.
+
 ## Passwords
 
 A password has at least 12 characters.

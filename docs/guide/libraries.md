@@ -22,6 +22,10 @@ Only an admin adds libraries.
 
 If another computer is registered in Settings › Devices, the form also asks **Read by**: this server, or that computer. See [Libraries on another computer](devices.md).
 
+### Where a library's folder may be
+
+Read by this server, a library's folder is any folder the server reads, unless a server admin gave the account folders of its own (on a server with several accounts: see [Each account's folders](users-and-roles.md#each-accounts-folders)). Then the form says "This account's folders: …", and the folder must be one of them or inside one. Elsewhere you get "This account's folders are …: choose one inside them, or ask a server admin." The same goes for moving a library and for handing it to this server. A folder that's a link must lead inside them too, or the server never reads it. A library another computer reads can be anywhere on that computer.
+
 Within a minute or so Lumiverb starts its first scan, then works through everything it makes from each file. [Processing](processing.md) shows how far it has got.
 
 ### On a Mac
@@ -107,7 +111,7 @@ sudo systemctl restart lumiverb-scheduler
 
 ### Who reads it
 
-Each library is read by this server or by one registered device, never both. The reader scans it and makes what needs the files themselves, such as previews; the server does the rest. Choose **Read by**, give **Its folder** as that reader sees it, and click **Save**. This is also where a library's folder is changed. Both are an account admin's to choose, as adding a library is: a library's own admin sees who reads it and its folder, and "An account admin chooses its folder and who reads it." See [Libraries on another computer](devices.md).
+Each library is read by this server or by one registered device, never both. The reader scans it and makes what needs the files themselves, such as previews; the server does the rest. Choose **Read by**, give **Its folder** as that reader sees it, and click **Save**. On this server, the folder is in the account's folders when it has some (see [Where a library's folder may be](#where-a-librarys-folder-may-be)). This is also where a library's folder is changed. Both are an account admin's to choose, as adding a library is: a library's own admin sees who reads it and its folder, and "An account admin chooses its folder and who reads it." See [Libraries on another computer](devices.md).
 
 ### Location guesses
 

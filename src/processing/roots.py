@@ -19,6 +19,8 @@ import time
 import unicodedata
 from pathlib import Path
 
+from src.shared.io_utils import in_folder
+
 logger = logging.getLogger(__name__)
 
 # A network mount whose server is asleep can block a stat for minutes.
@@ -76,7 +78,7 @@ def _configured_map() -> dict[str, str]:
     return dict(current().root_map)
 
 
-def _maps(root_path: str, root_map: dict[str, str]) -> bool:
+def maps(root_path: str, root_map: dict[str, str]) -> bool:
     """Whether a prefix in root_map covers root_path (as map_root matches)."""
     root = _clean(root_path)
     for src in root_map:
@@ -98,14 +100,18 @@ def _refused(library: dict, mapping: dict[str, str]) -> str | None:
 
     if not library["root_path"].startswith("/"):
         return "root isn't absolute"
-    if current().mapped_roots_only and not _maps(library["root_path"], mapping):
+    if current().mapped_roots_only and not maps(library["root_path"], mapping):
         return "root isn't under the root map"
+    folders = library.get("folders")
+    if folders is not None and not any(in_folder(library["root_path"], f) for f in folders):
+        return "root is outside its account's folders"
     return None
 
 
-def _outside(resolved: Path, mapping: dict[str, str]) -> str | None:
+def _outside(resolved: Path, mapping: dict[str, str], folders: list[str] | None) -> str | None:
     """Why the library's resolved root mustn't be read here. On disk: run
-    in the probe's thread."""
+    in the probe's thread. Its account's folders are resolved too, so a link
+    inside one leads nowhere else."""
     from src.processing.machine import current
 
     here = current()
@@ -113,6 +119,9 @@ def _outside(resolved: Path, mapping: dict[str, str]) -> str | None:
         return "root is in the server's data"
     if here.mapped_roots_only and not any(resolved.is_relative_to(Path(t).resolve()) for t in mapping.values()):
         return "root leaves the root map"
+    if folders is not None and not any(
+            in_folder(str(resolved), str(Path(map_root(f, mapping)).resolve())) for f in folders):
+        return "root leaves its account's folders"
     return None
 
 
@@ -201,7 +210,10 @@ def reachable_root(
     A root that isn't absolute is never read, nor one in the server's data
     (the machine's refused_roots). Where the machine reads mapped roots only
     (the scheduler), a root not under root_map, or resolving outside its
-    targets, is refused too.
+    targets, is refused too; and so is one outside its account's folders
+    when the library carries them (its `folders`, as this server's
+    check-in answers: src/server/api/account_folders.py), or resolving
+    outside them, mapped and resolved.
 
     require_entries treats an empty folder as unreachable: an unmounted
     mount point is an empty folder, and scanning it would mark every file
@@ -223,7 +235,7 @@ def reachable_root(
     def run() -> None:
         try:
             root = _probe(path, require_entries)
-            if root is not None and (reason := _outside(root, mapping)) is not None:
+            if root is not None and (reason := _outside(root, mapping, library.get("folders"))) is not None:
                 _refuse(library, reason)
                 root = None
             result["root"] = root

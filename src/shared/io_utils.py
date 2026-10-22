@@ -91,6 +91,24 @@ def is_within(rel_path: str, folder: str | None) -> bool:
     return not folder or rel_path == folder or rel_path.startswith(folder + "/")
 
 
+def root_in_form(root_path: str) -> bool:
+    """A library's root, or an account's folder, in its one form: absolute,
+    no ".", ".." or empty part (so no trailing "/"), no backslash, no
+    control character (a newline, a tab, NUL)."""
+    return (isinstance(root_path, str) and root_path.startswith("/") and not has_control_character(root_path)
+            and "\\" not in root_path and all(p not in ("", ".", "..") for p in root_path[1:].split("/")))
+
+
+def in_folder(path: str, folder: str) -> bool:
+    """An absolute path is the folder or inside it, part by whole part
+    (/a/b isn't in /a/bc), each in NFC (macOS hands out NFD names)."""
+    def parts(p: str) -> list[str]:
+        return [part for part in unicodedata.normalize("NFC", p).split("/") if part]
+
+    inside, outer = parts(path), parts(folder)
+    return inside[:len(outer)] == outer
+
+
 def resolve_source_path(root: Path, rel_path: str) -> Path:
     """Where a library file lives on this machine's disk.
 

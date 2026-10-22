@@ -65,7 +65,7 @@ def test_a_check_in_is_kept_and_answered_with_the_libraries_it_reads(env):
     assert {a[2], b[2]} <= set(listed)  # this server reads every library
     assert listed[a[2]] | {"mark": None} == {"library_id": a[2], "name": "CheckInA", "root_path": "/tmp/CheckInA",
                                              "reader": "server", "scans_paused": False, "mark": None,
-                                             "scan_now": False}
+                                             "scan_now": False, "folders": None}  # every folder the server reads
     assert answer["gone"] == ["lib_nope"] and answer["check_in_every_sec"] == 60
     assert [lib["name"] for lib in answer["libraries"]] == sorted(lib["name"] for lib in answer["libraries"])
 

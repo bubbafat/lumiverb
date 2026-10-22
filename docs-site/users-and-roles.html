@@ -193,6 +193,17 @@
 <p>On Linux:</p>
 <div class="cmd"><pre><code>sudo /opt/lumiverb/.venv/bin/lumiverb-server server-admins add you@example.com --env /etc/lumiverb/env</code></pre></div>
 <p><strong>Admin › Accounts</strong> also makes a new account, with its own libraries, people and settings. Its first admin gets an invite link.</p>
+<h3 id="each-accounts-folders">Each account's folders<a class="anchor" href="#each-accounts-folders" aria-label="Link to this section">#</a></h3>
+<p>With one account, nothing here needs doing: its admins choose any folder the server reads for a library, as always.</p>
+<p>With more than one, each account's admins could otherwise point a library at another account's folder. So a server admin gives each account its folders: in <strong>Admin › Accounts</strong>, click <strong>Change folders</strong> beside it, choose <strong>Only these folders</strong>, type one full path per line (such as <code>/srv/media/ana</code>), and click <strong>Save folders</strong>. <strong>Every folder the server reads</strong> takes them away again. While more than one account has none of its own, the page says so.</p>
+<p>Then a library this server reads for that account must be in one of its folders: added, moved, or handed to the server in Library settings › Who reads it. Anywhere else, its admin sees &quot;This account's folders are …: choose one inside them, or ask a server admin.&quot; A library one of the account's own computers reads (Settings › Devices) can be anywhere on that computer. Left with no folders at all, only its own computers read its libraries.</p>
+<p>A library's folder can be a link to another folder. The server follows it, and reads the library only if it leads inside the account's folders; otherwise it never reads it, and its log says why.</p>
+<p>Saving folders is refused when:</p>
+<ul>
+<li>one is inside, the same as, or holds another account's folder (a deleted account's don't count);</li>
+<li>one of the account's libraries the server reads, in the trash too, would be left outside them: move it first, or include its folder;</li>
+<li>on Linux, one isn't under the root map (<code>LUMIVERB_ROOT_MAP</code>), so the server doesn't read it.</li>
+</ul>
 <h2 id="passwords">Passwords<a class="anchor" href="#passwords" aria-label="Link to this section">#</a></h2>
 <p>A password has at least 12 characters.</p>
 <p><strong>Forgot password?</strong> on the sign-in page works three ways:</p>

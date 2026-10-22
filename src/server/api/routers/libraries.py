@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
+from src.server.api import account_folders
 from src.server.api.dependencies import (
     checked_root_path,
     get_current_user_id,
@@ -221,7 +222,9 @@ def create_library(
     New libraries inherit tenant path filter defaults at creation time.
     Read by this server unless reader names a device (404 device_not_found
     for one that isn't registered): its folder is then the device's, and
-    chosen anywhere (it's never read here).
+    chosen anywhere (it's never read here). Read by this server, its folder
+    is in the account's folders when a server admin gave it any (403
+    outside_account_folders: account_folders.py).
     """
     root_path = checked_root_path(body.root_path)
     _known_reader(session, body.reader)
@@ -231,8 +234,9 @@ def create_library(
     existing = repo.get_by_name(body.name)
     if existing is not None:
         raise HTTPException(status_code=409, detail="A library with this name already exists")
-    library = repo.create(name=body.name, root_path=root_path, reader=body.reader, private=body.private,
-                          infer_location=body.infer_location)
+    with account_folders.choosing(request, root_path if body.reader == SERVER else None):
+        library = repo.create(name=body.name, root_path=root_path, reader=body.reader, private=body.private,
+                              infer_location=body.infer_location)
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id:
         path_filter_repo = PathFilterRepository(session)
@@ -463,7 +467,8 @@ def update_library(
     """Update library name, root_path, is_public, private and/or
     infer_location. A folder is an account admin's, chosen on the library's
     reader: for this server's libraries, as on creating one
-    (require_folder_chosen_here).
+    (require_folder_chosen_here), in the account's folders when it has any
+    (403 outside_account_folders).
     Turning Infer location off removes the library's location guesses (a
     person's location stays): 409 guesses_exist with how many clips have one,
     unless remove_guesses says so."""
@@ -478,6 +483,7 @@ def update_library(
         raise HTTPException(status_code=404, detail="Library not found")
     if body.root_path is not None and read_by_server(library):
         require_folder_chosen_here(request)
+    moved_here = body.root_path if read_by_server(library) else None
     if body.infer_location is False and library.infer_location:
         guessed = locations.guesses_in(session, library_id)
         if guessed and not body.remove_guesses:
@@ -489,8 +495,9 @@ def update_library(
                 {"clips": guessed},
             )
         locations.stop_inferring(session, library_id)  # committed with the setting
-    repo.update(library, name=body.name, root_path=body.root_path, is_public=body.is_public, private=body.private,
-                infer_location=body.infer_location)
+    with account_folders.choosing(request, moved_here):
+        repo.update(library, name=body.name, root_path=body.root_path, is_public=body.is_public,
+                    private=body.private, infer_location=body.infer_location)
 
     # Maintain public_libraries control plane index
     if body.is_public is not None:
@@ -538,9 +545,11 @@ def choose_reader(
     one's scans of it are refused from now (409 not_the_reader). With
     root_path, the folder as the new reader sees it. Handed to this server,
     its folder is chosen here as on creating a library
-    (require_folder_chosen_here): this server reads it from now. 404 for no
-    such library, 404 device_not_found for a device that isn't registered,
-    409 library_trashed."""
+    (require_folder_chosen_here), in the account's folders when it has any
+    (403 outside_account_folders; its folder as it is when root_path is left
+    out): this server reads it from now. 404 for no such library, 404
+    device_not_found for a device that isn't registered, 409
+    library_trashed."""
     root_path = checked_root_path(body.root_path) if body.root_path is not None else None
     repo = LibraryRepository(session)
     library = repo.get_by_id(library_id)
@@ -549,9 +558,11 @@ def choose_reader(
     if library.status == "trashed":
         raise ConflictError("library_trashed", "The library is in the trash.")
     _known_reader(session, body.reader)
-    if body.reader == SERVER and (root_path is not None or library.reader != SERVER):
+    chosen_here = body.reader == SERVER and (root_path is not None or library.reader != SERVER)
+    if chosen_here:
         require_folder_chosen_here(request)
-    repo.update(library, root_path=root_path, reader=body.reader)
+    with account_folders.choosing(request, (root_path or library.root_path) if chosen_here else None):
+        repo.update(library, root_path=root_path, reader=body.reader)
     return _response(request, session, library)
 
 

@@ -479,6 +479,9 @@ export interface AccountItem {
   /** The people who sign in to it. */
   users: number;
   created_at: string | null;
+  /** The folders on this server its libraries may be in; null (or left out by an older server): every folder the
+   * server reads. */
+  folders?: string[] | null;
 }
 
 /** An account just made with its first admin invited: the link to send them, shown once. */

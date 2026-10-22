@@ -146,12 +146,11 @@ def get_current_user_id(request: Request) -> str:
 def checked_root_path(root_path: str) -> str:
     """A library root a request sent; 400 unless absolute and in one form:
     no ".", ".." or empty part (so no trailing "/"), no backslash, no control
-    character (a newline, a tab, NUL)."""
-    from src.shared.path_filter import has_control_character
+    character (a newline, a tab, NUL): io_utils.root_in_form, as an
+    account's folders are."""
+    from src.shared.io_utils import root_in_form
 
-    parts = root_path[1:].split("/")
-    if (not root_path.startswith("/") or has_control_character(root_path) or "\\" in root_path
-            or any(p in ("", ".", "..") for p in parts)):
+    if not root_in_form(root_path):
         raise HTTPException(status_code=400, detail="Invalid root_path")
     return root_path
 

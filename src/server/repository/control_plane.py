@@ -6,7 +6,7 @@ import hashlib
 import secrets
 from datetime import datetime
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlmodel import Session, select
 
 from src.shared.utils import utcnow
@@ -79,6 +79,30 @@ class TenantRepository:
         if tenant is None:
             raise ValueError(f"Tenant not found: {tenant_id}")
         tenant.key_idle_days = days
+        self._session.add(tenant)
+        self._session.commit()
+
+    def folders_of(self, tenant_id: str, *, hold: bool = False) -> list[str] | None:
+        """The account's folders on this server, or None for every folder the
+        server reads. hold: they can't change (FOR SHARE) until this session's
+        transaction ends, so a library's folder is checked and saved against
+        them as they are (src/server/api/account_folders.py)."""
+        stmt = select(Tenant.folders).where(Tenant.tenant_id == tenant_id)
+        if hold:
+            stmt = stmt.with_for_update(read=True)
+        return self._session.exec(stmt).first()
+
+    def to_change_folders(self, tenant_id: str) -> Tenant | None:
+        """The account, to change its folders: one change of any account's at
+        a time (a transaction's advisory lock), and its row held (FOR NO KEY
+        UPDATE) from a library's folder being chosen in it until the change
+        is committed (set_folders) or rolled back."""
+        self._session.execute(text("SELECT pg_advisory_xact_lock(hashtext('tenants.folders'))"))
+        stmt = select(Tenant).where(Tenant.tenant_id == tenant_id).with_for_update(key_share=True)
+        return self._session.exec(stmt).first()
+
+    def set_folders(self, tenant: Tenant, folders: list[str] | None) -> None:
+        tenant.folders = None if folders is None else list(folders)
         self._session.add(tenant)
         self._session.commit()
 

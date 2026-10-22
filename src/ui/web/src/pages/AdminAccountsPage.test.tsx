@@ -20,8 +20,10 @@ function token(tenantId: string): string {
   return `${part({ alg: "HS256" })}.${part({ sub: "usr_robert", role: "admin", tenant_id: tenantId })}.sig`;
 }
 
-const MINE = { tenant_id: "ten_mine", name: "Robert's", plan: "free", status: "active", users: 2, created_at: "2026-10-01T00:00:00Z" };
-const ANA = { tenant_id: "ten_ana", name: "Ana's", plan: "free", status: "active", users: 1, created_at: "2026-10-20T00:00:00Z" };
+const MINE = { tenant_id: "ten_mine", name: "Robert's", plan: "free", status: "active", users: 2, created_at: "2026-10-01T00:00:00Z",
+               folders: null };
+const ANA = { tenant_id: "ten_ana", name: "Ana's", plan: "free", status: "active", users: 1, created_at: "2026-10-20T00:00:00Z",
+              folders: null };
 const OLD = { tenant_id: "ten_old", name: "Old one", plan: "free", status: "deleted", users: 1, created_at: null };
 
 beforeEach(() => {
@@ -49,6 +51,17 @@ beforeEach(() => {
       }
       accounts = [MINE, OLD];
       return json(null, 204);
+    }
+    if (path.endsWith("/folders") && method === "PUT") {
+      const folders = (body as { folders: string[] | null }).folders;
+      if (folders?.includes("/Volumes/Shared")) {
+        return json({ error: { code: "folders_overlap",
+                               message: "/Volumes/Shared overlaps /Volumes/Shared/robert, a folder of Robert's: each account's folders are its own.",
+                               details: {} } }, 409);
+      }
+      const tenantId = path.split("/")[3];
+      accounts = accounts.map((a) => (a.tenant_id === tenantId ? { ...a, folders } : a));
+      return json({ tenant_id: tenantId, folders });
     }
     if (path === "/admin/server-admins" && method === "GET") return json({ server_admins: admins });
     if (path === "/admin/server-admins" && method === "POST") {
@@ -139,6 +152,70 @@ describe("Admin › Accounts", () => {
       "The link ana@example.com hadn't used has stopped working: only a server admin makes them a new one.");
     fireEvent.click(within(within(list).getByRole("listitem", { name: "robert@example.com" })).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("They're the last server admin: name another first.")).toBeTruthy();
+  });
+
+  it("shows each account's folders, every folder the server reads until given some", async () => {
+    accounts = [MINE, { ...ANA, folders: ["/Volumes/Ana", "/srv/ana"] }, OLD];
+    renderPage();
+    const mine = await screen.findByRole("listitem", { name: "Robert's" });
+    expect(mine.textContent).toContain("Folders: Every folder the server reads");
+    expect(screen.getByRole("listitem", { name: "Ana's" }).textContent).toContain("Folders: /Volumes/Ana, /srv/ana");
+  });
+
+  it("says, with several accounts, that one without folders of its own can choose any folder, the others' too", async () => {
+    renderPage();
+    const note = await screen.findByRole("note");
+    expect(note.textContent).toContain("Each account without folders of its own (Robert's, Ana's) can choose any folder");
+    expect(note.textContent).toContain("the other accounts' too");
+  });
+
+  it("says nothing of folders on a server with one account", async () => {
+    accounts = [MINE, OLD];
+    renderPage();
+    await screen.findByRole("listitem", { name: "Robert's" });
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("says nothing once every account has folders of its own", async () => {
+    accounts = [{ ...MINE, folders: ["/Volumes/Robert"] }, { ...ANA, folders: [] }, OLD];
+    renderPage();
+    const ana = await screen.findByRole("listitem", { name: "Ana's" });
+    expect(ana.textContent).toContain("None on this server");
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("gives an account its folders, one per line, and lifts them again", async () => {
+    renderPage();
+    const ana = await screen.findByRole("listitem", { name: "Ana's" });
+    fireEvent.click(within(ana).getByRole("button", { name: "Change folders" }));
+    const form = within(ana).getByRole("form", { name: "Folders for Ana's" });
+    const lines = within(form).getByLabelText("Its folders, one per line") as HTMLTextAreaElement;
+    expect(lines.disabled).toBe(true);
+    fireEvent.click(within(form).getByLabelText("Only these folders"));
+    fireEvent.change(lines, { target: { value: " /Volumes/Ana \n\n/srv/ana\n" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Save folders" }));
+    await waitFor(() => expect(within(screen.getByRole("listitem", { name: "Ana's" })).queryByRole("form")).toBeNull());
+    expect(sent.find((s) => s.method === "PUT")).toMatchObject({ path: "/admin/tenants/ten_ana/folders",
+                                                                 body: { folders: ["/Volumes/Ana", "/srv/ana"] } });
+    expect((await screen.findByRole("listitem", { name: "Ana's" })).textContent).toContain("Folders: /Volumes/Ana, /srv/ana");
+
+    fireEvent.click(within(screen.getByRole("listitem", { name: "Ana's" })).getByRole("button", { name: "Change folders" }));
+    fireEvent.click(screen.getByLabelText("Every folder the server reads"));
+    fireEvent.click(screen.getByRole("button", { name: "Save folders" }));
+    await waitFor(() => expect(sent.filter((s) => s.method === "PUT").map((s) => s.body)).toEqual(
+      [{ folders: ["/Volumes/Ana", "/srv/ana"] }, { folders: null }]));
+  });
+
+  it("says why the server refused the folders, as it says it", async () => {
+    renderPage();
+    const ana = await screen.findByRole("listitem", { name: "Ana's" });
+    fireEvent.click(within(ana).getByRole("button", { name: "Change folders" }));
+    fireEvent.click(within(ana).getByLabelText("Only these folders"));
+    fireEvent.change(within(ana).getByLabelText("Its folders, one per line"), { target: { value: "/Volumes/Shared" } });
+    fireEvent.click(within(ana).getByRole("button", { name: "Save folders" }));
+    expect((await within(ana).findByRole("alert")).textContent)
+      .toBe("/Volumes/Shared overlaps /Volumes/Shared/robert, a folder of Robert's: each account's folders are its own.");
+    expect(within(ana).getByRole("form")).toBeTruthy();
   });
 
   it("tells someone who isn't a server admin that only one manages accounts", async () => {
