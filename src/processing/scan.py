@@ -339,7 +339,7 @@ def _scan_one(
         with stats.lock:
             stats.failed += 1
             stats.failed_paths.append(rel_path)
-        progress.console.print(f"[red]scan ✗[/red] {rel_path}: {e}")
+        progress.console.print(f"[red]scan ✗[/red] {_shown(rel_path)}: {escape(str(e))}")
         progress.advance(task_id)
 
 
@@ -442,7 +442,7 @@ def _scan_one_video(
         with stats.lock:
             stats.failed += 1
             stats.failed_paths.append(rel_path)
-        progress.console.print(f"[red]scan ✗[/red] {rel_path}: {e}")
+        progress.console.print(f"[red]scan ✗[/red] {_shown(rel_path)}: {escape(str(e))}")
         progress.advance(task_id)
 
 
@@ -1065,7 +1065,7 @@ def run_scan(
 
     if originals is None:
         here = where(library)
-        console.print(f"[red]Library root not accessible: {here}[/red]")
+        console.print(f"[red]Library root not accessible: {escape(str(here))}[/red]")
         if here is not None and str(here) == library.get("root_path"):
             console.print("Is the volume mounted? If it's mounted elsewhere on this machine, "
                           "run `lumiverb config map-root`.")
@@ -1088,18 +1088,18 @@ def run_scan(
         try:
             found = _existing_folder(originals, path_prefix)
         except UnsafeRelPathError:
-            console.print(f"[red]Invalid path prefix {path_prefix}: it must be a folder inside the library[/red]")
+            console.print(f"[red]Invalid path prefix {_shown(path_prefix)}: it must be a folder inside the library[/red]")
             stats.unlisted.append(path_prefix)  # nothing is removed
             return stats
         except OSError as exc:
-            console.print(f"[yellow]Can't check {path_prefix} ({exc}), so this scan doesn't remove anything[/yellow]")
+            console.print(f"[yellow]Can't check {_shown(path_prefix)} ({escape(str(exc))}), so this scan doesn't remove anything[/yellow]")
             stats.unlisted.append(path_prefix)
             return stats
         if found != path_prefix:
-            console.print(f"{path_prefix} isn't on disk; scanning {found or 'the whole library'}")
+            console.print(f"{_shown(path_prefix)} isn't on disk; scanning {_shown(found) if found else 'the whole library'}")
             path_prefix = found
     if not path_prefix and not _still_a_folder(originals):
-        console.print(f"[red]Library root went away: {originals.where}[/red]")
+        console.print(f"[red]Library root went away: {escape(str(originals.where))}[/red]")
         return ScanStats(root_unreachable=True)
 
     # Started before the walk: a clip made or changed after this is never
@@ -1145,7 +1145,7 @@ def _run(
                         refused_names=d.refused if d is not None else None)
     if stats.unlisted:
         console.print(f"[yellow]Couldn't list {len(stats.unlisted):,} folder(s), so this scan "
-                      "doesn't remove anything: {}[/yellow]".format(", ".join(stats.unlisted[:5]) or "/"))
+                      "doesn't remove anything: {}[/yellow]".format(", ".join(map(_shown, stats.unlisted[:5])) or "/"))
 
     # Every media file on disk is sent, of every media type, empty ones (on
     # disk, never ingested) and ones still being written (a later scan takes
@@ -1279,7 +1279,7 @@ def _run(
             f"{finished['archived']:,} deleted, "
             f"{finished['moved']:,} moved"
         )
-        console.print(f"\n[bold]Root path:[/bold]  {originals.where}")
+        console.print(f"\n[bold]Root path:[/bold]  {escape(str(originals.where))}")
         return stats
     stats.moved += work.moved
 
@@ -1308,7 +1308,7 @@ def _run(
     err = _error(resp) if resp.status_code == 409 else {}
     if err.get("code") == "mass_missing":
         stats.mass_missing = (err.get("details") or {}).get("count") or counts["gone"]
-        console.print(f"[yellow]Skipping {stats.mass_missing:,} deletions: {err.get('message', '')} "
+        console.print(f"[yellow]Skipping {stats.mass_missing:,} deletions: {escape(err.get('message', ''))} "
                       "If the files really are gone, re-run with --allow-mass-delete.[/yellow]")
         _abandon(client, scan_id)
     else:

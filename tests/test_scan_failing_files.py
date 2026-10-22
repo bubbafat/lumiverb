@@ -133,6 +133,19 @@ def test_a_failing_file_waits_for_its_retry_unless_it_changed_and_is_never_taken
     assert clips["a.png"]["asset_id"] == a and "broken.jpg" in clips and _missing(env, lib) == {}
 
 
+def test_a_failing_file_with_markup_in_its_path_fails_alone(env, api, lib, read):
+    # Its failure is printed: "[/b]" read as a closing tag stopped the whole scan, every scan of the library.
+    _image(lib, "a.png", 1)
+    (lib.root / "x[").mkdir()
+    _broken(lib, "x[/b].jpg", 500)
+    state = ScanState()
+
+    assert _pass(api, lib, state, read, 0) == {"a.png", "b].jpg"}
+
+    assert state.retries[lib.id].paths == {"x[/b].jpg"}
+    assert "a.png" in _in_sight(env, lib) and _missing(env, lib) == {}
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root may read any file")
 def test_a_file_it_isnt_allowed_to_read_is_said_tried_at_each_scan_and_taken_in_once_readable(
         env, api, lib, read, caplog):

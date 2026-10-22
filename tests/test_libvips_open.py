@@ -7,7 +7,9 @@ names, read as it is, and a file only an untrusted loader reads (ImageMagick,
 PDF, SVG, PPM: those libvips itself marks untrusted) makes none. Every
 format a library holds still makes its proxy: JPEG, PNG, WebP, TIFF and
 HEIF (an iPhone's HEIC) through libvips, BMP through Pillow, RAW through
-rawpy (a DNG rawpy can't read through libvips, as a TIFF).
+rawpy (a DNG rawpy can't read through libvips, as a TIFF). A .tif is read as
+a TIFF only, whatever Pillow would make of its content, and nothing over
+proxy_gen.MAX_PIXELS is decoded: its size is read from its header first.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 pytestmark = pytest.mark.fast
 
@@ -213,6 +215,89 @@ def test_a_dng_rawpy_cant_read_is_read_by_libvips_as_the_tiff_it_is(tmp_path):
     proxy, w, h = proxy_gen.generate_proxy_bytes(source)
 
     assert (w, h) == SIZE and proxy_size(proxy) == SIZE
+
+
+# ---------------------------------------------------------------------------
+# A TIFF as a TIFF, and nothing decoded over MAX_PIXELS
+
+
+@pytest.mark.parametrize("name", ["scan.tif", "scan.tiff"])
+def test_a_tiff_is_read_as_a_tiff_whatever_the_file_holds(tmp_path, monkeypatch, name):
+    from PIL import EpsImagePlugin
+
+    from src.processing.proxy import proxy_gen
+
+    ran: list = []
+
+    def ghostscript(*args, **kwargs):
+        ran.append(args)
+        raise RuntimeError("Ghostscript ran")
+
+    monkeypatch.setattr(EpsImagePlugin, "Ghostscript", ghostscript)
+    source = tmp_path / name
+    source.write_bytes(encoded("EPS", (64, 48)))
+    assert Image.open(source).format == "EPS", "what Pillow makes of it when it's left to guess"
+
+    with pytest.raises(UnidentifiedImageError):
+        proxy_gen.generate_proxy_bytes(source)
+    assert ran == [], "PostScript is never handed to Ghostscript"
+
+
+def _declared_png(width: int, height: int) -> bytes:
+    """A PNG whose header says width x height, with almost nothing after it."""
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)  # 8-bit grey
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(bytes(64))) + chunk(b"IEND", b"")
+
+
+def test_a_picture_declaring_more_than_max_pixels_is_refused_before_it_is_decoded(tmp_path):
+    from src.processing.proxy import proxy_gen
+
+    source = tmp_path / "huge.png"
+    source.write_bytes(_declared_png(40_000, 40_000))  # 1.6 gigapixels, in 100 bytes
+
+    with pytest.raises(proxy_gen.TooLarge, match="40,000×40,000 pixels"):
+        proxy_gen.generate_proxy_bytes(source)
+
+
+@pytest.mark.parametrize("ext", sorted(RASTER) + [".heic"])
+def test_every_format_is_measured_before_it_is_decoded(tmp_path, monkeypatch, ext):
+    from src.processing.proxy import proxy_gen
+
+    source = tmp_path / f"photo{ext}"
+    source.write_bytes(HEIC.read_bytes() if ext == ".heic" else encoded(RASTER[ext]))
+    monkeypatch.setattr(proxy_gen, "MAX_PIXELS", 1000)
+
+    with pytest.raises(proxy_gen.TooLarge):
+        proxy_gen.generate_proxy_bytes(source)
+
+
+def test_a_raws_preview_over_max_pixels_is_passed_over_for_the_raw_itself(tmp_path, monkeypatch):
+    from src.processing.proxy import proxy_gen
+
+    source = tmp_path / "IMG_0004.dng"
+    source.write_bytes(dng((640, 480), preview=(2100, 1400)))
+    monkeypatch.setattr(proxy_gen, "MAX_PIXELS", 1_000_000)  # the sensor's 0.3 MP fits; its 2.9 MP preview doesn't
+
+    proxy, w, h = proxy_gen.generate_proxy_bytes(source)
+
+    assert (w, h) == (640, 480) and proxy_size(proxy) == (640, 480), "demosaiced, not the preview"
+
+
+def test_a_raw_over_max_pixels_is_refused_before_it_is_demosaiced(tmp_path, monkeypatch):
+    from src.processing.proxy import proxy_gen
+
+    source = tmp_path / "IMG_0005.dng"
+    source.write_bytes(dng((640, 480)))
+    monkeypatch.setattr(proxy_gen, "MAX_PIXELS", 100_000)
+    monkeypatch.setattr(proxy_gen, "open_file", lambda *a, **k: pytest.fail("read again by libvips"))
+
+    with pytest.raises(proxy_gen.TooLarge, match="640×480"):
+        proxy_gen.generate_proxy_bytes(source)
 
 
 # ---------------------------------------------------------------------------

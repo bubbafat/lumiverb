@@ -51,3 +51,30 @@ def test_parse_taken_at_missing() -> None:
     from src.processing.workers.exif_extract import parse_taken_at
 
     assert parse_taken_at({}) is None
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("name", ["two\nlines.jpg", "a\rreturn.jpg", "tab\there.jpg"])
+def test_a_path_with_a_control_character_is_never_handed_to_exiftool(tmp_path, monkeypatch, name) -> None:
+    # pyexiftool sends exiftool its paths a line each: a line break in one would be more of exiftool's arguments.
+    import exiftool
+
+    from src.processing.workers.exif_extract import extract_exif, extract_exif_many
+
+    good, odd = tmp_path / "good.jpg", tmp_path / "folder" / name
+    odd.parent.mkdir()
+    for path in (good, odd):
+        path.write_bytes(b"not a picture")
+    sent: list[str] = []
+
+    def get_tags(self, files, tags=None, params=None):
+        sent.extend([files] if isinstance(files, str) else files)
+        return [{"SourceFile": f} for f in ([files] if isinstance(files, str) else files)]
+
+    monkeypatch.setattr(exiftool.ExifToolHelper, "get_tags", get_tags)
+    monkeypatch.setattr(exiftool.ExifToolHelper, "run", lambda self: None)
+    monkeypatch.setattr(exiftool.ExifToolHelper, "terminate", lambda self, **kw: None)
+
+    assert set(extract_exif_many([good, odd])) == {str(good)}
+    assert extract_exif(odd) == {}
+    assert sent == [str(good)]
