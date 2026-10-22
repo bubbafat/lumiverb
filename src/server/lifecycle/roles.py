@@ -12,7 +12,8 @@ everything (deploy-api.sh). Now a Mac's does too:
   backups and restores (as Linux's role does them: backups.py restores with
   --no-owner, and `vector` comes with template1).
 - The superuser stays only for what needs one: making that role and keeping
-  its password the env file's, `vector` in template1 and in each database,
+  its password the env file's (sent to PostgreSQL as its SCRAM verifier,
+  never itself: verifier), `vector` in template1 and in each database,
   and handing over what it owned (ensure_app_role). Only `lumiverb-server run`
   has its URL (SUPERUSER_URL): never the API, the scheduler or anything they
   start.
@@ -32,6 +33,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
+from psycopg2.extensions import encrypt_password
 from sqlalchemy import create_engine, make_url, text
 
 logger = logging.getLogger(__name__)
@@ -145,9 +147,19 @@ def _autocommit(url: str):
     return create_engine(url, isolation_level="AUTOCOMMIT")
 
 
+def verifier(conn, role: str, password: str) -> str:
+    """The password as PostgreSQL keeps it, a SCRAM-SHA-256 verifier, made
+    here by libpq (psycopg2's encrypt_password, with the server's iteration
+    count from conn, a SQLAlchemy connection to it). A statement setting a
+    password is sent this, never the password: PostgreSQL logs statements
+    (log_statement ddl or all) and shows each in pg_stat_activity while it
+    runs."""
+    return encrypt_password(password, role, conn.connection.dbapi_connection, "scram-sha-256")
+
+
 def _role(superuser_url: str, role: str, password: str) -> bool:
     """The role made, or put right: LOGIN and CREATEDB only, the password
-    given. True when it was made."""
+    given (sent as its verifier). True when it was made."""
     engine = _autocommit(make_url(superuser_url).set(database="postgres"))
     try:
         with engine.connect() as conn:
@@ -155,8 +167,9 @@ def _role(superuser_url: str, role: str, password: str) -> bool:
             verb = "ALTER" if exists else "CREATE"
             statement = conn.execute(text(
                 f"SELECT format('{verb} ROLE %I LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION NOBYPASSRLS"
-                " PASSWORD %L', CAST(:r AS text), CAST(:p AS text))"), {"r": role, "p": password}).scalar()
-            conn.execute(text(statement))
+                " PASSWORD %L', CAST(:r AS text), CAST(:v AS text))"),
+                {"r": role, "v": verifier(conn, role, password)}).scalar()
+            conn.exec_driver_sql(statement)  # as it is: text() would read the verifier's ":<key>" as a parameter
             return not exists
     finally:
         engine.dispose()

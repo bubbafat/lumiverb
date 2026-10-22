@@ -50,6 +50,7 @@ TENANT_NAME="Lumiverb"
 DATA_DIR_OVERRIDE=""
 VISION_API_URL=""
 VISION_API_KEY=""
+VISION_API_KEY_FILE=""
 API_LISTEN_HOST=""
 API_ALLOW_FROM=""
 APP_HOST=""
@@ -71,7 +72,9 @@ while [[ $# -gt 0 ]]; do
     --tenant)           TENANT_NAME="${2:?Missing value for --tenant}"; shift 2 ;;
     --data-dir)         DATA_DIR_OVERRIDE="${2:?Missing value for --data-dir}"; shift 2 ;;
     --vision-api-url)   VISION_API_URL="${2:?Missing value for --vision-api-url}"; shift 2 ;;
-    --vision-api-key)   VISION_API_KEY="${2:?Missing value for --vision-api-key}"; shift 2 ;;
+    --vision-api-key)   VISION_API_KEY="${2:?Missing value for --vision-api-key}"; shift 2
+                        warn "--vision-api-key puts the key on this command's line, which every local user can see (ps) while the install runs, and in your shell's history. Use --vision-api-key-file FILE or LUMIVERB_VISION_API_KEY instead, or leave it out to be asked for it." >&2 ;;
+    --vision-api-key-file) VISION_API_KEY_FILE="${2:?Missing value for --vision-api-key-file}"; shift 2 ;;
     --api-listen-host)  API_LISTEN_HOST="${2:?Missing value for --api-listen-host}"; shift 2 ;;
     --api-allow-from)   API_ALLOW_FROM="${2:?Missing value for --api-allow-from}"; shift 2 ;;
     --app-host)         APP_HOST="${2:?Missing value for --app-host}"; shift 2 ;;
@@ -86,7 +89,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)          DRY_RUN=true; shift ;;
     -h|--help)
       echo "Usage: $0 (--domain <FQDN> | --app-host <URL>) [--email <email>] [--tenant <name>] [--data-dir <path>]"
-      echo "          [--api-listen-host <ip>] [--api-allow-from <cidr>] [--vision-api-url <url>] [--vision-api-key <key>]"
+      echo "          [--api-listen-host <ip>] [--api-allow-from <cidr>] [--vision-api-url <url> [--vision-api-key-file <file>]]"
       echo "          [--pg-port <port>] [--pg-version <major>] [--api-port <port>]"
       echo "          [--no-firewall | --firewall] [--worker] [--root-map <server-prefix>=<local-prefix>]... [--exposure demo]"
       echo "          [--repo <url>] [--branch <ref>] [--dry-run]"
@@ -98,6 +101,11 @@ while [[ $# -gt 0 ]]; do
       echo "  --root-map       Where a library root prefix is on this machine, e.g. /Volumes/media-01=/mnt/media-01"
       echo "  --exposure demo  From the start, answer from anywhere but this machine only what a demo's visitors"
       echo "                   call (docs/demo-server.md); remembered"
+      echo "  --vision-api-url The first account's AI machine doing vision (made with the account, on the first run)"
+      echo "  --vision-api-key-file  Its key, the file's first line. Or LUMIVERB_VISION_API_KEY (sudo"
+      echo "                   --preserve-env=LUMIVERB_VISION_API_KEY), or typed when asked, on a terminal."
+      echo "                   (--vision-api-key <key> still works, warned against: a command's arguments are"
+      echo "                   every local user's to see.)"
       echo "  --dry-run        Print the settings this run would use (flags, else values remembered from"
       echo "                   an earlier run, else defaults) and stop. Changes nothing."
       exit 0
@@ -115,6 +123,7 @@ fi
 for map in "${ROOT_MAPS[@]}"; do
   [[ "$map" == /*=/* ]] || fail "--root-map takes <server-prefix>=<local-prefix>, both absolute: $map"
 done
+[[ -z "$VISION_API_KEY" || -z "$VISION_API_KEY_FILE" ]] || fail "Give --vision-api-key-file or --vision-api-key, not both"
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -124,10 +133,18 @@ CONF_DIR="${LUMIVERB_CONF_DIR:-/etc/lumiverb}"
 BACKUP_DIR="/var/backups/lumiverb"
 ENV_FILE="${CONF_DIR}/env"
 SVC_USER="lumiverb"
+SVC_HOME="/var/lib/lumiverb"
 PG_USER="app"
 PG_DB="control_plane"
 UV_VERSION="0.7.12"
 UV_BIN="/usr/local/bin/uv"
+
+# The service user's CLI config: the first account is made only while it holds no key (step 12). Read as that user:
+# root opens nothing in its home.
+CLI_CONFIG="${SVC_HOME}/.lumiverb/config.json"
+account_made() {
+  id -u "$SVC_USER" >/dev/null 2>&1 && sudo -u "${SVC_USER}" grep -qs '"api_key": *"[^"]' -- "$CLI_CONFIG"
+}
 
 # What root runs as the service user reads none of that user's own settings: git's (~/.gitconfig, which can name
 # hooks and an fsmonitor to run), npm's (~/.npmrc) and uv's (~/.config/uv/uv.toml). They're the service user's to
@@ -217,6 +234,29 @@ if [[ "$DRY_RUN" == "true" ]]; then
 fi
 
 [[ "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"
+
+# ---------------------------------------------------------------------------
+# The first account's vision key, never an argument
+# ---------------------------------------------------------------------------
+# The key of the AI machine --vision-api-url names, used once, when the first account is made (step 12). A command's
+# arguments are every local user's to see (ps) while it runs, and stay in shell history: the key comes from a file
+# (--vision-api-key-file, its first line), from LUMIVERB_VISION_API_KEY, or typed when asked, on a terminal, now,
+# before the long steps. (--vision-api-key still works, said against as it's read.)
+if [[ -n "$VISION_API_KEY_FILE" ]]; then
+  [[ -r "$VISION_API_KEY_FILE" && ! -d "$VISION_API_KEY_FILE" ]] \
+    || fail "Can't read ${VISION_API_KEY_FILE} (--vision-api-key-file)"
+  IFS= read -r VISION_API_KEY < "$VISION_API_KEY_FILE" || true
+  VISION_API_KEY="${VISION_API_KEY%$'\r'}"
+  [[ -n "$VISION_API_KEY" ]] || fail "${VISION_API_KEY_FILE} (--vision-api-key-file) has no key on its first line"
+fi
+VISION_API_KEY="${VISION_API_KEY:-${LUMIVERB_VISION_API_KEY:-}}"
+unset LUMIVERB_VISION_API_KEY  # nothing this starts gets it
+if [[ -n "$VISION_API_URL" || -n "$VISION_API_KEY" ]] && account_made; then
+  warn "The first account is made already, and --vision-api-url and its key are only for making it: add the machine in Settings › AI"
+elif [[ -n "$VISION_API_URL" && -z "$VISION_API_KEY" && -t 0 ]]; then
+  read -rsp "The key for ${VISION_API_URL} (not shown; Enter for none): " VISION_API_KEY || true
+  echo
+fi
 
 # ---------------------------------------------------------------------------
 # Before anything's made: where the data goes, and memory
@@ -317,9 +357,10 @@ if [[ ! -d "/etc/postgresql/${PG_VERSION}/main" ]]; then
   echo "create_main_cluster = false" > /etc/postgresql-common/createcluster.d/lumiverb.conf
 fi
 
+# python3-psycopg2: libpq's own SCRAM verifier of the app role's password, before Lumiverb's venv exists (step 4).
 apt-get install -y -qq \
   "postgresql-${PG_VERSION}" "postgresql-${PG_VERSION}-pgvector" \
-  git build-essential python3-dev
+  git build-essential python3-dev python3-psycopg2
 [[ "$NO_FIREWALL" == "true" ]] || apt-get install -y -qq ufw
 
 # HEIC, an iPhone's photos: libvips reads them with libheif, whose HEVC decoder is a package of its own from
@@ -379,7 +420,6 @@ ok "uv $($UV_BIN --version)"
 # ---------------------------------------------------------------------------
 step "Creating service user and directories"
 
-SVC_HOME="/var/lib/lumiverb"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home "$SVC_HOME" "$SVC_USER"
 
 mkdir -p "$SVC_HOME" "$CONF_DIR" "$BACKUP_DIR"
@@ -443,10 +483,27 @@ for i in {1..15}; do
   sleep 1
 done
 
-su - postgres -c "${PSQL} -tc \"SELECT 1 FROM pg_roles WHERE rolname='${PG_USER}'\"" | grep -q 1 \
-  || su - postgres -c "${PSQL} -c \"CREATE USER ${PG_USER} WITH PASSWORD '${PG_PASS}' CREATEDB\""
+# The app role, made or put right, its password the one in .pg_password. PostgreSQL is sent libpq's SCRAM verifier of
+# it, made here (psycopg2's encrypt_password), never the password: a statement holding it would be in PostgreSQL's
+# log (log_statement) and in pg_stat_activity while it ran, and psql -c would have it on its command line, which every
+# local user sees. Python has it on its stdin, and connects as postgres over the local socket, as psql does.
+APP_ROLE_PY='
+import sys
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extensions import encrypt_password
 
-su - postgres -c "${PSQL} -c \"ALTER USER ${PG_USER} WITH PASSWORD '${PG_PASS}' CREATEDB\""
+role, password = sys.argv[1], sys.stdin.read()
+conn = psycopg2.connect(dbname="postgres")
+conn.autocommit = True
+with conn.cursor() as cur:
+    cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
+    verb = "ALTER" if cur.fetchone() else "CREATE"
+    cur.execute(sql.SQL(verb + " USER {} CREATEDB PASSWORD {}").format(
+        sql.Identifier(role), sql.Literal(encrypt_password(password, role, conn, "scram-sha-256"))))
+conn.close()
+'
+printf '%s' "$PG_PASS" | sudo -u postgres env PGPORT="$PG_PORT" python3 -I -c "$APP_ROLE_PY" "$PG_USER"
 
 su - postgres -c "${PSQL} -tc \"SELECT 1 FROM pg_database WHERE datname='${PG_DB}'\"" | grep -q 1 \
   || su - postgres -c "${PSQL} -c \"CREATE DATABASE ${PG_DB} OWNER ${PG_USER}\""
@@ -829,9 +886,8 @@ systemctl status --no-pager lumiverb-api || true
 # ---------------------------------------------------------------------------
 # 12. Provision default tenant (first run only)
 # ---------------------------------------------------------------------------
-# The service user's own file, read and written only as that user: root opens nothing in its home.
-CLI_CONFIG="${SVC_HOME}/.lumiverb/config.json"
-if sudo -u "${SVC_USER}" grep -qs '"api_key": *"[^"]' -- "$CLI_CONFIG"; then
+# The service user's own file (CLI_CONFIG), read and written only as that user: root opens nothing in its home.
+if account_made; then
   step "Tenant"
   ok "Already provisioned (${CLI_CONFIG} has a key); not creating another"
   # Keep the service user's CLI pointed at this install's API port (-I: no Python of that user's own on the way).
@@ -846,14 +902,17 @@ else
 step "Provisioning tenant: ${TENANT_NAME}"
 
 ADMIN_KEY="$(grep -m1 '^ADMIN_KEY=' "${ENV_FILE}" | cut -d= -f2-)"
-TENANT_BODY="{\"name\": \"${TENANT_NAME}\", \"email\": \"${CERTBOT_EMAIL}\""
-if [[ -n "$VISION_API_URL" ]]; then
-  TENANT_BODY="${TENANT_BODY}, \"vision_api_url\": \"${VISION_API_URL}\""
-fi
-if [[ -n "$VISION_API_KEY" ]]; then
-  TENANT_BODY="${TENANT_BODY}, \"vision_api_key\": \"${VISION_API_KEY}\""
-fi
-TENANT_BODY="${TENANT_BODY}}"
+# JSON made by Python, each value only what it is whatever it holds, handed over in its environment (the vision key
+# never an argument).
+TENANT_BODY="$(BODY_NAME="$TENANT_NAME" BODY_EMAIL="$CERTBOT_EMAIL" BODY_VISION_URL="$VISION_API_URL" \
+  BODY_VISION_KEY="$VISION_API_KEY" python3 -I -c '
+import json, os
+body = {"name": os.environ["BODY_NAME"], "email": os.environ["BODY_EMAIL"]}
+if os.environ["BODY_VISION_URL"]:
+    body["vision_api_url"] = os.environ["BODY_VISION_URL"]
+if os.environ["BODY_VISION_KEY"]:
+    body["vision_api_key"] = os.environ["BODY_VISION_KEY"]
+print(json.dumps(body))')"
 
 # The install's key reaches curl through a pipe, and the body (perhaps a vision key) on its stdin: neither is ever
 # an argument, which every local user can see.

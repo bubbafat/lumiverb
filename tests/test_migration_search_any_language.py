@@ -9,12 +9,15 @@ down, nothing synced. Runs Alembic against throwaway databases only.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlmodel import Session
 from testcontainers.postgres import PostgresContainer
 
+from tests.app_role import make_app_role
 from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2
 from tests.test_migration_lineage import _alembic
@@ -35,11 +38,12 @@ FOUND = {
 SAID = "Zürich: John Wayne Airport-Orange County"
 
 
-def _owners_database(pg) -> str:
-    """A database owned by an ordinary role, vector made in it by the superuser (as Lumiverb's install does)."""
+def _owners_database(pg, tmp: Path) -> str:
+    """A database owned by an ordinary role (made by deploy-api.sh's own lines), vector made in it by the superuser
+    (as Lumiverb's install does)."""
+    make_app_role(_ensure_psycopg2(pg.get_connection_url()), "acct_owner", "owner", tmp)
     admin = create_engine(_ensure_psycopg2(pg.get_connection_url()), isolation_level="AUTOCOMMIT")
     with admin.connect() as conn:
-        conn.execute(text("CREATE ROLE acct_owner LOGIN PASSWORD 'owner' NOSUPERUSER CREATEDB"))
         conn.execute(text("CREATE DATABASE acct OWNER acct_owner"))
     admin.dispose()
     url = make_url(_ensure_psycopg2(pg.get_connection_url()))
@@ -79,9 +83,9 @@ def _found(url: str, config: str) -> dict[str, tuple[int, int]]:
                 for column, sql in FOUND.items()}
 
 
-def test_an_accounts_own_role_searches_any_language_after_and_english_before() -> None:
+def test_an_accounts_own_role_searches_any_language_after_and_english_before(tmp_path: Path) -> None:
     with PostgresContainer(PG_IMAGE) as pg:
-        url = _owners_database(pg)
+        url = _owners_database(pg, tmp_path)
         _alembic(url, "upgrade", BEFORE)
         _seed(url)
         assert set(_found(url, "english").values()) == {(0, 0)}, "before: neither, as English reads them"
