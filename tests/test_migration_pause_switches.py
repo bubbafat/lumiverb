@@ -40,10 +40,11 @@ def test_an_old_pause_all_becomes_every_switch_paused() -> None:
                               " VALUES ('all', 'usr_1', now()), ('vision', 'usr_2', now())"))
         _alembic(url, "upgrade", AFTER)
         rows = _rows(engine)
-        # no 'all' left; producers added since (capture, location, video_faces, place) have no row of that
-        # time; Scans was a switch then (each library's since aec154348364)
+        # no 'all' left; producers added since (capture, location, video_faces, place, and by their names a
+        # video's description and Live Photos) have no row of that time; Scans was a switch then (each
+        # library's since aec154348364)
         assert set(rows) == {*(old_id.get(t, t) for t in pause_targets()), "scans"} - {
-            "capture", "location", "video_faces", "place"}
+            "capture", "location", "video_faces", "place", "lumiverb.video.description", "lumiverb.live_photo"}
         assert rows["vision"] == "usr_2" and rows["scans"] == "usr_1" and rows["upkeep"] == "usr_1"
         _alembic(url, "downgrade", BEFORE)  # down: the rows stay, as switches
         assert "all" not in _rows(engine)
