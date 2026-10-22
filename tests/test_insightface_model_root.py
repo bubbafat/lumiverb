@@ -7,6 +7,7 @@ already in ~/.insightface is copied in, not downloaded again, and left there."""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -93,7 +94,28 @@ def test_the_provider_tells_insightface_where(home, tmp_path, monkeypatch):
             pass
 
     monkeypatch.setattr(insightface.app, "FaceAnalysis", FakeAnalysis)
+    _no_matplotlib_setting(monkeypatch)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "data" / "cache"))
     faces.InsightFaceProvider().ensure_loaded()
     root = tmp_path / "data" / "models" / "insightface"
     assert told == {"name": "buffalo_l", "root": str(root)}
     assert (root / "models" / "buffalo_l" / "det_10g.onnx").is_file(), "copied in before InsightFace looks"
+    assert os.environ["MPLCONFIGDIR"] == str(tmp_path / "data" / "cache" / "lumiverb" / "matplotlib")
+
+
+def _no_matplotlib_setting(monkeypatch) -> None:
+    """MPLCONFIGDIR unset, and unset again after the test whatever the code sets."""
+    monkeypatch.setenv("MPLCONFIGDIR", "")
+    monkeypatch.delenv("MPLCONFIGDIR")
+
+
+def test_matplotlibs_settings_folder_is_beside_the_caches_never_the_home_folder(home, tmp_path, monkeypatch):
+    # InsightFace imports matplotlib, which makes itself a settings folder as it's imported: a Linux install's
+    # home folder is read-only to the scheduler and the API.
+    _no_matplotlib_setting(monkeypatch)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "data" / "cache"))
+    faces.matplotlib_settings_beside_the_caches()
+    assert os.environ["MPLCONFIGDIR"] == str(tmp_path / "data" / "cache" / "lumiverb" / "matplotlib")
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "chosen"))
+    faces.matplotlib_settings_beside_the_caches()
+    assert os.environ["MPLCONFIGDIR"] == str(tmp_path / "chosen"), "an operator's stays"

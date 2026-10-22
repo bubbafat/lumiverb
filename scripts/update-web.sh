@@ -37,22 +37,28 @@ SVC_USER="lumiverb"
 [[ "$(id -u)" -eq 0 ]] || fail "Run as root"
 [[ -d "${APP_DIR}/.git" ]] || fail "${APP_DIR} is not a git repo — run deploy-web.sh first"
 
-# Repo is owned by $SVC_USER; tell git it's safe for root.
-git config --system --replace-all safe.directory "$APP_DIR" "$APP_DIR" 2>/dev/null \
-  || git config --global --add safe.directory "$APP_DIR"
+# What root runs as the service user reads none of that user's own settings: git's (~/.gitconfig, which can name
+# hooks and an fsmonitor to run) and npm's (~/.npmrc). They're the service user's to write, not root's to follow.
+# Its home and caches stay as they were.
+as_svc() { sudo -u "$SVC_USER" env GIT_CONFIG_GLOBAL=/dev/null npm_config_userconfig=/dev/null "$@"; }
+
+# The repo is the service user's, and git runs in it only as that user. Earlier versions marked it safe for root
+# (safe.directory), which let its own settings (.git/config) steer a git root ran there: unmarked.
+git config --system --fixed-value --unset-all safe.directory "$APP_DIR" 2>/dev/null || true
+git config --global --fixed-value --unset-all safe.directory "$APP_DIR" 2>/dev/null || true
 
 cd "$APP_DIR"
 
 # ---------------------------------------------------------------------------
 step "Pulling latest code"
-sudo -u "$SVC_USER" git fetch --all --prune
+as_svc git fetch --all --prune
 
-if sudo -u "$SVC_USER" git symbolic-ref -q HEAD >/dev/null 2>&1; then
-  sudo -u "$SVC_USER" git pull
+if as_svc git symbolic-ref -q HEAD >/dev/null 2>&1; then
+  as_svc git pull
 else
   warn "Detached HEAD detected — skipping git pull"
 fi
-ok "$(sudo -u "$SVC_USER" git log --oneline -1)"
+ok "$(as_svc git log --oneline -1)"
 
 # bash keeps running the copy of this script it started with, and git pull
 # wrote a new one: run that, so steps this update adds apply now.
@@ -64,8 +70,8 @@ fi
 # ---------------------------------------------------------------------------
 step "Rebuilding web UI"
 cd "$APP_DIR/src/ui/web"
-sudo -u "$SVC_USER" npm ci --no-audit --no-fund
-sudo -u "$SVC_USER" npm run build
+as_svc npm ci --no-audit --no-fund
+as_svc npm run build
 ok "Web UI built"
 cd "$APP_DIR"
 

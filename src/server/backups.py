@@ -52,6 +52,7 @@ from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.server import drives, write_check
+from src.shared.secrets_env import without_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +220,7 @@ def _libpq(url: str) -> tuple[list[str], dict[str, str]]:
         args += ["--port", str(target.port)]
     if target.username:
         args += ["--username", target.username]
-    env = {**os.environ}
+    env = without_secrets(os.environ)  # the API's other secrets stay out of what it starts
     if target.password:
         env["PGPASSWORD"] = str(target.password)
     return args, env

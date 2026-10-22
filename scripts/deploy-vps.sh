@@ -102,10 +102,13 @@ fi
 if [[ -z "$SCRIPT_DIR" ]]; then
   step "Bootstrapping repo for script access"
   if [[ -d "${APP_DIR}/.git" ]]; then
+    # git runs as whoever owns the checkout (the service user, once deploy-api.sh has run), without that user's own
+    # git settings: never as root in a checkout another user can change.
+    OWNER="$(stat -c %U "$APP_DIR")"
     cd "$APP_DIR"
-    git fetch --all --prune
-    git checkout "$BRANCH"
-    git pull origin "$BRANCH"
+    sudo -u "$OWNER" env GIT_CONFIG_GLOBAL=/dev/null git fetch --all --prune
+    sudo -u "$OWNER" env GIT_CONFIG_GLOBAL=/dev/null git checkout "$BRANCH"
+    sudo -u "$OWNER" env GIT_CONFIG_GLOBAL=/dev/null git pull origin "$BRANCH"
   else
     apt-get update -qq && apt-get install -y -qq git
     git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"

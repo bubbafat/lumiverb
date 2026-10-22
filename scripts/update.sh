@@ -55,8 +55,10 @@ done
 [[ -d "$APP_DIR/.git" ]] || fail "$APP_DIR isn't a git checkout; install with deploy-api.sh first"
 
 # The repo belongs to the service user: git runs as it. Never on our stdin,
-# which is the script itself when it's piped in (`... | sudo bash -s`).
-as_svc() { sudo -u "$SVC_USER" "$@" </dev/null; }
+# which is the script itself when it's piped in (`... | sudo bash -s`), and
+# never with that user's own git settings (~/.gitconfig, which can name hooks
+# and an fsmonitor to run): they're its to write, not root's to follow.
+as_svc() { sudo -u "$SVC_USER" env GIT_CONFIG_GLOBAL=/dev/null "$@" </dev/null; }
 
 # The first run takes the lock and starts the log; the pulled copy it hands
 # over to (below) inherits both.
@@ -196,7 +198,7 @@ for unit in lumiverb-api lumiverb-scheduler lumiverb-plugins nginx; do
   echo "  ${unit}: ${state}"
   [[ "$state" == active ]] || DOWN+=("$unit")
 done
-API_PORT="$(grep '^API_PORT=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+API_PORT="$(grep -m1 '^API_PORT=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
 API_PORT="${API_PORT:-8000}"
 if curl -sf --max-time 10 "http://127.0.0.1:${API_PORT}/health" >/dev/null; then
   ok "API answers on port ${API_PORT}"

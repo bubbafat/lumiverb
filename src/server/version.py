@@ -9,9 +9,12 @@ checkout (a Linux install's /opt/lumiverb, a development one) says what
 from __future__ import annotations
 
 import functools
+import os
 import re
 import subprocess
 from pathlib import Path
+
+from src.shared.secrets_env import without_secrets
 
 # The install's top: the keg's libexec, or the checkout.
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +30,7 @@ def running() -> str:
             result = subprocess.run(
                 # A service user reads a checkout it doesn't own (Linux: root's /opt/lumiverb).
                 ["git", "-c", "safe.directory=*", "-C", str(ROOT), "describe", "--tags", "--always", "--dirty"],
-                capture_output=True, text=True, timeout=10, check=False,
+                capture_output=True, text=True, timeout=10, check=False, env=without_secrets(os.environ),
             )
         except (OSError, subprocess.SubprocessError):
             return "unknown"

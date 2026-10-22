@@ -1127,8 +1127,12 @@ def entry() -> None:
     grace save nothing more (and their threads would otherwise be waited
     on at exit, until systemd's kill). Both ways in (python -m
     src.server.scheduler and the lumiverb-scheduler script) come here."""
+    from src.shared import secrets_env
     from src.shared.logging_config import escape_log_lines
 
+    # Its environment (the env file's secrets, as it started) and memory closed to the other processes of its
+    # user, a plug-in's among them (__main__ does it before importing this, for the unit's way in).
+    secrets_env.not_dumpable()
     escape_log_lines()
     code = 1
     try:

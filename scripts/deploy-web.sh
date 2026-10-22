@@ -203,14 +203,20 @@ ok "User $SVC_USER"
 # ---------------------------------------------------------------------------
 step "Deploying application to ${APP_DIR}"
 
+# What root runs as the service user reads none of that user's own settings: git's (~/.gitconfig, which can name
+# hooks and an fsmonitor to run) and npm's (~/.npmrc). They're the service user's to write, not root's to follow.
+# Its home and caches stay as they were.
+as_svc() { sudo -u "$SVC_USER" env GIT_CONFIG_GLOBAL=/dev/null npm_config_userconfig=/dev/null "$@"; }
+
 if [[ -d "${APP_DIR}/.git" ]]; then
-  # Repo is owned by $SVC_USER; tell git it's safe for root.
-  git config --system --replace-all safe.directory "$APP_DIR" "$APP_DIR" 2>/dev/null \
-    || git config --global --add safe.directory "$APP_DIR"
+  # The repo is the service user's, and git runs in it only as that user. Earlier versions marked it safe for root
+  # (safe.directory), which let its own settings (.git/config) steer a git root ran there: unmarked.
+  git config --system --fixed-value --unset-all safe.directory "$APP_DIR" 2>/dev/null || true
+  git config --global --fixed-value --unset-all safe.directory "$APP_DIR" 2>/dev/null || true
   cd "$APP_DIR"
-  sudo -u "$SVC_USER" git fetch --all --prune
-  sudo -u "$SVC_USER" git checkout "$BRANCH"
-  sudo -u "$SVC_USER" git pull origin "$BRANCH"
+  as_svc git fetch --all --prune
+  as_svc git checkout "$BRANCH"
+  as_svc git pull origin "$BRANCH"
   ok "Updated existing checkout"
 else
   git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
@@ -226,8 +232,8 @@ cd "$APP_DIR"
 step "Building web UI"
 
 cd "$APP_DIR/src/ui/web"
-sudo -u "$SVC_USER" npm ci --no-audit --no-fund
-sudo -u "$SVC_USER" npm run build
+as_svc npm ci --no-audit --no-fund
+as_svc npm run build
 ok "Web UI built"
 cd "$APP_DIR"
 

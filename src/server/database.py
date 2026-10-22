@@ -14,6 +14,7 @@ from sqlalchemy.pool import NullPool
 from sqlmodel import Session
 
 from src.server.config import get_settings
+from src.shared.secrets_env import without_secrets
 
 # Module-level cache: URL -> Engine. Avoid creating a new engine per request.
 _engines: dict[str, Engine] = {}
@@ -178,7 +179,7 @@ def provision_tenant_database(tenant_id: str) -> None:
     tenant_engine.dispose()
 
     # Run tenant migrations via subprocess (same pattern as migration test)
-    env = os.environ.copy()
+    env = without_secrets(os.environ)  # its database's URL alone of the API's secrets
     env["ALEMBIC_TENANT_URL"] = tenant_url
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     result = subprocess.run(

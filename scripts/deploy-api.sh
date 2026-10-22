@@ -129,6 +129,34 @@ PG_DB="control_plane"
 UV_VERSION="0.7.12"
 UV_BIN="/usr/local/bin/uv"
 
+# What root runs as the service user reads none of that user's own settings: git's (~/.gitconfig, which can name
+# hooks and an fsmonitor to run), npm's (~/.npmrc) and uv's (~/.config/uv/uv.toml). They're the service user's to
+# write, and what they name would run outside the services' sandbox. Its home and caches stay as they were.
+SVC_ENV=(env GIT_CONFIG_GLOBAL=/dev/null npm_config_userconfig=/dev/null UV_NO_CONFIG=1)
+as_svc() { sudo -u "$SVC_USER" "${SVC_ENV[@]}" "$@"; }
+
+# A folder in DATA_DIR for the service user, made and handed over by root. The service user owns DATA_DIR, so it
+# could have put a symbolic link where the folder goes, which mkdir and chown would follow: any link stops it
+# before a folder is made or handed over. chown -h changes the folder itself, never what a link put there since
+# points at. Held to the same text in deploy-api.sh and update-api.sh.
+svc_folder() {
+  local dir
+  for dir in "$@"; do
+    [[ ! -L "$dir" ]] || fail "${dir} is a symbolic link where Lumiverb keeps a folder: remove the link (sudo rm ${dir}), then run this again"
+  done
+  for dir in "$@"; do
+    mkdir -p -- "$dir"
+    chown -h "$SVC_USER":"$SVC_USER" -- "$dir"
+  done
+}
+
+# DATA_DIR, which goes into units and what root does: one line, a full path, nothing a unit file or a shell would
+# read as more than a path (empty: there's none). Held to the same text in deploy-api.sh and update-api.sh.
+data_dir_shape() {
+  [[ -z "$1" ]] || [[ "$1" == /* && "$1" != *[[:space:][:cntrl:]\"\'\`\$%\;\\]* ]] \
+    || fail "DATA_DIR must be one full path, without spaces, quotes or any of \$ % ; \\: $(printf '%q' "$1")"
+}
+
 # The env file is root's (600, in a 750 folder): read as anyone else it
 # looks absent, and the defaults would stand in for what's remembered.
 if [[ -e "$ENV_FILE" && ! -r "$ENV_FILE" ]] || [[ -d "$CONF_DIR" && ! -x "$CONF_DIR" ]]; then
@@ -148,6 +176,7 @@ APP_HOST="${APP_HOST:-https://${DOMAIN}}"
 # A rerun without --data-dir must not move storage back to the default:
 # every preview and artifact would 404.
 DATA_DIR="${DATA_DIR_OVERRIDE:-$(_existing_val DATA_DIR)}"; DATA_DIR="${DATA_DIR:-/var/lib/lumiverb}"
+data_dir_shape "$DATA_DIR"
 BRANCH="${BRANCH:-$(_existing_val BRANCH)}";             BRANCH="${BRANCH:-main}"
 NO_FIREWALL="${NO_FIREWALL:-$(_existing_val NO_FIREWALL)}"
 [[ "$NO_FIREWALL" == "true" ]] || NO_FIREWALL=false
@@ -326,17 +355,22 @@ step "Installing uv"
 
 if [[ ! -x "$UV_BIN" ]]; then
   UV_ARCHIVE="uv-${RUST_TARGET}.tar.gz"
+  # Downloaded into a folder of root's own, never to a fixed name in /tmp, where another user could have put a
+  # file or a link first; gone when the install ends, however it ends.
+  UV_TMP="$(mktemp -d)"
+  trap 'rm -rf -- "$UV_TMP"' EXIT
   curl -LsSf "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_ARCHIVE}" \
-    -o /tmp/uv.tar.gz
+    -o "$UV_TMP/uv.tar.gz"
   curl -LsSf "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_ARCHIVE}.sha256" \
-    -o /tmp/uv.sha256
-  EXPECTED_HASH="$(awk '{print $1}' /tmp/uv.sha256)"
-  ACTUAL_HASH="$(sha256sum /tmp/uv.tar.gz | awk '{print $1}')"
+    -o "$UV_TMP/uv.sha256"
+  EXPECTED_HASH="$(awk '{print $1}' "$UV_TMP/uv.sha256")"
+  ACTUAL_HASH="$(sha256sum "$UV_TMP/uv.tar.gz" | awk '{print $1}')"
   [[ "$EXPECTED_HASH" == "$ACTUAL_HASH" ]] || fail "uv checksum verification failed"
-  tar -xzf /tmp/uv.tar.gz -C /tmp
-  install -m 0755 "/tmp/uv-${RUST_TARGET}/uv" "$UV_BIN"
-  install -m 0755 "/tmp/uv-${RUST_TARGET}/uvx" /usr/local/bin/uvx
-  rm -rf /tmp/uv.tar.gz /tmp/uv.sha256 "/tmp/uv-${RUST_TARGET}"
+  tar -xzf "$UV_TMP/uv.tar.gz" -C "$UV_TMP"
+  install -m 0755 "$UV_TMP/uv-${RUST_TARGET}/uv" "$UV_BIN"
+  install -m 0755 "$UV_TMP/uv-${RUST_TARGET}/uvx" /usr/local/bin/uvx
+  rm -rf -- "$UV_TMP"
+  trap - EXIT
 fi
 ok "uv $($UV_BIN --version)"
 
@@ -348,10 +382,12 @@ step "Creating service user and directories"
 SVC_HOME="/var/lib/lumiverb"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home "$SVC_HOME" "$SVC_USER"
 
-mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp "$BACKUP_DIR"
-chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"
+mkdir -p "$SVC_HOME" "$CONF_DIR" "$BACKUP_DIR"
+chown -h "$SVC_USER":"$SVC_USER" "$SVC_HOME"
 chown root:"$SVC_USER" "$CONF_DIR"
 chmod 750 "$CONF_DIR"
+svc_folder "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp
+# -R changes links themselves, never what they point at, and never goes through one.
 chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
 
 ok "User $SVC_USER, dirs ready"
@@ -500,13 +536,15 @@ ok "Secrets generated, env written (API on ${API_LISTEN_HOST}:${API_PORT}, Postg
 step "Deploying application to ${APP_DIR}"
 
 if [[ -d "${APP_DIR}/.git" ]]; then
-  # The checkout belongs to $SVC_USER; tell git it's safe for root.
-  git config --system --replace-all safe.directory "$APP_DIR" "$APP_DIR" 2>/dev/null \
-    || git config --global --add safe.directory "$APP_DIR"
+  # The checkout belongs to $SVC_USER, and git runs in it only as that user: its own settings (.git/config: hooks,
+  # an fsmonitor) never steer a git of root's. Earlier versions marked it safe for root (safe.directory): unmarked.
+  git config --system --fixed-value --unset-all safe.directory "$APP_DIR" 2>/dev/null || true
+  git config --global --fixed-value --unset-all safe.directory "$APP_DIR" 2>/dev/null || true
+  chown -R "$SVC_USER":"$SVC_USER" "$APP_DIR"  # what root's git made there before, the service user's
   cd "$APP_DIR"
-  git fetch --all --prune
-  git checkout "$BRANCH"
-  git pull origin "$BRANCH"
+  as_svc git fetch --all --prune
+  as_svc git checkout "$BRANCH"
+  as_svc git pull origin "$BRANCH"
   ok "Updated existing checkout"
 else
   git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
@@ -523,7 +561,7 @@ step "Installing Python dependencies"
 
 EXTRAS=(--extra cli --extra embeddings --extra face_recognition)
 [[ "$WITH_WORKER" != "true" ]] || EXTRAS+=(--extra workers)
-sudo -u "$SVC_USER" "$UV_BIN" sync "${EXTRAS[@]}"
+as_svc "$UV_BIN" sync "${EXTRAS[@]}"
 ok "Python venv ready (${EXTRAS[*]})"
 
 # ---------------------------------------------------------------------------
@@ -577,7 +615,9 @@ Environment=PYTHONUNBUFFERED=1
 Environment=TMPDIR=${DATA_DIR}/tmp
 # PrivateTmp emptied /tmp on each start; do the same for uploads a killed API left.
 ExecStartPre=-/usr/bin/find ${DATA_DIR}/tmp -mindepth 1 -delete
-ExecStart=${APP_DIR}/.venv/bin/uvicorn src.server.api.main:app --host \${API_LISTEN_HOST} --port \${API_PORT} --workers 2
+# uvicorn, through python -m src.server.api: none of its processes, which hold this file's secrets, is dumpable,
+# so the other processes of its user, a plug-in's among them, can't read their environment or memory.
+ExecStart=${APP_DIR}/.venv/bin/python -m src.server.api src.server.api.main:app --host \${API_LISTEN_HOST} --port \${API_PORT} --workers 2
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65535
@@ -591,8 +631,9 @@ WantedBy=multi-user.target
 UNIT
 
 # All processing (ADR-016 phase 4): scans, previews, analysis copies, the
-# AI, in one ranked queue. Everything outside DATA_DIR and its home is
-# read-only to it, storage mounts included.
+# AI, in one ranked queue. Everything outside DATA_DIR is read-only to it,
+# storage mounts and its home included (nothing it runs writes there,
+# matplotlib's settings and CUDA's kernels included: both are on the data disk).
 cat > /etc/systemd/system/lumiverb-scheduler.service <<UNIT
 [Unit]
 Description=Lumiverb scheduler (all processing)
@@ -609,6 +650,8 @@ Environment=PYTHONUNBUFFERED=1
 Environment=HOME=${SVC_HOME}
 # Proxy caches go on the data disk, not the root disk with Postgres.
 Environment=XDG_CACHE_HOME=${DATA_DIR}/cache
+# CUDA's compiled kernels too, where a GPU needs them made (its home is read-only).
+Environment=CUDA_CACHE_PATH=${DATA_DIR}/cache/nvidia
 # Temp files too (Whisper's WAVs): PrivateTmp's /tmp can be RAM. Not the
 # API's tmp, which each API start empties; this one each scheduler start.
 Environment=TMPDIR=${DATA_DIR}/worker-tmp
@@ -625,18 +668,21 @@ LimitNOFILE=65535
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=${DATA_DIR} ${SVC_HOME}
+ReadWritePaths=${DATA_DIR}
 
 [Install]
 WantedBy=multi-user.target
 UNIT
 
 # Every plug-in the server admin installs (ADR-023), a process of its own:
-# the runner reads what's installed from the control database, and what it
-# starts gets none of the env file's settings, runs below the API and the
-# scheduler, and writes only its own folder (DATA_DIR/plugins).
-mkdir -p "$DATA_DIR"/plugins
-chown "$SVC_USER":"$SVC_USER" "$DATA_DIR"/plugins
+# the runner reads what's installed from the control database. It keeps only
+# the env file's database addresses and sealing key, and isn't dumpable
+# (src/shared/secrets_env.py); what it starts gets none of the env file's
+# settings and runs below the API and the scheduler. Each plug-in runs as the
+# service user: it can read what that user can (DATA_DIR's previews and
+# backups among them) and write DATA_DIR/plugins, every plug-in's folder
+# there (ADR-023's phase 4, confining it, is deferred).
+svc_folder "$DATA_DIR"/plugins
 cat > /etc/systemd/system/lumiverb-plugins.service <<UNIT
 [Unit]
 Description=Lumiverb plug-ins (each installed plug-in, a process of its own)
@@ -679,7 +725,8 @@ Type=oneshot
 User=${SVC_USER}
 Group=${SVC_USER}
 EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf --retry 12 --retry-delay 5 --retry-connrefused -X POST "http://127.0.0.1:\${API_PORT}/v1/upkeep?tenants=all" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+# The install's key reaches curl on its stdin (-H @-), never as an argument: every local user sees command lines.
+ExecStart=/bin/sh -c 'printf "Authorization: Bearer %%s\n" "\$\$ADMIN_KEY" | exec /usr/bin/curl -sf --retry 12 --retry-delay 5 --retry-connrefused -X POST "http://127.0.0.1:\$\${API_PORT}/v1/upkeep?tenants=all" -H @- -H "Content-Type: application/json"'
 TimeoutSec=120
 UNIT
 
@@ -705,7 +752,8 @@ Type=oneshot
 User=${SVC_USER}
 Group=${SVC_USER}
 EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf --retry 12 --retry-delay 5 --retry-connrefused -X POST "http://127.0.0.1:\${API_PORT}/v1/upkeep/cleanup?tenants=all&dry_run=false" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+# The install's key reaches curl on its stdin (-H @-), never as an argument: every local user sees command lines.
+ExecStart=/bin/sh -c 'printf "Authorization: Bearer %%s\n" "\$\$ADMIN_KEY" | exec /usr/bin/curl -sf --retry 12 --retry-delay 5 --retry-connrefused -X POST "http://127.0.0.1:\$\${API_PORT}/v1/upkeep/cleanup?tenants=all&dry_run=false" -H @- -H "Content-Type: application/json"'
 TimeoutSec=300
 UNIT
 
@@ -781,12 +829,13 @@ systemctl status --no-pager lumiverb-api || true
 # ---------------------------------------------------------------------------
 # 12. Provision default tenant (first run only)
 # ---------------------------------------------------------------------------
+# The service user's own file, read and written only as that user: root opens nothing in its home.
 CLI_CONFIG="${SVC_HOME}/.lumiverb/config.json"
-if [[ -f "$CLI_CONFIG" ]] && grep -q '"api_key": *"[^"]' "$CLI_CONFIG"; then
+if sudo -u "${SVC_USER}" grep -qs '"api_key": *"[^"]' -- "$CLI_CONFIG"; then
   step "Tenant"
   ok "Already provisioned (${CLI_CONFIG} has a key); not creating another"
-  # Keep the service user's CLI pointed at this install's API port.
-  sudo -u "${SVC_USER}" -H python3 - "$CLI_CONFIG" "$API_PORT" <<'PY'
+  # Keep the service user's CLI pointed at this install's API port (-I: no Python of that user's own on the way).
+  sudo -u "${SVC_USER}" -H python3 -I - "$CLI_CONFIG" "$API_PORT" <<'PY'
 import json, sys
 path, port = sys.argv[1], sys.argv[2]
 cfg = json.load(open(path))
@@ -796,7 +845,7 @@ PY
 else
 step "Provisioning tenant: ${TENANT_NAME}"
 
-ADMIN_KEY="$(grep '^ADMIN_KEY=' "${ENV_FILE}" | cut -d= -f2-)"
+ADMIN_KEY="$(grep -m1 '^ADMIN_KEY=' "${ENV_FILE}" | cut -d= -f2-)"
 TENANT_BODY="{\"name\": \"${TENANT_NAME}\", \"email\": \"${CERTBOT_EMAIL}\""
 if [[ -n "$VISION_API_URL" ]]; then
   TENANT_BODY="${TENANT_BODY}, \"vision_api_url\": \"${VISION_API_URL}\""
@@ -806,10 +855,12 @@ if [[ -n "$VISION_API_KEY" ]]; then
 fi
 TENANT_BODY="${TENANT_BODY}}"
 
-TENANT_RESPONSE="$(curl -sf -X POST http://127.0.0.1:${API_PORT}/v1/admin/tenants \
-  -H "Authorization: Bearer ${ADMIN_KEY}" \
+# The install's key reaches curl through a pipe, and the body (perhaps a vision key) on its stdin: neither is ever
+# an argument, which every local user can see.
+TENANT_RESPONSE="$(printf '%s' "$TENANT_BODY" | curl -sf -X POST "http://127.0.0.1:${API_PORT}/v1/admin/tenants" \
+  -H @<(printf 'Authorization: Bearer %s\n' "$ADMIN_KEY") \
   -H "Content-Type: application/json" \
-  -d "${TENANT_BODY}")" \
+  --data-binary @-)" \
   || fail "Tenant provisioning failed — check: journalctl -u lumiverb-api -n 50"
 
 TENANT_ID="$(echo "$TENANT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['tenant_id'])")"
@@ -817,9 +868,10 @@ TENANT_API_KEY="$(echo "$TENANT_RESPONSE" | python3 -c "import sys,json; print(j
 ok "Tenant ${TENANT_ID} provisioned"
 
 sudo -u "${SVC_USER}" mkdir -p "${SVC_HOME}/.lumiverb"
+# Readable by the service user alone (umask) from the start: it holds the account's key.
 echo "{\"api_url\": \"http://127.0.0.1:${API_PORT}\", \"api_key\": \"${TENANT_API_KEY}\"}" \
-  | sudo -u "${SVC_USER}" tee "$CLI_CONFIG" > /dev/null
-chmod 600 "$CLI_CONFIG"
+  | (umask 077 && sudo -u "${SVC_USER}" tee "$CLI_CONFIG" > /dev/null)
+sudo -u "${SVC_USER}" chmod 600 "$CLI_CONFIG"
 ok "CLI configured for tenant"
 fi
 
@@ -830,9 +882,12 @@ fi
 # config): what an earlier install put in the service user's CLI config is
 # carried over once, then each --root-map. The CLI maps them too, so
 # `lumiverb library list` as the service user shows where each library is.
+# The CLI config is read as the service user and handed over on stdin; only a single line of the type each
+# setting takes is carried.
 ROOT_MAP_ARGS=()
 for map in "${ROOT_MAPS[@]}"; do ROOT_MAP_ARGS+=(--root-map "$map"); done
-python3 "${APP_DIR}/scripts/scheduler-env.py" "$ENV_FILE" --from-cli-config "$CLI_CONFIG" "${ROOT_MAP_ARGS[@]}"
+{ as_svc timeout 10 head -c 1048576 -- "$CLI_CONFIG" 2>/dev/null || true; } \
+  | python3 "${APP_DIR}/scripts/scheduler-env.py" "$ENV_FILE" --from-cli-config - "${ROOT_MAP_ARGS[@]}"
 for map in "${ROOT_MAPS[@]}"; do
   sudo -u "${SVC_USER}" -H "${APP_DIR}/.venv/bin/lumiverb" config map-root "${map%%=*}" "${map#*=}"
 done

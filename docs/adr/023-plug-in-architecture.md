@@ -216,7 +216,7 @@ Robert: "We don't need enterprise security. We're just doing a good enough job. 
 | It uses too much memory | Ended above its limit (the manifest's `memory_mb`, at most what the server allows; 1 GB unless it says): the runner watches its processes' memory on both platforms, and on Linux the unit's `MemoryMax` holds all of them |
 | It uses the CPU | It runs at a lower priority than Lumiverb's API and scheduler (`nice`) |
 | It fills the disk | A file it writes can't pass a size limit (`RLIMIT_FSIZE`), and its data folder is watched: stopped, with why, above its `disk_mb` |
-| It reads Lumiverb's secrets | It's given none: a clean environment, no key to Lumiverb, nothing but its inputs |
+| It reads Lumiverb's secrets | It's given none: a clean environment, no key to Lumiverb, nothing but its inputs. On Linux, the processes around it that hold them (the API, the scheduler, the runner, which keeps only the databases' addresses and the sealing key) aren't dumpable, so it can't read their environment or memory either (as built, 2026-10-22: `src/shared/secrets_env.py`). It still reads what Lumiverb's user can (below) |
 | It answers nonsense | Checked against its manifest; refused and counted as its error |
 
 What isn't held here is a plug-in written to do harm: it runs as Lumiverb's user and could read what that user can, and reach the network whatever its manifest says. The server admin installs only what they trust (decision 7).

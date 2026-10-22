@@ -34,10 +34,15 @@ DETECT_TIMEOUT_SEC = 300.0
 POLL_SEC = 1.0
 
 
-def silence_stdout() -> None:
-    """The child's stdout to /dev/null: InsightFace and ONNX print a lot."""
+def start_child() -> None:
+    """The child as it starts: closed to the other processes of its user as its parent is (src/shared/secrets_env.py:
+    the API's search by picture starts it with the API's environment), and its stdout to /dev/null: InsightFace and
+    ONNX print a lot."""
     import os
 
+    from src.shared import secrets_env
+
+    secrets_env.not_dumpable()
     devnull = os.open(os.devnull, os.O_WRONLY)
     os.dup2(devnull, 1)
     os.close(devnull)
@@ -111,7 +116,7 @@ class FaceDetector:
         self._lock = threading.Lock()
 
     def _new_pool(self) -> Any:
-        return mp.get_context("spawn").Pool(1, initializer=silence_stdout, maxtasksperchild=self._per_process)
+        return mp.get_context("spawn").Pool(1, initializer=start_child, maxtasksperchild=self._per_process)
 
     @property
     def idle(self) -> bool:

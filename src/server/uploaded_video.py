@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from src.processing.video import ffmpeg_run
+from src.shared.secrets_env import without_secrets
 
 # What every browser plays: H.264's profiles up to High (High 10, High 4:2:2
 # and High 4:4:4 are H.264 too, and no browser plays them).
@@ -65,7 +67,7 @@ def probe(path: Path) -> dict:
     try:
         done = subprocess.run(
             ["ffprobe", "-v", "error", *_input_args(), "-show_streams", "-show_format", "-of", "json", str(path)],
-            capture_output=True, text=True, timeout=PROBE_SEC, check=False)
+            capture_output=True, text=True, timeout=PROBE_SEC, check=False, env=without_secrets(os.environ))
     except subprocess.TimeoutExpired:
         raise NotPlayableError(["it couldn't be read in time"]) from None
     if done.returncode != 0:

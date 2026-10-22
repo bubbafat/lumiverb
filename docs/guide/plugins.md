@@ -8,6 +8,8 @@ A plug-in is a program of its own, in any language, that Lumiverb runs outside i
 
 Each plug-in runs in a process of its own, below Lumiverb's priority, given none of Lumiverb's settings or keys, and held to its own memory and disk. If it stops, it's started again; one that keeps stopping is left stopped, and Settings › Plug-ins says why.
 
+A plug-in isn't confined, though: it runs as the user Lumiverb runs as, so it can read the files Lumiverb can (on a Mac, everything in the account of whoever installed Lumiverb) and reach the internet whatever it says it does. On a Linux server it can't read the secrets the rest of Lumiverb holds. Install only plug-ins you trust.
+
 What a plug-in can do:
 
 - **Work on each photo and video.** It's handed only what it asks for (where a clip was taken, when, its size and camera, a photo's preview) and gives back short facts. They show in the clip's details in the Lightbox, under the plug-in's name, and search finds a clip by the ones the plug-in marks searchable.

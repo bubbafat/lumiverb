@@ -167,6 +167,48 @@ def test_the_env_helper_carries_the_clis_settings_over_once_and_maps_roots(tmp_p
                                                                 "/Volumes/media-02": "/mnt/media-02"}
 
 
+def _carry(tmp_path, config: dict | str) -> tuple[list[str], str]:
+    """scheduler-env.py with the CLI config on stdin, as the deploy scripts hand it over (read as the service
+    user): the env file's lines after, and what it said about what it left out."""
+    env = tmp_path / "env"
+    env.write_text("API_PORT=8100\n")
+    out = subprocess.run([sys.executable, str(REPO / "scripts" / "scheduler-env.py"), str(env), "--from-cli-config",
+                          "-"], input=config if isinstance(config, str) else json.dumps(config),
+                         capture_output=True, text=True, check=True)
+    return env.read_text().splitlines(), out.stderr
+
+
+def test_the_env_helper_takes_the_cli_config_on_stdin(tmp_path) -> None:
+    lines, said = _carry(tmp_path, {"render_concurrency": 3, "analysis_cache_gb": 12.5,
+                                    "analysis_proxy_encoder": "h264_nvenc", "face_batch_limit": "8",
+                                    "root_map": {"/Volumes/a/": "/mnt/My Drive"}})
+    assert lines == ["API_PORT=8100", """LUMIVERB_ROOT_MAP='{"/Volumes/a": "/mnt/My Drive"}'""",
+                     "LUMIVERB_ANALYSIS_PROXY_ENCODER=h264_nvenc", "LUMIVERB_RENDER_CONCURRENCY=3",
+                     "LUMIVERB_ANALYSIS_CACHE_GB=12.5", "LUMIVERB_FACE_BATCHES_PER_PROCESS=8"]
+    assert said == ""
+    for nothing in ("", "[1]", "not json"):  # no config, or one that isn't: nothing carried, the update goes on
+        lines, _ = _carry(tmp_path, nothing)
+        assert lines == ["API_PORT=8100"]
+
+
+def test_the_env_helper_carries_only_a_single_line_of_each_settings_type(tmp_path) -> None:
+    # The CLI config is the service user's to write; the env file is root's, read by systemd for every unit.
+    lines, said = _carry(tmp_path, {
+        "gpu_decodes": "1\nDATA_DIR=/tmp/elsewhere", "analysis_proxy_decoder": "cuda\nExecStartPre=+/bin/true",
+        "render_concurrency": 2.5, "face_batch_limit": True, "analysis_cache_gb": "lots",
+        "analysis_proxy_encoder": "h264_nvenc", "root_map": {"/Volumes/a": "/mnt/a\nX=1"}})
+    assert lines == ["API_PORT=8100", "LUMIVERB_ANALYSIS_PROXY_ENCODER=h264_nvenc"]
+    for key, env, kind in (("gpu_decodes", "LUMIVERB_GPU_DECODES", "a whole number"),
+                           ("analysis_proxy_decoder", "LUMIVERB_ANALYSIS_PROXY_DECODER", "a name"),
+                           ("render_concurrency", "LUMIVERB_RENDER_CONCURRENCY", "a whole number"),
+                           ("face_batch_limit", "LUMIVERB_FACE_BATCHES_PER_PROCESS", "a whole number"),
+                           ("analysis_cache_gb", "LUMIVERB_ANALYSIS_CACHE_GB", "a number")):
+        assert f"{key} in the service user's CLI config isn't {kind} on one line: left out (set {env}" in said
+    assert "root_map in the service user's CLI config isn't a map of full paths, each on one line: left out" in said
+    lines, said = _carry(tmp_path, {"root_map": {"Volumes/a": "/mnt/a"}})
+    assert lines == ["API_PORT=8100"] and "root_map" in said
+
+
 # ---------------------------------------------------------------------------
 # lumiverb enrich asks the scheduler
 # ---------------------------------------------------------------------------

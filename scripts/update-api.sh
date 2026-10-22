@@ -49,6 +49,41 @@ env_append() {
   echo "$1" >> "$ENV_FILE"
 }
 
+# What root runs as the service user reads none of that user's own settings: git's (~/.gitconfig, which can name
+# hooks and an fsmonitor to run), npm's (~/.npmrc) and uv's (~/.config/uv/uv.toml). They're the service user's to
+# write, and what they name would run outside the services' sandbox. Its home and caches stay as they were.
+SVC_ENV=(env GIT_CONFIG_GLOBAL=/dev/null npm_config_userconfig=/dev/null UV_NO_CONFIG=1)
+as_svc() { sudo -u "$SVC_USER" "${SVC_ENV[@]}" "$@"; }
+
+# A folder in DATA_DIR for the service user, made and handed over by root. The service user owns DATA_DIR, so it
+# could have put a symbolic link where the folder goes, which mkdir and chown would follow: any link stops it
+# before a folder is made or handed over. chown -h changes the folder itself, never what a link put there since
+# points at. Held to the same text in deploy-api.sh and update-api.sh.
+svc_folder() {
+  local dir
+  for dir in "$@"; do
+    [[ ! -L "$dir" ]] || fail "${dir} is a symbolic link where Lumiverb keeps a folder: remove the link (sudo rm ${dir}), then run this again"
+  done
+  for dir in "$@"; do
+    mkdir -p -- "$dir"
+    chown -h "$SVC_USER":"$SVC_USER" -- "$dir"
+  done
+}
+
+# DATA_DIR, which goes into units and what root does: one line, a full path, nothing a unit file or a shell would
+# read as more than a path (empty: there's none). Held to the same text in deploy-api.sh and update-api.sh.
+data_dir_shape() {
+  [[ -z "$1" ]] || [[ "$1" == /* && "$1" != *[[:space:][:cntrl:]\"\'\`\$%\;\\]* ]] \
+    || fail "DATA_DIR must be one full path, without spaces, quotes or any of \$ % ; \\: $(printf '%q' "$1")"
+}
+read_data_dir() {
+  local count
+  count="$(grep -c '^DATA_DIR=' "$ENV_FILE" || true)"
+  [[ "${count:-0}" -le 1 ]] || fail "DATA_DIR is set ${count} times in ${ENV_FILE}: keep one line"
+  DATA_DIR="$(grep -m1 '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
+  data_dir_shape "$DATA_DIR"
+}
+
 [[ "$(id -u)" -eq 0 ]] || fail "Run as root"
 [[ -d "${APP_DIR}/.git" ]] || fail "${APP_DIR} is not a git repo — run deploy-api.sh first"
 
@@ -56,25 +91,26 @@ env_append() {
 SVC_HOME="$(getent passwd "$SVC_USER" | cut -d: -f6)"
 if [[ -n "$SVC_HOME" ]] && [[ ! -d "$SVC_HOME" ]]; then
   mkdir -p "$SVC_HOME"
-  chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"
+  chown -h "$SVC_USER":"$SVC_USER" "$SVC_HOME"
 fi
 
-# Repo is owned by $SVC_USER; tell git it's safe for root.
-git config --system --replace-all safe.directory "$APP_DIR" "$APP_DIR" 2>/dev/null \
-  || git config --global --add safe.directory "$APP_DIR"
+# The repo is the service user's, and git runs in it only as that user. Earlier versions marked it safe for root
+# (safe.directory), which let its own settings (.git/config) steer a git root ran there: unmarked.
+git config --system --fixed-value --unset-all safe.directory "$APP_DIR" 2>/dev/null || true
+git config --global --fixed-value --unset-all safe.directory "$APP_DIR" 2>/dev/null || true
 
 cd "$APP_DIR"
 
 # ---------------------------------------------------------------------------
 step "Pulling latest code"
-sudo -u "$SVC_USER" git fetch --all --prune
+as_svc git fetch --all --prune
 
-if sudo -u "$SVC_USER" git symbolic-ref -q HEAD >/dev/null 2>&1; then
-  sudo -u "$SVC_USER" git pull
+if as_svc git symbolic-ref -q HEAD >/dev/null 2>&1; then
+  as_svc git pull
 else
   warn "Detached HEAD detected — skipping git pull"
 fi
-ok "$(sudo -u "$SVC_USER" git log --oneline -1)"
+ok "$(as_svc git log --oneline -1)"
 
 # bash keeps running the copy of this script it started with, and git pull
 # wrote a new one: run that, so steps this update adds apply now.
@@ -86,20 +122,23 @@ fi
 # ---------------------------------------------------------------------------
 step "Updating Python dependencies"
 EXTRAS=(--extra cli --extra embeddings --extra face_recognition)
+# Before anything changes: a DATA_DIR that isn't one full path stops here.
+read_data_dir
 # uv sync removes what the extras don't list, so keep processing's (the
 # scheduler's, or the worker's it replaces).
 PROCESSING=false
 if systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 || systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
   PROCESSING=true
   EXTRAS+=(--extra workers)
-  # Before anything changes: the scheduler's caches need the data disk.
-  grep -q '^DATA_DIR=.' "$ENV_FILE" || fail "No DATA_DIR in ${ENV_FILE}: the scheduler's caches need the data disk"
+  # Before anything changes too: the scheduler's caches need the data disk.
+  [[ -n "$DATA_DIR" ]] || fail "No DATA_DIR in ${ENV_FILE}: the scheduler's caches need the data disk"
 fi
 # A new Python makes uv sync delete the venv and download it all again. So
 # download first, into a side venv, while the API and scheduler run; then stop
-# them only for the swap, which the warm cache makes quick.
-HAVE_PY="$(sed -n 's/^version_info *= *\([0-9]*\.[0-9]*\).*/\1/p' "$APP_DIR/.venv/pyvenv.cfg" 2>/dev/null || true)"
-WANT_PY="$(grep -oE '[0-9]+\.[0-9]+' "$APP_DIR/.python-version" 2>/dev/null | head -1 || true)"
+# them only for the swap, which the warm cache makes quick. Both files are the
+# service user's, read as it.
+HAVE_PY="$(as_svc sed -n 's/^version_info *= *\([0-9]*\.[0-9]*\).*/\1/p' "$APP_DIR/.venv/pyvenv.cfg" 2>/dev/null || true)"
+WANT_PY="$(as_svc grep -m1 -oE '[0-9]+\.[0-9]+' "$APP_DIR/.python-version" 2>/dev/null | head -1 || true)"
 # From here a failure may leave Lumiverb stopped (now, or by an earlier run): say so.
 # The scheduler isn't started for you: the code may be half-deployed.
 stopped_after_failure() {
@@ -121,9 +160,9 @@ scheduler_stopped_line() {
 trap stopped_after_failure EXIT
 if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then
   warn "Python changes from ${HAVE_PY} to ${WANT_PY}: building the new environment (a few GB) while Lumiverb keeps running"
-  sudo -u "$SVC_USER" "$UV_BIN" python install "$WANT_PY"
+  as_svc "$UV_BIN" python install "$WANT_PY"
   rm -rf "$APP_DIR/.venv-next"  # uv won't build into what an interrupted run left
-  sudo -u "$SVC_USER" env UV_PROJECT_ENVIRONMENT="$APP_DIR/.venv-next" "$UV_BIN" sync "${EXTRAS[@]}"
+  as_svc UV_PROJECT_ENVIRONMENT="$APP_DIR/.venv-next" "$UV_BIN" sync "${EXTRAS[@]}"
   # The old worker's stop reaches only its main process (as when the scheduler
   # replaces it below): killed with its ffmpeg, it would save an empty transcript.
   if [[ -f /etc/systemd/system/lumiverb-worker.service ]]; then
@@ -136,7 +175,7 @@ if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then
   done
   systemctl stop lumiverb-api
 fi
-sudo -u "$SVC_USER" "$UV_BIN" sync "${EXTRAS[@]}"
+as_svc "$UV_BIN" sync "${EXTRAS[@]}"
 rm -rf "$APP_DIR/.venv-next"
 ok "Python venv synced (${EXTRAS[*]})"
 
@@ -162,7 +201,7 @@ DB_URL="$(grep '^CONTROL_PLANE_DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)"
 # (src/server/backups.py: the 3 newest kept; into the backups folder, else
 # DATA_DIR/backups), only when there's something to migrate. One that can't
 # be made is warned of and the update goes on: the nightly ones are there.
-DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
+read_data_dir
 if CONTROL_PLANE_DATABASE_URL="$DB_URL" DATA_DIR="$DATA_DIR" \
     sudo -u "$SVC_USER" --preserve-env=CONTROL_PLANE_DATABASE_URL,DATA_DIR \
     "$APP_DIR/.venv/bin/lumiverb-server" backup --if-migrating; then
@@ -179,11 +218,12 @@ ok "Control plane migrations applied"
 export CONTROL_PLANE_DATABASE_URL="$DB_URL"
 export UV_BIN
 # Its last step installs Lumiverb's own plug-ins (src/server/own_plugins.py) into DATA_DIR/plugins, making it.
-DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
-LUMIVERB_GEONAMES_URL="$(grep '^LUMIVERB_GEONAMES_URL=' "$ENV_FILE" | cut -d= -f2- || true)"
+# Its uv reads none of the service user's settings (SVC_ENV).
+read_data_dir
+LUMIVERB_GEONAMES_URL="$(grep -m1 '^LUMIVERB_GEONAMES_URL=' "$ENV_FILE" | cut -d= -f2- || true)"
 export DATA_DIR LUMIVERB_GEONAMES_URL
 sudo -u "$SVC_USER" --preserve-env=CONTROL_PLANE_DATABASE_URL,ALEMBIC_CONTROL_URL,UV_BIN,DATA_DIR,LUMIVERB_GEONAMES_URL \
-  bash "$APP_DIR/scripts/migrate.sh"
+  "${SVC_ENV[@]}" bash "$APP_DIR/scripts/migrate.sh"
 ok "Tenant migrations applied"
 
 # ---------------------------------------------------------------------------
@@ -192,9 +232,12 @@ step "Scheduler settings"
 # the CLI's config. What it read from the service user's CLI config before
 # (library roots, how video is rendered) is carried over once; a setting
 # already here stays. Before anything saves that config (config set, below),
-# which keeps only the CLI's own keys.
+# which keeps only the CLI's own keys. The config is the service user's, read
+# as it (root opens nothing in its home) and handed over on stdin; only a
+# single line of the type each setting takes is carried.
 if [[ "$PROCESSING" == "true" ]]; then
-  python3 "$APP_DIR/scripts/scheduler-env.py" "$ENV_FILE" --from-cli-config "${SVC_HOME}/.lumiverb/config.json"
+  { as_svc timeout 10 head -c 1048576 -- "${SVC_HOME}/.lumiverb/config.json" 2>/dev/null || true; } \
+    | python3 "$APP_DIR/scripts/scheduler-env.py" "$ENV_FILE" --from-cli-config -
   grep -q '^LUMIVERB_ROOT_MAP=' "$ENV_FILE" \
     || warn "No LUMIVERB_ROOT_MAP in ${ENV_FILE}: libraries are read at the paths the server stores"
   ok "Scheduler settings in ${ENV_FILE}"
@@ -204,9 +247,10 @@ fi
 
 # ---------------------------------------------------------------------------
 step "Ensuring data directory"
-DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
+read_data_dir
 if [[ -n "$DATA_DIR" ]]; then
-  mkdir -p "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp
+  svc_folder "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp
+  # -R changes links themselves, never what they point at, and never goes through one.
   chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
   # The scheduler's caches, lock and state on the data disk. The CLI keeps
   # no caches (ADR-020 decision 7), so nothing of the service user's points here.
@@ -296,16 +340,28 @@ if [[ -f "$API_UNIT" ]]; then
     fi
     systemctl daemon-reload
   fi
+  # uvicorn's own process holds the env file's secrets and starts the workers: through python -m src.server.api
+  # it isn't dumpable, so the other processes of its user, a plug-in's among them, can't read them (as deploy-api.sh
+  # writes it now; src/shared/secrets_env.py).
+  UVICORN="^ExecStart=${APP_DIR}/\.venv/bin/uvicorn (src\.server\.api\.main:app( |$))"
+  if grep -qE "$UVICORN" "$API_UNIT"; then
+    sed -i -E "s#${UVICORN}#ExecStart=${APP_DIR}/.venv/bin/python -m src.server.api \1#" "$API_UNIT"
+    systemctl daemon-reload
+    ok "The API starts through python -m src.server.api: none of its processes is dumpable"
+  elif ! grep -qE "^ExecStart=.* -m src\.server\.api " "$API_UNIT"; then
+    warn "${API_UNIT}'s ExecStart isn't deploy-api.sh's: uvicorn's own process stays readable to the other processes of its user until it runs ${APP_DIR}/.venv/bin/python -m src.server.api with uvicorn's arguments"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
 step "Installing the scheduler (all processing; it replaces the worker)"
 if [[ "$PROCESSING" == "true" ]]; then
-  DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
+  read_data_dir
   [[ -n "$DATA_DIR" ]] || fail "No DATA_DIR in ${ENV_FILE}: the scheduler's caches need the data disk"
-  mkdir -p "$DATA_DIR"/worker-tmp "$DATA_DIR"/cache
-  chown "$SVC_USER":"$SVC_USER" "$DATA_DIR"/worker-tmp "$DATA_DIR"/cache
-  # Rewritten each update: everything it needs is known here.
+  svc_folder "$DATA_DIR"/worker-tmp "$DATA_DIR"/cache
+  # Rewritten each update: everything it needs is known here. It writes only
+  # the data disk: its home is read-only to it (nothing it runs writes there,
+  # matplotlib's settings and CUDA's kernels included: both are on the data disk).
   cat > /etc/systemd/system/lumiverb-scheduler.service <<UNIT
 [Unit]
 Description=Lumiverb scheduler (all processing)
@@ -322,6 +378,8 @@ Environment=PYTHONUNBUFFERED=1
 Environment=HOME=${SVC_HOME}
 # Proxy caches go on the data disk, not the root disk with Postgres.
 Environment=XDG_CACHE_HOME=${DATA_DIR}/cache
+# CUDA's compiled kernels too, where a GPU needs them made (its home is read-only).
+Environment=CUDA_CACHE_PATH=${DATA_DIR}/cache/nvidia
 # Temp files too (Whisper's WAVs): PrivateTmp's /tmp can be RAM. Not the
 # API's tmp, which each API start empties; this one each scheduler start.
 Environment=TMPDIR=${DATA_DIR}/worker-tmp
@@ -338,7 +396,7 @@ LimitNOFILE=65535
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=${DATA_DIR} ${SVC_HOME}
+ReadWritePaths=${DATA_DIR}
 
 [Install]
 WantedBy=multi-user.target
@@ -388,14 +446,17 @@ fi
 
 # ---------------------------------------------------------------------------
 step "Installing the plug-in runner"
-DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
+read_data_dir
 if [[ -n "$DATA_DIR" ]]; then
-  mkdir -p "$DATA_DIR"/plugins
-  chown "$SVC_USER":"$SVC_USER" "$DATA_DIR"/plugins
+  svc_folder "$DATA_DIR"/plugins
   # Every plug-in the server admin installs (ADR-023), a process of its own:
-  # the runner reads what's installed from the control database, and what it
-  # starts gets none of the env file's settings, runs below the API and the
-  # scheduler, and writes only its own folder (DATA_DIR/plugins).
+  # the runner reads what's installed from the control database. It keeps only
+  # the env file's database addresses and sealing key, and isn't dumpable
+  # (src/shared/secrets_env.py); what it starts gets none of the env file's
+  # settings and runs below the API and the scheduler. Each plug-in runs as the
+  # service user: it can read what that user can (DATA_DIR's previews and
+  # backups among them) and write DATA_DIR/plugins, every plug-in's folder
+  # there (ADR-023's phase 4, confining it, is deferred).
   # Rewritten each update: everything it needs is known here.
   cat > /etc/systemd/system/lumiverb-plugins.service <<UNIT
 [Unit]
@@ -448,7 +509,8 @@ Type=oneshot
 User=${SVC_USER}
 Group=${SVC_USER}
 EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf --retry 12 --retry-delay 5 --retry-connrefused -X POST "http://127.0.0.1:\${API_PORT}/v1/upkeep?tenants=all" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+# The install's key reaches curl on its stdin (-H @-), never as an argument: every local user sees command lines.
+ExecStart=/bin/sh -c 'printf "Authorization: Bearer %%s\n" "\$\$ADMIN_KEY" | exec /usr/bin/curl -sf --retry 12 --retry-delay 5 --retry-connrefused -X POST "http://127.0.0.1:\$\${API_PORT}/v1/upkeep?tenants=all" -H @- -H "Content-Type: application/json"'
 TimeoutSec=120
 UPKEEP_SVC
 
@@ -474,7 +536,8 @@ Type=oneshot
 User=${SVC_USER}
 Group=${SVC_USER}
 EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/curl -sf --retry 12 --retry-delay 5 --retry-connrefused -X POST "http://127.0.0.1:\${API_PORT}/v1/upkeep/cleanup?tenants=all&dry_run=false" -H "Authorization: Bearer \${ADMIN_KEY}" -H "Content-Type: application/json"
+# The install's key reaches curl on its stdin (-H @-), never as an argument: every local user sees command lines.
+ExecStart=/bin/sh -c 'printf "Authorization: Bearer %%s\n" "\$\$ADMIN_KEY" | exec /usr/bin/curl -sf --retry 12 --retry-delay 5 --retry-connrefused -X POST "http://127.0.0.1:\$\${API_PORT}/v1/upkeep/cleanup?tenants=all&dry_run=false" -H @- -H "Content-Type: application/json"'
 TimeoutSec=300
 DAILY_SVC
 
@@ -525,7 +588,7 @@ systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 && systemctl stop lumive
 systemctl restart lumiverb-api
 # uv's cache: an old Python's packages stay in it for good (prune keeps
 # them), and the venv doesn't need it. Every update, so a rerun gets there.
-sudo -u "$SVC_USER" "$UV_BIN" cache clean || warn "Couldn't clear uv's cache"
+as_svc "$UV_BIN" cache clean || warn "Couldn't clear uv's cache"
 
 ANSWERS=false
 for i in {1..10}; do

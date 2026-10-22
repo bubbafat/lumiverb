@@ -323,7 +323,11 @@ settings. Lumiverb shows you all of that before you install it, and builds
 its settings form in **Settings › Plug-ins** from it. Each plug-in runs in a
 process of its own, below Lumiverb's priority, given none of Lumiverb's
 settings or keys, held to its own memory and disk, and started again if it
-stops. One that keeps stopping is left stopped, and Settings says why.
+stops. One that keeps stopping is left stopped, and Settings says why. It
+isn't confined (ADR-023's phase 4 is deferred): it runs as Lumiverb's user and
+can read what that user can (on a Mac, the owner's whole account), though on
+Linux not the secrets the API, the scheduler and the runner hold. Install only
+plug-ins you trust.
 
 The server admin installs one on the machine, on or off by default for
 every account (each account's admin can still turn it on or off there):
