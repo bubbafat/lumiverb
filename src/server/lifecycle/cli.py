@@ -105,7 +105,7 @@ from src.server.lifecycle.postgres import (
 )
 from src.server.lifecycle.supervise import Child, Supervisor
 from src.server.lifecycle import roles
-from src.shared.secrets_env import without_secrets
+from src.shared.secrets_env import SCHEDULER_SECRETS, without_secrets
 from src.shared.stop_signals import set_on_signals
 
 logger = logging.getLogger("lumiverb-server")
@@ -151,15 +151,6 @@ def data_dir(env: dict[str, str]) -> Path:
     if not path.is_absolute():
         raise InstallError(f"DATA_DIR must be a full path, not {path}")
     return path
-
-
-# The scheduler reads the database directly and makes its own API keys
-# (scheduler/service.py scheduler_key): no other secret. The server's
-# settings require the template (config.py) though it reads each account's
-# database from its routing: the same credentials as the control URL's.
-SCHEDULER_SECRETS = ("CONTROL_PLANE_DATABASE_URL", "TENANT_DATABASE_URL_TEMPLATE",
-                     # Opens the plug-ins' secret settings it hands them (src/server/sealing.py): the runner's too.
-                     "LUMIVERB_SECRETS_KEY")
 
 
 def forget_quickwit(env: dict[str, str], data: Path) -> list[Path]:

@@ -239,6 +239,15 @@ keeps the env file's settings and nginx's edits. Run the checks again after.
 The front page changes with the checkout: an update brings its changes too,
 with nothing to rerun.
 
+The checkout, `/mnt/demo/lumiverb` and the service user's home are the
+`lumiverb` user's, and nothing in them steers what the update does as root
+(linux-server.md, "Root and the `lumiverb` user"): it stops, saying what to
+fix, at a symbolic link where Lumiverb keeps a folder in the data dir, and
+root runs no git there. To look at the checkout, run git as that user
+(`sudo -u lumiverb git -C /opt/lumiverb log -1`). A plug-in on the demo runs
+as that user too, and can read what it can: install only plug-ins you
+trust.
+
 ## Turning it off
 
 Remove `LUMIVERB_DEMO_VIEWER` (every demo session ends at its next

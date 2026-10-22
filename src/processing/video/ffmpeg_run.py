@@ -20,6 +20,7 @@ local file only, read only as one of the containers Lumiverb takes in."""
 from __future__ import annotations
 
 import functools
+import os
 import re
 import subprocess
 import tempfile
@@ -28,6 +29,7 @@ import time
 from dataclasses import dataclass
 
 from src.shared.file_extensions import VIDEO_EXTENSIONS
+from src.shared.secrets_env import without_secrets
 
 STALL_SEC = 300.0
 # Decoders that need no room on a GPU beside the models: a Mac's media
@@ -88,7 +90,8 @@ def run(cmd: list[str], *, stall_after: float = STALL_SEC) -> Finished:
                 last = dict(now)
 
     with tempfile.TemporaryFile() as err:
-        proc = subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err)
+        proc = subprocess.Popen(full, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
+                                env=without_secrets(os.environ))
         reader = threading.Thread(target=watch, args=(proc.stdout,), name="ffmpeg-progress", daemon=True)
         reader.start()
         poll = min(1.0, stall_after / 4)
@@ -114,7 +117,7 @@ def _opens(device: str) -> bool:
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-init_hw_device", device,
              "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.04", "-frames:v", "1", "-f", "null", "-"],
-            capture_output=True, timeout=30, check=False,
+            capture_output=True, timeout=30, check=False, env=without_secrets(os.environ),
         )
     except (subprocess.SubprocessError, OSError):
         return False

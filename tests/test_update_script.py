@@ -143,6 +143,27 @@ def test_the_log_keeps_secrets_out(install):
     assert "k-7f3a-not-for-logs" not in _log(install)
 
 
+def test_the_service_users_own_git_settings_never_steer_the_update(install):
+    # Its ~/.gitconfig is its own to write (on a new install its home is the data folder, which the API writes): a
+    # hook named there would run outside the services' sandbox, in the checkout whose scripts root runs next.
+    home, ran = install["tmp"] / "svc-home", install["tmp"] / "hook-ran"
+    (home / "hooks").mkdir(parents=True)
+    for hook in ("post-merge", "post-checkout", "reference-transaction"):
+        (home / "hooks" / hook).write_text(f"#!/bin/sh\ntouch {ran}\n")
+        (home / "hooks" / hook).chmod(0o755)
+    (home / ".gitconfig").write_text(f"[core]\n\thooksPath = {home / 'hooks'}\n")
+    env = {**{k: v for k, v in install["env"].items() if k != "GIT_CONFIG_GLOBAL"}, "HOME": str(home)}
+    said = subprocess.run(["git", "-C", str(install["app"]), "config", "core.hooksPath"], capture_output=True,
+                          text=True, env=env)
+    assert said.stdout.strip() == str(home / "hooks"), "git as that user would follow it"
+    after = _push(install, "README", "new\n", branch="main")
+    out = subprocess.run(["bash", str(install["app"] / "scripts" / "update.sh"), "--branch", "main"],
+                         capture_output=True, text=True, timeout=60, env=env)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert _git(install["app"], "rev-parse", "--short", "HEAD") == after, "checked out and pulled"
+    assert not ran.exists(), "no hook of its settings ran: checkout, fetch and pull alike"
+
+
 def test_branch_switches_the_install_and_is_remembered(install):
     after = _push(install, "README", "main only\n", branch="main")
     out = _run(install, "--branch", "main")

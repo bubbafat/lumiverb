@@ -5,9 +5,12 @@ a good enough job. I don't want them taking down the server").
 
 `python -m src.server.plugin_runner`: on a Mac a child of `lumiverb-server
 run`, beside the API and the scheduler; on Linux its own unit,
-lumiverb-plugins.service. As it starts, it installs Lumiverb's own
-plug-ins as migrating does (src/server/own_plugins.py: nothing to do,
-usually). For each installed plug-in it:
+lumiverb-plugins.service. As it starts, it keeps only the secrets it needs
+(the databases' addresses and the sealing key) and makes itself not
+dumpable, so the plug-ins it starts, which run as its user, can read
+neither its environment nor its memory (src/shared/secrets_env.py); then it
+installs Lumiverb's own plug-ins as migrating does (src/server/own_plugins.py:
+nothing to do, usually). For each installed plug-in it:
 
 - runs it only while it's on somewhere: on by default, or turned on in an
   account (plugin_catalog.OnSomewhere: every account's switches read every
@@ -603,9 +606,15 @@ def read_state(data: Path, *, fresh_within: float = 60.0) -> dict[str, Any] | No
 
 def main() -> int:
     """lumiverb-plugins: run every installed plug-in until stopped (SIGTERM)."""
+    from src.shared import secrets_env
+
+    # Only the secrets it needs, the databases' addresses and the key that opens plug-ins' sealed settings: on Linux
+    # its unit hands it the whole env file, so it starts again without the rest (a Mac's run hands it only these).
+    # Then its environment and memory are closed to the plug-ins it starts, which run as its user.
+    secrets_env.keep_only(secrets_env.SCHEDULER_SECRETS)
+    secrets_env.not_dumpable()
     from src.server.config import get_settings
     from src.server.database import set_application_name, set_connect_timeout
-    from src.shared import secrets_env
     from src.shared.stop_signals import set_on_signals
 
     level = os.environ.get("LOG_LEVEL", "INFO").upper()

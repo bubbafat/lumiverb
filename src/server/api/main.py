@@ -30,8 +30,19 @@ from src.server.api import devices, library_access
 from src.server.api.exposure import ExposureGate
 from src.server.api.https_seen import NoteHttps
 from src.server.api.middleware import TenantResolutionMiddleware
+from src.shared import secrets_env
 from src.shared.logging_config import configure_api_logging, escape_log_lines, hide_stream_links
 
+# Each worker uvicorn starts imports this: from here its environment (the env file's secrets) and memory are closed
+# to the other processes of its user, a plug-in's among them (uvicorn's own process: src/server/api/__main__.py).
+secrets_env.not_dumpable()
+# Served by python -m src.server.api: its settings read (and kept: get_settings), its secrets leave the
+# environment, as the scheduler's do, so what it starts (its face process, ffprobe, git) has none.
+if os.environ.get(secrets_env.API_FORGETS):
+    from src.server.config import get_settings
+
+    get_settings()
+    secrets_env.forget()
 # uvicorn has set up its loggers by the time it imports the app.
 hide_stream_links()
 escape_log_lines()
@@ -97,7 +108,10 @@ from src.server.api.routers.plugin_work import router as plugin_work_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not os.environ.get("JWT_SECRET"):
+    from src.server.config import get_settings
+
+    # Its settings, or its environment while it still has it (forgotten once read when served: API_FORGETS).
+    if not (os.environ.get("JWT_SECRET") or get_settings().jwt_secret):
         raise RuntimeError("JWT_SECRET environment variable is required but not set")
     # The install's Store, its provider read now: one there isn't stops the API here (ADR-020 decision 2).
     from src.server.storage.store import get_store

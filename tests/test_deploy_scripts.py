@@ -205,6 +205,13 @@ def test_api_buffers_uploads_on_the_data_disk():
 
 UPDATE_API = REPO / "scripts" / "update-api.sh"
 
+
+def _update_helpers() -> str:
+    """update-api.sh's helpers its steps use: SVC_ENV and as_svc, svc_folder, data_dir_shape and read_data_dir."""
+    text = UPDATE_API.read_text()
+    return text[text.index("SVC_ENV=("):text.index('[[ "$(id -u)" -eq 0 ]] || fail "Run as root"')]
+
+
 API_UNIT = """\
 [Service]
 EnvironmentFile=/etc/lumiverb/env
@@ -221,7 +228,7 @@ def _update_api_unit(tmp_path: Path, unit: Path) -> None:
     block = text.split('step "Updating the API unit"', 1)[1].split("# ----", 1)[0]
     script = (
         'step() { :; }; ok() { :; }; warn() { :; }; systemctl() { :; }\n'
-        "DATA_DIR=/mnt/ssd2/lumiverb\n"
+        "DATA_DIR=/mnt/ssd2/lumiverb; APP_DIR=/opt/lumiverb\n"
         + block.replace("/etc/systemd/system/lumiverb-api.service", str(unit))
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
@@ -237,6 +244,32 @@ def test_update_moves_an_existing_api_unit_s_tmpdir_to_the_data_disk(tmp_path):
     assert lines.count("Environment=TMPDIR=/mnt/ssd2/lumiverb/tmp") == 1
     assert lines.index("Environment=TMPDIR=/mnt/ssd2/lumiverb/tmp") == lines.index("Environment=PYTHONUNBUFFERED=1") + 1
     assert lines.count("ExecStartPre=-/usr/bin/find /mnt/ssd2/lumiverb/tmp -mindepth 1 -delete") == 1
+
+
+def test_an_update_starts_the_api_as_a_new_install_does_with_no_process_of_it_dumpable(tmp_path):
+    # uvicorn's own process holds the env file's secrets and isn't the app: python -m src.server.api makes it not
+    # dumpable first (the workers do it themselves, main.py). Once; a unit edited by hand is said, not changed.
+    unit = tmp_path / "lumiverb-api.service"
+    unit.write_text(OLD_API_UNIT.format(data="/mnt/ssd2/lumiverb"))
+    _update_api_unit(tmp_path, unit)
+    _update_api_unit(tmp_path, unit)
+    [start] = [line for line in unit.read_text().splitlines() if line.startswith("ExecStart=")]
+    deployed = DEPLOY_API.read_text().split("cat > /etc/systemd/system/lumiverb-api.service <<UNIT", 1)[1]
+    [fresh] = [line for line in deployed.split("\nUNIT\n", 1)[0].splitlines() if line.startswith("ExecStart=")]
+    assert start == fresh.replace("${APP_DIR}", "/opt/lumiverb").replace("\\$", "$") == (
+        "ExecStart=/opt/lumiverb/.venv/bin/python -m src.server.api src.server.api.main:app "
+        "--host ${API_LISTEN_HOST} --port ${API_PORT} --workers 2")
+    text = UPDATE_API.read_text()
+    block = text.split('step "Updating the API unit"', 1)[1].split("# ----", 1)[0]
+    unit.write_text("[Service]\nExecStart=/usr/local/bin/my-uvicorn src.server.api.main:app\n")
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c",
+                          'step() { :; }; ok() { :; }; warn() { echo "warn: $1"; }; systemctl() { :; }\n'
+                          "DATA_DIR=; APP_DIR=/opt/lumiverb; ENV_FILE=/etc/lumiverb/env\n"
+                          + block.replace("/etc/systemd/system/lumiverb-api.service", str(unit))],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert "readable to the other processes of its user" in out.stdout
+    assert unit.read_text() == "[Service]\nExecStart=/usr/local/bin/my-uvicorn src.server.api.main:app\n"
 
 
 def test_update_makes_the_api_tmpdir():
@@ -262,7 +295,7 @@ def _update_migrations(tmp_path: Path, backup_rc: int) -> tuple[str, list[str]]:
         f'sudo() {{ echo "$* | ${{CONTROL_PLANE_DATABASE_URL:-}} ${{DATA_DIR:-}}" >> "{calls}";'
         f' [[ "$*" != *"backup --if-migrating"* ]] || return {backup_rc}; }}\n'
         f'ENV_FILE="{env}"; APP_DIR=/opt/lumiverb; SVC_USER=lumiverb; UV_BIN=/usr/local/bin/uv\n'
-        + block
+        + _update_helpers() + block
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stdout + out.stderr
@@ -285,10 +318,17 @@ def test_an_update_whose_backup_fails_says_so_and_migrates(tmp_path):
     assert "alembic-control.ini upgrade head" in calls[1] and "migrate.sh" in calls[2]
 
 
+def test_the_tenant_migrations_uv_reads_none_of_the_service_users_settings(tmp_path):
+    _, calls = _update_migrations(tmp_path, 0)
+    assert calls[2].startswith("-u lumiverb --preserve-env=CONTROL_PLANE_DATABASE_URL,ALEMBIC_CONTROL_URL,UV_BIN,"
+                               "DATA_DIR,LUMIVERB_GEONAMES_URL env GIT_CONFIG_GLOBAL=/dev/null "
+                               "npm_config_userconfig=/dev/null UV_NO_CONFIG=1 bash /opt/lumiverb/scripts/migrate.sh")
+
+
 def _update_scheduler(tmp_path: Path, env_text: str, *, processing: bool = True,
                       worker: bool = True) -> tuple[str, list[str], Path]:
     """Run update-api.sh's scheduler step; returns its output, the systemctl
-    calls and where the unit was written."""
+    and chown calls and where the unit was written."""
     env = tmp_path / "env"
     env.write_text(env_text)
     units = tmp_path / "units"
@@ -300,14 +340,15 @@ def _update_scheduler(tmp_path: Path, env_text: str, *, processing: bool = True,
     text = UPDATE_API.read_text()
     block = text.split('step "Installing the scheduler', 1)[1].split("\n", 1)[1].split("# ----", 1)[0]
     script = (
-        'step() { :; }; ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }; chown() { :; }\n'
+        'step() { :; }; ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }\n'
+        f'chown() {{ echo "chown $*" >> "{calls}"; }}\n'
         'fail() { echo "fail: $1"; exit 1; }\n'
         # Each call notes whether the worker's stop then reaches only its main process.
         f'systemctl() {{ echo "$*$(grep -qs KillMode=mixed {units}/lumiverb-worker.service.d/*.conf'
         f' && echo " [worker: KillMode=mixed]")" >> "{calls}"; }}\n'
         f'ENV_FILE="{env}"; APP_DIR=/opt/lumiverb; SVC_HOME=/var/lib/lumiverb; SVC_USER=lumiverb\n'
         f'PROCESSING={"true" if processing else "false"}\n'
-        + block.replace("/etc/systemd/system/", f"{units}/")
+        + _update_helpers() + block.replace("/etc/systemd/system/", f"{units}/")
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     return out.stdout + out.stderr, calls.read_text().splitlines(), units
@@ -319,9 +360,14 @@ def test_update_replaces_the_worker_with_the_scheduler(tmp_path):
     unit = (units / "lumiverb-scheduler.service").read_text()
     assert "ExecStart=/opt/lumiverb/.venv/bin/python -m src.server.scheduler" in unit
     assert f"Environment=XDG_CACHE_HOME={data}/cache" in unit
+    assert f"Environment=CUDA_CACHE_PATH={data}/cache/nvidia" in unit
     assert f"Environment=TMPDIR={data}/worker-tmp" in unit
     assert f"ExecStartPre=-/usr/bin/find {data}/worker-tmp -mindepth 1 -delete" in unit
-    assert f"ReadWritePaths={data} /var/lib/lumiverb" in unit
+    # Its home is read-only to it: nothing it runs writes there (matplotlib's settings and CUDA's kernels are on
+    # the data disk), and it's where git, npm and uv keep the settings root's update would otherwise follow.
+    assert f"ReadWritePaths={data}\n" in unit and "Environment=HOME=/var/lib/lumiverb" in unit
+    assert [c for c in calls if c.startswith("chown")] == [
+        f"chown -h lumiverb:lumiverb -- {data}/worker-tmp", f"chown -h lumiverb:lumiverb -- {data}/cache"]
     assert "After=network-online.target remote-fs.target lumiverb-api.service" in unit
     # Only the scheduler hears a stop: ffmpeg under a job isn't killed mid-clip.
     assert "KillMode=mixed" in unit
@@ -344,6 +390,72 @@ def test_rerunning_the_update_writes_the_same_scheduler(tmp_path):
     _, calls, _ = _update_scheduler(tmp_path, f"DATA_DIR={data}\n", worker=False)
     assert (units / "lumiverb-scheduler.service").read_text() == first
     assert not any("lumiverb-worker" in c for c in calls)
+
+
+def test_a_link_where_a_data_dir_folder_goes_stops_the_update_before_root_follows_it(tmp_path):
+    # The service user owns DATA_DIR and could put a link there: root's mkdir and chown would follow it.
+    data, elsewhere = tmp_path / "data", tmp_path / "etc"
+    data.mkdir()
+    elsewhere.mkdir()
+    (data / "cache").symlink_to(elsewhere)
+    out, calls, units = _update_scheduler(tmp_path, f"DATA_DIR={data}\n", worker=False)
+    assert (f"fail: {data}/cache is a symbolic link where Lumiverb keeps a folder: remove the link "
+            f"(sudo rm {data}/cache), then run this again") in out
+    assert not [c for c in calls if c.startswith("chown")], "nothing's owner changed"
+    assert not (units / "lumiverb-scheduler.service").exists()
+    # A dangling one too: mkdir -p would make what it names.
+    (data / "cache").unlink()
+    (data / "cache").symlink_to(tmp_path / "made-by-root")
+    out, calls, _ = _update_scheduler(tmp_path, f"DATA_DIR={data}\n", worker=False)
+    assert "fail: " in out and not (tmp_path / "made-by-root").exists()
+    for step, folder in (("plug-ins", "plugins"), ("data dir", "tmp")):
+        (data / folder).symlink_to(elsewhere)
+        out = (_update_plugins(tmp_path, f"DATA_DIR={data}\n")[0] if step == "plug-ins"
+               else _run_update_data_dir(tmp_path, f"DATA_DIR={data}\n").stdout)
+        assert f"fail: {data}/{folder} is a symbolic link" in out, step
+        (data / folder).unlink()
+
+
+@pytest.mark.parametrize(("env_text", "said"), [
+    ("DATA_DIR=/mnt/a\nDATA_DIR=/mnt/b\n", "fail: DATA_DIR is set 2 times in"),
+    ("DATA_DIR=mnt/a\n", "fail: DATA_DIR must be one full path"),
+    ("DATA_DIR=/mnt/a b\n", "fail: DATA_DIR must be one full path"),
+    ("DATA_DIR=/mnt/a\r\n", "fail: DATA_DIR must be one full path"),
+    ("DATA_DIR=/mnt/a%h\n", "fail: DATA_DIR must be one full path"),
+    ("DATA_DIR=/mnt/$ADMIN_KEY\n", "fail: DATA_DIR must be one full path"),
+], ids=["twice", "relative", "space", "carriage-return", "specifier", "variable"])
+def test_a_data_dir_that_isnt_one_full_path_stops_the_update_before_a_unit_is_written(tmp_path, env_text, said):
+    # It's written into units and acted on as root: a second line would be read as more of the unit.
+    out, calls, units = _update_scheduler(tmp_path, env_text, worker=False)
+    assert said in out
+    assert not (units / "lumiverb-scheduler.service").exists() and calls == []
+    out, calls, units = _update_plugins(tmp_path, env_text)
+    assert said in out and not (units / "lumiverb-plugins.service").exists()
+    assert "\n" not in out.split("fail: ", 1)[1].strip(), "said on one line, whatever it holds"
+
+
+def test_a_data_dir_flag_that_isnt_one_full_path_is_refused_before_anything(tmp_path):
+    for bad in ("data", "/mnt/a b", "/mnt/a\nExecStartPre=+/bin/true"):
+        out = subprocess.run(["bash", str(DEPLOY_API), "--app-host", "http://x", "--data-dir", bad, "--dry-run"],
+                             capture_output=True, text=True, timeout=30, check=False,
+                             env={**os.environ, "LUMIVERB_CONF_DIR": str(tmp_path / "conf")})
+        assert out.returncode != 0 and "DATA_DIR must be one full path" in out.stderr, bad
+        assert "DATA_DIR=" not in out.stdout
+
+
+def test_install_and_update_hold_data_dir_folders_and_paths_the_same_way():
+    for name in ("svc_folder", "data_dir_shape"):
+        assert _function(DEPLOY_API.read_text(), name) == _function(UPDATE_API.read_text(), name), name
+    # Every folder root makes in DATA_DIR for the service user goes through it: no chown follows a link.
+    for script in (DEPLOY_API, UPDATE_API):
+        for line in script.read_text().splitlines():
+            if line.lstrip().startswith("chown ") and '"$DATA_DIR"' in line:
+                assert line.lstrip().startswith(('chown -h ', 'chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"')), line
+        text = script.read_text()
+        assert 'mkdir -p "$DATA_DIR"/' not in text and "mkdir -p \"${DATA_DIR}\"/" not in text
+    # Every DATA_DIR an update reads is one line, checked.
+    assert "grep '^DATA_DIR=' " not in UPDATE_API.read_text()
+    assert UPDATE_API.read_text().count("read_data_dir\n") >= 5
 
 
 def test_the_scheduler_needs_the_data_disk(tmp_path):
@@ -385,7 +497,7 @@ def _update_plugins(tmp_path: Path, env_text: str) -> tuple[str, list[str], Path
         'fail() { echo "fail: $1"; exit 1; }\n'
         f'systemctl() {{ echo "$*" >> "{calls}"; }}\n'
         f'ENV_FILE="{env}"; APP_DIR=/opt/lumiverb; SVC_HOME=/var/lib/lumiverb; SVC_USER=lumiverb\n'
-        + block.replace("/etc/systemd/system/", f"{units}/")
+        + _update_helpers() + block.replace("/etc/systemd/system/", f"{units}/")
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     return out.stdout + out.stderr, calls.read_text().splitlines(), units
@@ -476,7 +588,7 @@ def test_a_fresh_install_and_an_update_write_the_same_plug_in_runner():
     assert unit(DEPLOY_API.read_text()) == unit(UPDATE_API.read_text())
     deploy = DEPLOY_API.read_text()
     assert "systemctl enable --now lumiverb-api lumiverb-plugins" in deploy
-    assert deploy.index('mkdir -p "$DATA_DIR"/plugins') < deploy.index("lumiverb-plugins.service <<UNIT")
+    assert deploy.index('svc_folder "$DATA_DIR"/plugins') < deploy.index("lumiverb-plugins.service <<UNIT")
 
 
 def test_the_plug_in_runner_stops_for_the_migrations_and_starts_once_the_api_answers():
@@ -526,8 +638,8 @@ def _env_append() -> str:
     return text[start:text.index("\n}\n", start) + 3]
 
 
-def _update_data_dir(tmp_path: Path, env_text: str) -> tuple[str, list[str]]:
-    """Run update-api.sh's data-dir step against an env file; returns it and the sudo calls."""
+def _run_update_data_dir(tmp_path: Path, env_text: str) -> subprocess.CompletedProcess:
+    """Run update-api.sh's data-dir step against an env file (its sudo calls noted in sudo-calls)."""
     env = tmp_path / "env"
     env.write_text(env_text)
     calls = tmp_path / "sudo-calls"
@@ -535,14 +647,19 @@ def _update_data_dir(tmp_path: Path, env_text: str) -> tuple[str, list[str]]:
     text = UPDATE_API.read_text()
     block = text.split('step "Ensuring data directory"', 1)[1].split("# ----", 1)[0]
     script = (
-        'step() { :; }; ok() { :; }; warn() { :; }; chown() { :; }\n'
+        'step() { :; }; ok() { :; }; warn() { :; }; chown() { :; }; fail() { echo "fail: $1"; exit 1; }\n'
         f'sudo() {{ echo "$*" >> "{calls}"; }}\n'
         f'ENV_FILE="{env}"; SVC_USER=lumiverb; APP_DIR=/opt/lumiverb\n'
-        + _env_append() + block
+        + _env_append() + _update_helpers() + block
     )
-    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    return subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+
+
+def _update_data_dir(tmp_path: Path, env_text: str) -> tuple[str, list[str]]:
+    """Run update-api.sh's data-dir step against an env file; returns it and the sudo calls."""
+    out = _run_update_data_dir(tmp_path, env_text)
     assert out.returncode == 0, out.stdout + out.stderr
-    return env.read_text(), calls.read_text().splitlines()
+    return (tmp_path / "env").read_text(), (tmp_path / "sudo-calls").read_text().splitlines()
 
 
 def test_update_points_the_scheduler_s_caches_at_the_data_disk(tmp_path):
@@ -604,15 +721,18 @@ def _update_python(tmp_path: Path, venv_cfg: str | None, pin: str = "3.12\n", fa
     block = text.split('step "Updating Python dependencies"', 1)[1].split("# ----", 1)[0]
     script = (
         "RED=''; NC=''\n"
-        'step() { :; }; ok() { :; }; warn() { echo "warn: $1"; }\n'
+        'step() { :; }; ok() { :; }; warn() { echo "warn: $1"; }; fail() { echo "fail: $1" >&2; exit 1; }\n'
         # systemctl remembers what it stopped, so is-active can say so.
         f'systemctl() {{ echo "systemctl $*" >> "{calls}"; '
         f'if [[ "$1" == stop ]]; then touch "{tmp_path}/stopped"; fi; '
         f'if [[ "$1" == is-active ]]; then [[ ! -e "{tmp_path}/stopped" ]]; fi; }}\n'
-        f'sudo() {{ echo "sudo $*" >> "{calls}"; [[ -z "{fail_on}" || "$*" != *"{fail_on}"* ]]; }}\n'
+        # What it reads as the service user (sed, grep) is read, as us; the rest is noted.
+        f'sudo() {{ echo "sudo $*" >> "{calls}"; [[ -z "{fail_on}" || "$*" != *"{fail_on}"* ]] || return 1; '
+        'shift 2; if [[ "$1" == env ]]; then shift; while [[ "$1" == *=* ]]; do shift; done; fi; '
+        'case "$1" in sed|grep) "$@" ;; esac; }\n'
         f'APP_DIR="{app}"; SVC_USER=lumiverb; UV_BIN=/usr/local/bin/uv; ENV_FILE="{env_file}"\n'
         # Never this machine's own units (prod's may be here).
-        + block.replace("/etc/systemd/system/", f"{units}/")
+        + _update_helpers() + block.replace("/etc/systemd/system/", f"{units}/")
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert (out.returncode == 0) == ok, out.stdout + out.stderr
@@ -663,7 +783,7 @@ def test_a_half_made_side_venv_is_cleared_before_building(tmp_path):
 
 def test_a_failure_while_stopped_says_how_to_recover(tmp_path):
     # The swap fails after the services were stopped: say so plainly.
-    calls, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="lumiverb /usr/local/bin/uv sync", ok=False)
+    calls, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="UV_NO_CONFIG=1 /usr/local/bin/uv sync", ok=False)
     assert "systemctl stop lumiverb-api" in calls
     assert "isn't running" in err and "update.sh" in err
 
@@ -671,7 +791,7 @@ def test_a_failure_while_stopped_says_how_to_recover(tmp_path):
 def test_a_rerun_that_fails_while_still_stopped_says_so_too(tmp_path):
     # Python already swapped (3.12 = 3.12), the API still down from last time.
     (tmp_path / "stopped").write_text("")
-    _, _, err = _update_python(tmp_path, VENV_CFG.format("3.12.15"), fail_on="lumiverb /usr/local/bin/uv sync", ok=False)
+    _, _, err = _update_python(tmp_path, VENV_CFG.format("3.12.15"), fail_on="UV_NO_CONFIG=1 /usr/local/bin/uv sync", ok=False)
     assert "isn't running" in err
 
 
@@ -994,7 +1114,7 @@ def test_an_update_without_a_data_dir_stops_before_changing_anything(tmp_path):
         'systemctl() { [[ "$1 $2" == "is-enabled lumiverb-scheduler" ]]; }\n'
         f'sudo() {{ echo "sudo $*"; }}\n'
         f'APP_DIR="{tmp_path}"; SVC_USER=lumiverb; UV_BIN=uv; ENV_FILE="{env_file}"\n'
-        + block
+        + _update_helpers() + block
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert out.returncode != 0 and "fail: No DATA_DIR" in out.stdout
@@ -1136,14 +1256,14 @@ def test_an_api_that_doesnt_answer_in_10_s_fails_before_the_scheduler_starts(tmp
 
 
 def test_a_failure_with_the_scheduler_stopped_says_how_to_start_it(tmp_path):
-    _, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="lumiverb /usr/local/bin/uv sync", ok=False)
+    _, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="UV_NO_CONFIG=1 /usr/local/bin/uv sync", ok=False)
     assert "The scheduler is stopped" in err and "sudo systemctl start lumiverb-scheduler" in err
 
 
 def test_under_update_sh_the_scheduler_line_is_update_sh_s(tmp_path, monkeypatch):
     """update.sh says it once, before its Result line."""
     monkeypatch.setenv("LUMIVERB_UPDATE_LOG", str(tmp_path / "log"))
-    _, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="lumiverb /usr/local/bin/uv sync", ok=False)
+    _, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="UV_NO_CONFIG=1 /usr/local/bin/uv sync", ok=False)
     assert "isn't running" in err and "The scheduler is stopped" not in err
 
 
@@ -1393,7 +1513,7 @@ def _update_quickwit(tmp_path: Path, p: dict[str, Path], *, data_dir: str | None
     script = (
         'step() { echo "step: $1"; }; ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }\n'
         f'systemctl() {{ echo "$*" >> "{calls}"; }}\n'
-        f'CONF_DIR="{p["conf"]}"; ENV_FILE="{p["conf"]}/env"\n'
+        f'CONF_DIR="{p["conf"]}"; ENV_FILE="{p["conf"]}/env"; APP_DIR=/opt/lumiverb\n'
         f'DATA_DIR="{p["data"] if data_dir is None else data_dir}"\n'
         + (quickwit + api_unit).replace("/etc/systemd/system/", f"{p['units']}/")
                                .replace("/usr/local/bin/quickwit", f"{p['bin']}/quickwit")
@@ -1438,11 +1558,18 @@ def test_an_update_takes_quickwit_away_and_nothing_else(tmp_path):
     assert "step: Removing Quickwit (search is in PostgreSQL now)" in out
     assert "warn" not in out
     # The API's unit neither waits for Quickwit nor wants it: its [Unit] is a
-    # new install's, the rest as it was.
+    # new install's, the rest as it was but uvicorn's start (no process of it dumpable).
     unit, rest = (p["units"] / "lumiverb-api.service").read_text().split("\n\n", 1)
     assert unit == _deploy_api_unit_section()
-    assert rest == OLD_API_UNIT.format(data=p["data"]).split("\n\n", 1)[1]
+    assert rest == _not_dumpable(OLD_API_UNIT.format(data=p["data"]).split("\n\n", 1)[1])
     assert "ok: The API no longer waits for Quickwit" in out
+
+
+def _not_dumpable(unit: str) -> str:
+    """An old API unit's text as an update leaves it: uvicorn started through python -m src.server.api."""
+    old = "ExecStart=/opt/lumiverb/.venv/bin/uvicorn src.server.api.main:app"
+    assert unit.count(old) == 1
+    return unit.replace(old, "ExecStart=/opt/lumiverb/.venv/bin/python -m src.server.api src.server.api.main:app")
 
 
 def test_a_second_update_has_nothing_to_do_and_says_nothing(tmp_path):
@@ -1468,7 +1595,7 @@ def test_an_install_that_never_had_quickwit_is_left_alone(tmp_path):
     (p["conf"] / "env").write_text("API_PORT=8100\n")
     api_unit = p["units"] / "lumiverb-api.service"
     old = OLD_API_UNIT.format(data=p["data"])
-    api_unit.write_text(_deploy_api_unit_section() + "\n\n" + old.split("\n\n", 1)[1])
+    api_unit.write_text(_deploy_api_unit_section() + "\n\n" + _not_dumpable(old.split("\n\n", 1)[1]))
     before, unit = _tree(root), api_unit.read_text()
     out, calls = _update_quickwit(tmp_path, p)
     assert out == ""
@@ -1541,15 +1668,54 @@ def test_a_fresh_web_install_opens_port_80_before_asking_for_its_certificate():
     assert text.index("ufw allow 80/tcp") < text.index("certbot install --nginx")
 
 
+def _upkeep_calls(text: str) -> list[str]:
+    return [line for line in text.splitlines() if line.startswith("ExecStart=") and "/v1/upkeep" in line]
+
+
 def test_upkeep_waits_for_an_api_still_starting_and_an_update_writes_the_same():
     # A timer enabled on a machine up longer than OnBootSec fires at once, before the API listens: its curl failed
     # (connection refused) and left the unit failed after a clean install.
-    def calls(text: str) -> list[str]:
-        return [line for line in text.splitlines() if line.startswith("ExecStart=/usr/bin/curl")]
-
-    deploy, update = calls(DEPLOY_API.read_text()), calls(UPDATE_API.read_text())
+    deploy, update = _upkeep_calls(DEPLOY_API.read_text()), _upkeep_calls(UPDATE_API.read_text())
     assert len(deploy) == 2 and deploy == update
-    assert all("--retry 12 --retry-delay 5 --retry-connrefused" in call for call in deploy)
+    assert all("exec /usr/bin/curl -sf --retry 12 --retry-delay 5 --retry-connrefused -X POST " in call
+               for call in deploy)
+
+
+def _as_systemd_runs_it(line: str) -> str:
+    """The shell script an upkeep unit's ExecStart=/bin/sh -c '…' hands sh, as written by the scripts' heredocs
+    (bash's \\$ is $) and then read by systemd ($$ is a $, %% a %, \\n a line break in a quoted word)."""
+    line = line.replace("\\$", "$")
+    script = line.split("ExecStart=/bin/sh -c '", 1)[1].rsplit("'", 1)[0]
+    return script.replace("$$", "$").replace("%%", "%").replace("\\n", "\n")
+
+
+@pytest.mark.parametrize("which", [0, 1], ids=["every-5-minutes", "daily"])
+def test_the_install_key_never_reaches_curl_as_an_argument(tmp_path, which):
+    # A command line is every local user's to read (ps). The key reaches curl on its stdin; nothing else changes.
+    line = _upkeep_calls(DEPLOY_API.read_text())[which]
+    assert "ADMIN_KEY}" not in line.split("exec /usr/bin/curl", 1)[1], "never one of curl's arguments"
+    script = _as_systemd_runs_it(line)
+    seen = tmp_path / "seen"
+    _fake_bin(tmp_path, "curl", f'printf "%s\\n" "$@" > {seen}.args\ncat > {seen}.stdin\n')
+    out = subprocess.run(["/bin/sh", "-c", script.replace("/usr/bin/curl", str(tmp_path / "bin" / "curl"))],
+                         capture_output=True, text=True, timeout=30,
+                         env={"PATH": "/usr/bin:/bin", "ADMIN_KEY": "k-7f3a-install", "API_PORT": "8100"})
+    assert out.returncode == 0, out.stderr
+    args = (tmp_path / "seen.args").read_text().splitlines()
+    assert "k-7f3a-install" not in " ".join(args)
+    assert args == ["-sf", "--retry", "12", "--retry-delay", "5", "--retry-connrefused", "-X", "POST",
+                    "http://127.0.0.1:8100/v1/upkeep" + ("?tenants=all" if which == 0 else
+                                                         "/cleanup?tenants=all&dry_run=false"),
+                    "-H", "@-", "-H", "Content-Type: application/json"]
+    assert (tmp_path / "seen.stdin").read_text() == "Authorization: Bearer k-7f3a-install\n"
+
+
+def test_the_first_accounts_provisioning_keeps_the_key_off_curls_command_line():
+    text = DEPLOY_API.read_text()
+    provision = text.split('step "Provisioning tenant: ${TENANT_NAME}"', 1)[1].split('ok "CLI configured', 1)[0]
+    assert "-H @<(printf 'Authorization: Bearer %s\\n' \"$ADMIN_KEY\")" in provision
+    assert "--data-binary @-" in provision and '-d "${TENANT_BODY}"' not in provision
+    assert "Bearer ${ADMIN_KEY}" not in text
 
 
 
@@ -1674,3 +1840,119 @@ def test_a_demo_is_exposed_only_as_a_demo_from_its_install(tmp_path):
     _write_env(other := tmp_path / "other")
     assert "LUMIVERB_EXPOSURE" not in other.read_text()
     assert "only what LUMIVERB_EXPOSURE=${EXPOSURE} lists answers" in DEPLOY_API.read_text(), "said in what's next"
+
+
+# --- What the service user can write never steers what root does ------------
+# The service user owns the checkout, DATA_DIR and its home (on a new install, its home is DATA_DIR, which the API
+# writes). Root's scripts run git, uv and npm as it, never with its own settings for them; root runs no git in the
+# checkout; root's downloads go in a folder of its own.
+
+SCRIPTS = {name: REPO / "scripts" / name for name in
+           ("deploy-api.sh", "update-api.sh", "update.sh", "update-web.sh", "deploy-web.sh", "deploy-vps.sh")}
+
+
+def test_git_npm_and_uv_run_as_the_service_user_without_its_own_settings():
+    for name, path in SCRIPTS.items():
+        for line in path.read_text().splitlines():
+            run = re.sub(r'\b(fail|warn|ok|echo|step) "[^"]*"', "", line.strip())  # what it says, not runs
+            if run.startswith("#") or not re.search(
+                    r"\bgit (fetch|pull|checkout|log|rev-parse|rev-list|symbolic-ref|cat-file|check-ref-format|show"
+                    r"|clone|config)\b|\bnpm (ci|run|install)\b|\"\$UV_BIN\" (sync|python|cache)|\$UV run", run):
+                continue
+            if run.startswith(("git config --system", "git config --global", "git clone ", "command -v git")):
+                continue  # root's own config, or a new clone (nobody else's yet)
+            assert ("as_svc " in run or '"${SVC_ENV[@]}"' in run
+                    or "env GIT_CONFIG_GLOBAL=/dev/null git " in run), f"{name}: {run}"
+    for name in ("deploy-api.sh", "update-api.sh"):
+        assert ('SVC_ENV=(env GIT_CONFIG_GLOBAL=/dev/null npm_config_userconfig=/dev/null UV_NO_CONFIG=1)\n'
+                'as_svc() { sudo -u "$SVC_USER" "${SVC_ENV[@]}" "$@"; }') in SCRIPTS[name].read_text(), name
+    for name in ("update-web.sh", "deploy-web.sh"):
+        assert ('as_svc() { sudo -u "$SVC_USER" env GIT_CONFIG_GLOBAL=/dev/null npm_config_userconfig=/dev/null '
+                '"$@"; }') in SCRIPTS[name].read_text(), name
+    assert 'as_svc() { sudo -u "$SVC_USER" env GIT_CONFIG_GLOBAL=/dev/null "$@" </dev/null; }' in SCRIPTS[
+        "update.sh"].read_text()
+
+
+def test_root_never_marks_the_service_users_checkout_safe_and_unmarks_it():
+    # safe.directory let the checkout's own .git/config (an fsmonitor, hooks) steer a git root ran there.
+    for name, path in SCRIPTS.items():
+        text = path.read_text()
+        assert "--add safe.directory" not in text and "--replace-all safe.directory" not in text, name
+    for name in ("deploy-api.sh", "update-api.sh", "update-web.sh", "deploy-web.sh"):
+        text = SCRIPTS[name].read_text()
+        assert 'git config --system --fixed-value --unset-all safe.directory "$APP_DIR"' in text, name
+
+
+def test_the_first_installs_downloads_go_in_a_folder_of_roots_own(tmp_path):
+    text = DEPLOY_API.read_text()
+    uv = text.split('step "Installing uv"', 1)[1].split("# ----", 1)[0]
+    assert "/tmp/" not in uv and 'UV_TMP="$(mktemp -d)"' in uv
+    assert "trap 'rm -rf -- \"$UV_TMP\"' EXIT" in uv and 'rm -rf -- "$UV_TMP"\n  trap - EXIT' in uv
+    # Run it, the downloads stubbed: everything lands in the private folder, which is gone after.
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    _fake_bin(tmp_path, "curl", 'out=""; while [[ $# -gt 0 ]]; do [[ "$1" == -o ]] && out="$2"; shift; done\n'
+                                'mkdir -p x/uv-t && printf "uv" > x/uv-t/uv && printf "uvx" > x/uv-t/uvx\n'
+                                'if [[ "$out" == *.sha256 ]]; then (cd "$(dirname "$out")" && sha256sum uv.tar.gz) '
+                                '> "$out"; else tar -czf "$out" -C x uv-t; fi\n')
+    _fake_bin(tmp_path, "install", f'echo "$@" >> {tmp_path}/installed\n')
+    block = uv.split("\n", 1)[1].replace('ok "uv $($UV_BIN --version)"', "")
+    script = ('ok() { :; }; fail() { echo "fail: $1"; exit 1; }\n'
+              f'UV_BIN="{tmp_path}/uv"; RUST_TARGET=t; UV_VERSION=0.7.12\n' + block)
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30,
+                         cwd=tmp_path,
+                         env={**os.environ, "TMPDIR": str(temp), "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"})
+    assert out.returncode == 0, out.stdout + out.stderr
+    installed = (tmp_path / "installed").read_text().splitlines()
+    assert [line.split()[2].startswith(str(temp)) for line in installed] == [True, True], installed
+    assert list(temp.iterdir()) == [], "the folder is gone"
+
+
+def test_root_reads_and_writes_nothing_in_the_service_users_home():
+    # Its CLI config: read as it (a link there points where it can read, no further), written with its umask.
+    deploy, update = DEPLOY_API.read_text(), UPDATE_API.read_text()
+    for text in (deploy, update):
+        assert "--from-cli-config -" in text and '--from-cli-config "' not in text
+        assert "as_svc timeout 10 head -c 1048576 -- " in text
+    tenant = deploy.split("# 12. Provision default tenant", 1)[1].split("# 13.", 1)[0]
+    assert 'if sudo -u "${SVC_USER}" grep -qs ' in tenant and "grep -q '\"api_key\"" not in tenant
+    assert 'sudo -u "${SVC_USER}" -H python3 -I -' in tenant
+    assert '\nchmod 600 "$CLI_CONFIG"' not in tenant and 'sudo -u "${SVC_USER}" chmod 600 "$CLI_CONFIG"' in tenant
+    assert '(umask 077 && sudo -u "${SVC_USER}" tee "$CLI_CONFIG"' in tenant
+    # Its .python-version and venv's pyvenv.cfg, read as it too.
+    assert 'HAVE_PY="$(as_svc sed ' in update and 'WANT_PY="$(as_svc grep ' in update
+
+
+def test_the_carried_cli_config_reaches_the_env_file_as_single_lines_only(tmp_path):
+    # update-api.sh's scheduler settings step, with sudo running what it's given as us: a value with a line break
+    # in the service user's config is left out, never a line of the env file (which every unit reads).
+    home = tmp_path / "home"
+    (home / ".lumiverb").mkdir(parents=True)
+    (home / ".lumiverb" / "config.json").write_text(
+        '{"gpu_decodes": "1\\nDATA_DIR=/elsewhere", "render_concurrency": 2}')
+    env = tmp_path / "env"
+    env.write_text("API_PORT=8100\n")
+    text = UPDATE_API.read_text()
+    block = text.split('step "Scheduler settings"', 1)[1].split("# ----", 1)[0]
+    script = (
+        'ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }\n'
+        'sudo() { shift 2; "$@"; }\n'
+        f'ENV_FILE="{env}"; APP_DIR="{REPO}"; SVC_HOME="{home}"; SVC_USER=lumiverb; PROCESSING=true\n'
+        + _update_helpers() + block)
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert env.read_text().splitlines() == ["API_PORT=8100", "LUMIVERB_RENDER_CONCURRENCY=2"]
+    assert "gpu_decodes in the service user's CLI config isn't a whole number on one line: left out" in out.stderr
+    (home / ".lumiverb" / "config.json").unlink()  # none at all: nothing carried, the update goes on
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+def test_postgresql_lets_no_process_of_the_service_user_in_without_the_password():
+    # Ubuntu's clusters let a local OS user in as the database role of its own name (peer). The service user's
+    # name isn't the app's role, and the install adds nothing to pg_hba.conf or pg_ident.conf: a process of its
+    # (a plug-in's) gets no further than one without the password.
+    text = DEPLOY_API.read_text()
+    assert 'SVC_USER="lumiverb"' in text and 'PG_USER="app"' in text
+    for config in ("pg_hba", "pg_ident", "CREATE ROLE", "CREATE USER lumiverb", " trust"):
+        assert config not in text, config

@@ -39,6 +39,16 @@ def _home_copy() -> Path:
     return Path.home() / ".insightface" / "models" / MODEL_VERSION
 
 
+def matplotlib_settings_beside_the_caches() -> None:
+    """InsightFace imports matplotlib, which makes itself a settings folder it can write as it's imported: beside
+    the caches (XDG_CACHE_HOME: the data disk on a Linux server), never the user's home, which is read-only to a
+    Linux install's scheduler and API (else matplotlib warns and makes a temporary one in each process). An
+    operator's MPLCONFIGDIR stays."""
+    from src.processing.cache_dir import cache_dir
+
+    os.environ.setdefault("MPLCONFIGDIR", str(cache_dir("matplotlib")))
+
+
 def model_available() -> bool:
     """Whether the model is here, or can be copied in without a download."""
     return (model_root() / "models" / MODEL_VERSION).is_dir() or _home_copy().is_dir()
@@ -154,6 +164,7 @@ class InsightFaceProvider:
         if self._app is None:
             with self._lock:
                 if self._app is None:
+                    matplotlib_settings_beside_the_caches()
                     import onnxruntime as ort
                     from insightface.app import FaceAnalysis
 

@@ -149,7 +149,7 @@ The plug-in runner starts it from its installed folder with its `run` command, o
 | Variable | What it is |
 |---|---|
 | `LUMIVERB_PLUGIN_SOCKET` | The Unix socket to listen on: answer HTTP there. Remove a stale one before listening. |
-| `LUMIVERB_PLUGIN_DATA` | Its own folder, the only one it may write. Kept across restarts and updates. |
+| `LUMIVERB_PLUGIN_DATA` | Its own folder, the only one it should write. Kept across restarts and updates. |
 | `LUMIVERB_PLUGIN_SETTINGS` | A JSON file of its server settings (secrets among them; only Lumiverb's user can read it), for what it does before anything asks it anything: fetching its downloads from a mirror, say. |
 | `LUMIVERB_PLUGIN_ID`, `LUMIVERB_PLUGIN_PROTOCOL` | Its id, and the protocol it's spoken to in. |
 | `HOME` | Its data folder. |
@@ -157,6 +157,8 @@ The plug-in runner starts it from its installed folder with its `run` command, o
 | `PYTHONUNBUFFERED` | `1`. |
 
 Besides those, only `PATH`, the locale (`LANG`, `LC_ALL`, `TZ`) and this machine's proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, and their lowercase spellings), when it has them: nothing of Lumiverb's settings, keys or database addresses.
+
+What it shares: a plug-in runs as the user Lumiverb runs as, and nothing confines it to what its manifest declares (ADR-023's phase 4, confinement, is deferred). On Linux that's the service user (`lumiverb`): it can't read the secrets of the API, the scheduler or the runner (none of them is dumpable, so their environment and memory are closed to it), but it can read whatever that user can, Lumiverb's data folder with its previews and backups among it, write `DATA_DIR/plugins` (other plug-ins' folders there too) and reach the network whatever it declares. On a Mac it runs as the Mac's owner and shares their whole account, the install's env file included. So a plug-in is trusted code: the server admin installs only what they trust, and a plug-in should keep to its own folder and to what it declares.
 
 What the runner holds it to:
 

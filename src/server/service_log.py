@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Literal
 
 from src.server.lifecycle.log import LOG_KEPT
+from src.shared.secrets_env import without_secrets
 
 Level = Literal["error", "warning", "info"]
 
@@ -281,7 +282,8 @@ class _JournalReader:
         if after:
             argv.append(f"--after-cursor={after}")  # with -r: older than it
         try:
-            out = self.run(argv, capture_output=True, text=True, timeout=JOURNAL_TIMEOUT_SEC, check=False)
+            out = self.run(argv, capture_output=True, text=True, timeout=JOURNAL_TIMEOUT_SEC, check=False,
+                           env=without_secrets(os.environ))
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise LogUnavailableError(f"journalctl didn't answer: {exc}") from exc
         records = []
