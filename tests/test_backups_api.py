@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, make_url, text
 
-from src.server import backups
+from src.server import backups, data_folder
 from src.server.api.main import app
 from src.server.api.routers import upkeep
 from src.server.config import get_settings
@@ -170,6 +170,30 @@ def test_the_folder_is_chosen_on_the_machine_itself(install, tmp_path):
     with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
         back = here.put("/v1/system/backups/folder", json={"folder": None}, headers=auth)
     assert back.json()["folder"] == str(data / "backups")
+
+
+def test_a_name_lumiverb_keeps_in_its_data_folder_is_refused_before_it_is_offered_to_be_made(install):
+    """Settings › Backups and the setup wizard's Backups step choose here: tmp (emptied at every start) and models
+    are refused at once with 409 data_folder, never a 409 make_folder first, and nothing is made, asked to make it
+    or not. backups itself and a name of its own are still taken."""
+    data, _ = install
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
+        auth = _signed_in(here)
+        for name in ("tmp", "models"):
+            said = (f"In Lumiverb's data folder ({data}), the name {name} is its own, for "
+                    f"{data_folder.NAMES[name]}: choose another name, or a folder outside it.")
+            for make in (False, True):
+                refused = here.put("/v1/system/backups/folder", json={"folder": str(data / name), "make_folder": make},
+                                   headers=auth)
+                assert (refused.status_code, refused.json()["error"]["code"]) == (409, "data_folder"), refused.text
+                assert refused.json()["error"]["message"] == said
+                assert not (data / name).exists()
+        assert here.get("/v1/system/backups", headers=auth).json()["folder"] == str(data / "backups")
+        for name in ("Lumiverb backups", "backups"):
+            made = here.put("/v1/system/backups/folder", json={"folder": str(data / name), "make_folder": True},
+                            headers=auth)
+            assert made.status_code == 200 and made.json()["folder"] == str(data / name), made.text
+    assert backups.folder(data) == data / "backups"
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes anywhere")

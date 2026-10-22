@@ -11,6 +11,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import re
 import shutil
 import time
 from collections import namedtuple
@@ -19,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from src.server import data_folder
 from src.server import system_health as h
 from src.server.storage import move
 from src.server.storage.local import LocalStorage, UnsafeKeyError
@@ -505,11 +507,39 @@ def _refused(data: Path, folder: Path, code: str, status: int, **kw) -> str:
 def test_not_in_the_data_folder_s_own_folders_nor_holding_it(install, tmp_path):
     """What's in a previews folder is moved, swept and deleted: never Lumiverb's own data."""
     data, _ = install
-    assert "one of Lumiverb's own folders" in _refused(data, data / "postgres", "data_folder", 409)
-    assert "one of Lumiverb's own folders" in _refused(data, data / "postgres" / "base", "data_folder", 409)
+    own = f"In Lumiverb's data folder ({data}), the name postgres is its own, for its database"
+    assert own in _refused(data, data / "postgres", "data_folder", 409)
+    assert own in _refused(data, data / "postgres" / "base", "data_folder", 409)
+    (data / "notes").mkdir()
+    (data / "notes" / "todo.txt").write_text("someone's")
+    assert "one of Lumiverb's own folders" in _refused(data, data / "notes", "data_folder", 409)
     assert "holds Lumiverb's own data folder" in _refused(data, tmp_path, "data_folder", 409)
     (data / "previews").mkdir()
     assert move.check_target(data, data / "previews") == data / "previews", "a new folder of its own there is fine"
+
+
+@pytest.mark.parametrize("name", sorted(data_folder.NAMES))
+def test_never_a_name_lumiverb_keeps_in_its_data_folder(install, name):
+    """A new, empty folder of a name Lumiverb makes in DATA_DIR later (or made there once) would be Lumiverb's:
+    refused, there yet or not and whatever its case, saying what the name is for."""
+    data, _ = install
+    said = (f"In Lumiverb's data folder ({data}), the name {name} is its own, for {data_folder.NAMES[name]}: "
+            "choose another name, or a folder outside it.")
+    with pytest.raises(move.MoveError) as refused:
+        move.check_name(data, data / name / "previews")
+    assert (refused.value.code, refused.value.status, str(refused.value)) == ("data_folder", 409, said)
+    if not (data / name).exists():
+        (data / name).mkdir()
+    assert _refused(data, data / name, "data_folder", 409) == said
+    with pytest.raises(move.MoveError, match=re.escape(f"the name {name.upper()} is its own")):
+        move.check_name(data, data / name.upper())  # a Mac's disk takes one for the other
+
+
+def test_a_name_of_its_own_is_never_refused_for_its_name(install, tmp_path):
+    data, drive = install
+    for raw in (None, "", "relative/models", data, data / "previews", data / "Lumiverb models", drive / "models",
+                tmp_path / "models"):
+        move.check_name(data, raw)
 
 
 def test_never_with_a_library_s_files(install):

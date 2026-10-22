@@ -156,7 +156,7 @@
 <li>In <strong>Settings › Backups</strong>, under Folder, click <strong>Change</strong>.</li>
 <li>Type the folder, such as <code>/Volumes/Backup/Lumiverb</code>, and click <strong>Save</strong>. If it isn't there yet, click <strong>Make it</strong>.</li>
 </ol>
-<p>It applies from now on: backups made already stay where they are. <strong>Use the default</strong> goes back. A folder on a drive that isn't plugged in is refused. On Linux, a folder outside the data folder needs the API's service allowed to write there first: see <a href="storage.html#on-linux-folders-outside-the-data-folder">Storage</a>.</p>
+<p>It applies from now on: backups made already stay where they are. <strong>Use the default</strong> goes back. A folder on a drive that isn't plugged in is refused. So is a folder in the data folder with a name Lumiverb uses there, such as <code>tmp</code> (emptied every time Lumiverb starts), <code>models</code> or <code>plugins</code>: give it a name of its own, or choose one outside the data folder. On Linux, a folder outside the data folder needs the API's service allowed to write there first: see <a href="storage.html#on-linux-folders-outside-the-data-folder">Storage</a>.</p>
 <h2 id="keep-a-copy-of-the-env-file">Keep a copy of the env file<a class="anchor" href="#keep-a-copy-of-the-env-file" aria-label="Link to this section">#</a></h2>
 <p>The databases keep AI machines' keys and plug-ins' secret settings sealed, with a key that's in the install's env file, <code>LUMIVERB_SECRETS_KEY</code>. A backup on its own can't open them. Keep a copy of the env file with your backups, somewhere safe: it holds that key and others.</p>
 <ul>

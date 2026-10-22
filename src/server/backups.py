@@ -51,7 +51,7 @@ from time import monotonic, sleep
 from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.server import drives, write_check
+from src.server import data_folder, drives, write_check
 from src.server.database import ACCOUNT_ID
 from src.shared.secrets_env import without_secrets
 
@@ -89,7 +89,14 @@ REPLACED = "__replaced"
 
 
 class BackupError(Exception):
-    """A backup or restore couldn't be made; the message says why, plainly."""
+    """A backup or restore couldn't be made, or a folder chosen for them can't
+    be used; the message says why, plainly. `code` and `status`: the API's
+    answer to a folder chosen (400 folder_not_usable unless said)."""
+
+    def __init__(self, message: str, code: str = "folder_not_usable", status: int = 400) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -143,6 +150,16 @@ def folder(data_dir: Path) -> Path:
     return Path(chosen) if isinstance(chosen, str) and chosen else default_folder(data_dir)
 
 
+def check_name(data_dir: Path, path: str | Path | None) -> None:
+    """A folder chosen in DATA_DIR for backups never has a name Lumiverb keeps
+    there (src/server/data_folder.py) but backups itself, there yet or not:
+    tmp is emptied at every start, models and plugins are others' (409
+    data_folder, saying what the name is for). Asked before a folder that
+    isn't there is offered to be made (the route), and by set_folder."""
+    if (why := data_folder.refusal(data_dir, path, own=default_folder(data_dir).name)) is not None:
+        raise BackupError(why, "data_folder", 409)
+
+
 def check_folder(path: str | Path) -> Path:
     """The folder, when backups can go there: a full path to a folder this
     machine's Lumiverb can write. Raises BackupError saying why not."""
@@ -168,6 +185,7 @@ def set_folder(data_dir: Path, path: str | Path | None) -> Path:
     if path is None:
         settings.unlink(missing_ok=True)
         return default_folder(data_dir)
+    check_name(data_dir, path)
     chosen = check_folder(path)
     _write_json(settings, {"folder": str(chosen)})
     return chosen

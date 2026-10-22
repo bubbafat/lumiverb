@@ -56,7 +56,7 @@ from rich.console import Console
 from src.processing.api import LumiverbAPIError
 from src.processing.cache_dir import cache_dir
 from src.processing.machine import FULL_SCAN_EVERY_MIN
-from src.processing.originals import Originals, reach
+from src.processing.originals import Originals, reach, reader_named
 from src.shared.io_utils import UnsafeRelPathError, is_within
 
 if TYPE_CHECKING:
@@ -346,7 +346,7 @@ def _note_failures(
 def _note_unreadable(state: ScanState, library: dict, prefix: str | None, stats: ScanStats) -> None:
     """The library's files this machine isn't allowed to read, as this scan found them where it looked (its
     prefix; all of it when None), and as earlier scans found them elsewhere; said in the log when there are any."""
-    from src.processing.scan import reader_named, some_of
+    from src.processing.scan import some_of
 
     library_id = library["library_id"]
     kept = [p for p in state.unreadable.get(library_id, []) if prefix is not None and not is_within(p, prefix)]
@@ -376,6 +376,14 @@ def _warn_if_no_root_map() -> None:
     logger.warning("scheduler: LUMIVERB_ROOT_MAP is empty; no library can be scanned")
 
 
+def _run_scan(*args: Any, **kwargs: Any) -> ScanStats:
+    """run_scan, imported as a library's scan starts: when it can't be (a libvips too old to use,
+    src/processing/libvips.py), that's the library's scan failing, which Processing says, and nothing else stops."""
+    from src.processing.scan import run_scan
+
+    return run_scan(*args, **kwargs)
+
+
 def scan_pass(
     client: Any,
     libraries: list[dict],
@@ -403,8 +411,7 @@ def scan_pass(
     to_upload hears, by library, the files its scan has found to add or read
     again and hasn't sent yet, and their size on disk (run_scan's).
     remakes: run_scan's (False: the reader holds its remakes back)."""
-    if scan_fn is None:
-        from src.processing.scan import run_scan as scan_fn
+    scan_fn = scan_fn or _run_scan
     console = console or Console(quiet=True)
     # require_entries: an unmounted mount point is an empty folder, and
     # scanning it would mark every file missing.
@@ -473,9 +480,7 @@ UNREADABLE_NAMED = 20
 def unreadable_now(state: ScanState | None, library_ids: list[str]) -> list[dict]:
     """Of these libraries, those with files this machine isn't allowed to read: how many, the first of them by
     path, and who it reads them as, as the scheduler's status says them."""
-    from src.processing.scan import reader_named
-
-    found = dict(state.unreadable) if state is not None else {}  # a copy: a scan job changes it meanwhile
+    found =dict(state.unreadable) if state is not None else {}  # a copy: a scan job changes it meanwhile
     return [{"library_id": i, "files": len(paths), "paths": paths[:UNREADABLE_NAMED], "reader": reader_named()}
             for i in library_ids if (paths := found.get(i))]
 

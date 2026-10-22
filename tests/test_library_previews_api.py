@@ -154,6 +154,23 @@ def test_never_a_folder_with_a_library_s_files_or_lumiverb_s_own(mac):
     assert previews_location.read(data) == previews_location.Location(data)
 
 
+def test_a_name_lumiverb_keeps_in_its_data_folder_is_refused_before_it_is_offered_to_be_made(mac):
+    """models, backups, plugins...: not there yet, a 409 data_folder at once, never a 409 make_folder first, and
+    nothing made, asked to make it or not."""
+    data, originals, tmp, control_url = mac
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+        auth, library_id, _ = _library(client, control_url, originals)
+        for put in (lambda folder: client.put(f"/v1/libraries/{library_id}/previews", json=folder, headers=auth),
+                    lambda folder: client.put("/v1/system/storage/previews", json=folder, headers=auth)):
+            for name in ("models", "plugins", "Backups"):
+                for make in (False, True):
+                    refused = put({"folder": str(data / name), "make_folder": make, "move": True})
+                    assert (refused.status_code, refused.json()["error"]["code"]) == (409, "data_folder"), refused.text
+                    assert f"the name {name} is its own" in refused.json()["error"]["message"]
+                    assert not (data / name).exists()
+    assert previews_location.read(data) == previews_location.Location(data)
+
+
 def test_a_folder_not_there_is_asked_about_then_made(mac):
     data, originals, tmp, control_url = mac
     wanted = tmp / "Video" / "Lumiverb"

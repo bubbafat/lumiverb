@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from src.server import drives, write_check
+from src.server import data_folder, drives, write_check
 from src.server.storage.files import PARTIAL
 from src.server.storage.local import through_a_link
 from src.shared import previews_location
@@ -175,12 +175,23 @@ def _holds_only_previews(folder: Path) -> bool:
         return False
 
 
+def check_name(data_dir: Path, to: str | Path | None) -> None:
+    """A folder chosen in DATA_DIR never has a name Lumiverb keeps there
+    (src/server/data_folder.py: its models, plug-ins, uploads, database...),
+    whether it's there yet or not, whatever its case: Lumiverb would make it
+    later, or move, empty or remove what's in it (409 data_folder, saying
+    what the name is for). Asked before a folder that isn't there is offered
+    to be made (the routes), and by check_target."""
+    if (why := data_folder.refusal(data_dir, to)) is not None:
+        raise MoveError(why, "data_folder", 409)
+
+
 def _trusted(data_dir: Path, chosen: Path, originals: dict[str, Path]) -> None:
     """A folder an admin chooses is trusted as Lumiverb's own: what's in it is
-    moved, swept and deleted. So it's in none of DATA_DIR's own folders (one
-    in DATA_DIR with anything but previews in it: its models, plug-ins,
-    uploads, database...), nor a folder holding DATA_DIR (409 data_folder;
-    a new folder of its own in DATA_DIR is fine); it's no library's folder
+    moved, swept and deleted. So it's in none of DATA_DIR's own folders (a
+    name Lumiverb keeps there, check_name; or one there with anything but
+    previews in it), nor a folder holding DATA_DIR (409 data_folder; a new
+    folder of a name of its own in DATA_DIR is fine); it's no library's folder
     (`originals`: each library this server reads, by name, its folder here),
     inside one or holding one (409 originals_folder); and it's the service's
     own user's (422 folder_not_owned). DATA_DIR itself, the previews' first
@@ -189,6 +200,7 @@ def _trusted(data_dir: Path, chosen: Path, originals: dict[str, Path]) -> None:
     real = Path(os.path.realpath(chosen))
     if real == data:
         return
+    check_name(data_dir, chosen)
     if real.is_relative_to(data):
         own = data / real.relative_to(data).parts[0]
         if not _holds_only_previews(own):

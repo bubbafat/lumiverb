@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -538,9 +539,10 @@ def test_install_and_update_bring_the_same_heic_decoder():
 
 
 def _photo_decoders(tmp_path: Path, *, processing: bool, installed: bool = False, known: bool = True,
-                    installs: bool = True) -> tuple[int, str, list[str]]:
+                    installs: bool = True, vips: str | None = None) -> tuple[int, str, list[str]]:
     """Run update-api.sh's photo decoders step with dpkg, apt-cache and apt-get stubbed: whether the package is
-    installed, whether the distribution has it, whether installing it works. Returns its exit code, its output and
+    installed, whether the distribution has it, whether installing it works, and the libvips installed (vips, its
+    package's version; None: none). Versions are compared by the real dpkg. Returns its exit code, its output and
     the apt-get calls."""
     calls = tmp_path / "apt-calls"
     calls.write_text("")
@@ -548,7 +550,9 @@ def _photo_decoders(tmp_path: Path, *, processing: bool, installed: bool = False
     block = text.split('step "Photo decoders"', 1)[1].split("\n", 1)[1].split("# ----", 1)[0]
     script = (
         'ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }\n'
-        f'dpkg() {{ {"return 0" if installed else "return 1"}; }}\n'
+        'dpkg() { if [[ "$1" == --compare-versions ]]; then command dpkg "$@"; else '
+        f'{"return 0" if installed else "return 1"}; fi; }}\n'
+        f'dpkg-query() {{ {f"echo ii {vips}" if vips else "return 1"}; }}\n'
         f'apt-cache() {{ {"return 0" if known else "return 100"}; }}\n'
         f'apt-get() {{ echo "$*" >> "{calls}"; [[ "$1" == update ]] || {"return 0" if installs else "return 100"}; }}\n'
         f'PROCESSING={"true" if processing else "false"}\n' + block
@@ -578,6 +582,60 @@ def test_an_update_whose_decoder_wont_install_says_so_and_goes_on(tmp_path):
     assert "warn: HEIC photos can't be read until libheif-plugin-libde265 is installed" in out
     assert apt == ["install -y -qq libheif-plugin-libde265", "update -qq",
                    "install -y -qq libheif-plugin-libde265"], "the lists made fresh once, then tried again"
+
+
+# -- libvips: 8.13 or later (src/processing/libvips.py refuses an older one) -----------------------------------
+
+LIBVIPS_RULE = re.compile(r"^# Photos are read with libvips .*?^libvips_too_old\(\) \{\n.*?^\}\n", re.S | re.M)
+
+
+def test_install_and_update_hold_libvips_to_what_the_code_needs():
+    deploy, update = (LIBVIPS_RULE.search(s.read_text()) for s in (DEPLOY_API, UPDATE_API))
+    assert deploy and update and deploy.group(0) == update.group(0), "the same text in both"
+    code = (REPO / "src" / "processing" / "libvips.py").read_text()
+    needed = re.search(r"^TRUSTED_ONLY_SINCE = \((\d+), (\d+)\)", code, re.M)
+    assert f"\nLIBVIPS_NEEDED={needed.group(1)}.{needed.group(2)}\n" in deploy.group(0)
+
+
+def _libvips_at_install(tmp_path: Path, candidate: str | None) -> tuple[int, str]:
+    """deploy-api.sh's libvips_check, with apt-cache saying what libvips42 it would install (None: none)."""
+    text = DEPLOY_API.read_text()
+    policy = (f"libvips42t64:\n  Installed: (none)\n  Candidate: (none)\nlibvips42:\n  Installed: (none)\n"
+              f"  Candidate: {candidate}\n" if candidate else "")
+    script = (
+        'fail() { echo "fail: $1"; exit 1; }\n'
+        f"apt-cache() {{ printf '%s' {shlex.quote(policy)}; }}\n"
+        + LIBVIPS_RULE.search(text).group(0) + _function(text, "libvips_check") + "libvips_check\necho went on\n"
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    return out.returncode, out.stdout + out.stderr
+
+
+def test_an_install_with_processing_stops_where_libvips_is_too_old(tmp_path):
+    rc, out = _libvips_at_install(tmp_path, "8.12.1-1build1")  # Ubuntu 22.04's
+    assert rc == 1 and "went on" not in out, out
+    assert ("fail: This system's libvips is 8.12.1: Lumiverb reads photos with libvips 8.13 or later, the first that "
+            "can turn off its untrusted loaders. Install on Ubuntu 24.04 or later") in out
+    for candidate in ("8.15.1-1.1build4", "8.14.1-3+deb12u3", "8.13.0-1", None):  # 24.04's, Debian 12's
+        rc, out = _libvips_at_install(tmp_path, candidate)
+        assert rc == 0 and out.strip() == "went on", (candidate, out)
+    text = DEPLOY_API.read_text()
+    packages = text.split('step "Installing system packages"', 1)[1]
+    assert packages.index("libvips_check") < packages.index("apt-get install"), "before any package is installed"
+    assert '[[ "$WITH_WORKER" != "true" ]] || libvips_check' in packages, "only where processing is"
+
+
+def test_an_update_says_a_libvips_too_old_and_goes_on(tmp_path):
+    rc, out, _ = _photo_decoders(tmp_path, processing=True, installed=True, vips="8.12.1-1build1")
+    assert rc == 0, "the rest works as before: never a failed update"
+    assert ("warn: This system's libvips is 8.12.1: Lumiverb reads photos with libvips 8.13 or later, the first "
+            "that can turn off its untrusted loaders, so scans stop until it's newer") in out
+    rc, out, _ = _photo_decoders(tmp_path, processing=True, installed=True, vips="8.15.1-1.1build4")
+    assert rc == 0 and "ok: libvips 8.15.1" in out and "warn:" not in out, out
+    rc, out, _ = _photo_decoders(tmp_path, processing=True, installed=True)  # none from a package: nothing to say
+    assert rc == 0 and "libvips" not in out, out
+    rc, out, _ = _photo_decoders(tmp_path, processing=False, vips="8.12.1-1build1")
+    assert rc == 0 and "libvips" not in out, "no processing here: nothing reads photos"
 
 
 def test_a_fresh_install_and_an_update_write_the_same_plug_in_runner():

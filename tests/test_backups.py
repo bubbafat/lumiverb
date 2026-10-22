@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from src.server import backups
+from src.server import backups, data_folder
 from src.server import system_health as h
 from src.server.backups import Backup, BackupError
 
@@ -267,6 +267,33 @@ def test_a_folder_it_cant_use_is_refused_with_why(tmp_path, given, said):
     with pytest.raises(BackupError, match=said):
         backups.set_folder(tmp_path, given)
     assert backups.folder(tmp_path) == tmp_path / "backups"
+
+
+@pytest.mark.parametrize("name", ["tmp", "models", "Models", "plugins/old"])
+def test_never_a_name_lumiverb_keeps_in_its_data_folder(tmp_path, name):
+    """tmp is emptied at every start, models is the AI models': backups never go there, there yet or not, whatever
+    its case, saying what the name is for (409 data_folder, as for previews)."""
+    data = tmp_path / "data"
+    first = name.split("/")[0]
+    said = (f"In Lumiverb's data folder ({data}), the name {first} is its own, for "
+            f"{data_folder.kept(first)}: choose another name, or a folder outside it.")
+    for there in (False, True):
+        if there:
+            (data / name).mkdir(parents=True, exist_ok=True)
+        with pytest.raises(BackupError) as refused:
+            backups.set_folder(data, data / name)
+        assert (str(refused.value), refused.value.code, refused.value.status) == (said, "data_folder", 409)
+        assert backups.folder(data) == data / "backups", "nothing chosen"
+
+
+def test_backups_own_name_and_a_name_of_its_own_are_fine(tmp_path):
+    data = tmp_path / "data"
+    for folder in (data / "backups", data / "Lumiverb backups", tmp_path / "tmp"):
+        folder.mkdir(parents=True)
+        assert backups.set_folder(data, folder) == folder
+        assert backups.folder(data) == folder
+    backups.check_name(data, None)  # back to the default
+    backups.check_name(data, "relative/tmp")  # check_folder says what's wrong with that one
 
 
 def test_a_folder_not_there_on_a_drive_that_is_says_so(tmp_path):

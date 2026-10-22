@@ -123,7 +123,9 @@
 are two ways: on the internet with a domain name and a certificate, or on your home network without one.</p>
 <h2 id="what-it-needs">What it needs<a class="anchor" href="#what-it-needs" aria-label="Link to this section">#</a></h2>
 <ul>
-<li>Ubuntu 22.04 or later, and a user who can use <code>sudo</code>.</li>
+<li>Ubuntu 24.04 or later, and a user who can use <code>sudo</code>. Ubuntu 22.04's libvips (8.12) is too old: Lumiverb reads
+photos with libvips 8.13 or later, the first that can turn off the loaders it doesn't trust, and the install
+stops there before it installs anything.</li>
 <li>4 GB of memory or more. With less and no swap, the install says so: finding faces, search and transcripts can
 need more than that at once.</li>
 <li>Room for what Lumiverb makes: about 15 GB per 100,000 photos, and up to 1 GB per hour of video. They can go on

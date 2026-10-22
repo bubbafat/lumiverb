@@ -65,8 +65,9 @@ brew upgrade lumiverb
 
 ### On a Linux server
 
-Ubuntu 22.04 or later, with a domain name already pointing at it (the TLS
-certificate is checked against it):
+Ubuntu 24.04 or later (22.04's libvips is too old to read photos with), with
+a domain name already pointing at it (the TLS certificate is checked against
+it):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \

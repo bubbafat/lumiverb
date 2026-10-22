@@ -481,6 +481,26 @@ def test_one_librarys_back_off_doesnt_hold_up_another(das: Path) -> None:
 
 
 @pytest.mark.fast
+def test_a_libvips_too_old_to_use_is_each_librarys_scan_failing_and_the_status_still_reads(
+        das: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """src/processing/libvips.py refuses a libvips older than 8.13, which comes in with the scan: the scheduler
+    says it as each library's scan failing (Processing's Scans row, with why), backs off as for any other, and
+    what its status says of the libraries (who reads them) never needs it."""
+    from src.server.scheduler.scans import failing_now, unreadable_now
+    from tests import old_libvips
+
+    old_libvips.pretend(monkeypatch)
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    state = ScanState(last_full_scan={"lib_1": 99 * HOUR}, unreadable={"lib_1": ["locked.png"]})
+    _pass(server, state, scan=None)  # the scheduler's own scan
+    [failing] = failing_now(state, ["lib_1"])
+    assert failing["error"].startswith("libvips 8.12 is too old: Lumiverb reads photos with libvips 8.13 or later")
+    assert failing["error"].endswith("then restart Lumiverb."), "said whole"
+    assert server.acks == [], "its changes wait"
+    assert unreadable_now(state, ["lib_1"])[0]["reader"].endswith("user")
+
+
+@pytest.mark.fast
 def test_the_scheduler_says_which_libraries_scans_keep_failing() -> None:
     from src.server.scheduler.scans import Failing, failing_now
 
