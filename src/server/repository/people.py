@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
-
 from sqlalchemy import text
 from sqlmodel import Session, select
 
+from src.server import cursors
 from src.shared.utils import escape_like, utcnow
 from src.server.models.tenant import (
     Face,
@@ -134,8 +133,6 @@ class PersonRepository:
         Cursor is base64-encoded JSON {"count": N, "id": person_id}.
         Optional q filters by display_name (case-insensitive substring match).
         """
-        import base64 as _b64
-
         having_conditions: list[str] = []
         params: dict[str, object] = {"limit": limit, "within": self.within}
 
@@ -146,22 +143,17 @@ class PersonRepository:
             params["q"] = escape_like(q)
 
         if after:
-            try:
-                decoded = json.loads(_b64.urlsafe_b64decode(after + "=="))
-                cursor_count = decoded["count"]
-                cursor_id = decoded["id"]
-                # Cursor count refers to the visible-faces count (the
-                # COUNT expression in the SELECT). Use the alias rather
-                # than re-computing the COUNT(...) inline.
-                having_conditions.append(
-                    "(COUNT(a.asset_id)::int < :cursor_count"
-                    "  OR (COUNT(a.asset_id)::int = :cursor_count"
-                    "      AND p.person_id > :cursor_id))"
-                )
-                params["cursor_count"] = cursor_count
-                params["cursor_id"] = cursor_id
-            except Exception:
-                pass
+            # Cursor count refers to the visible-faces count (the
+            # COUNT expression in the SELECT). A cursor this list didn't
+            # make is a 400 (src/server/cursors.py).
+            decoded = cursors.unpacked(after, count=cursors.whole, id=cursors.text)
+            having_conditions.append(
+                "(COUNT(a.asset_id)::int < :cursor_count"
+                "  OR (COUNT(a.asset_id)::int = :cursor_count"
+                "      AND p.person_id > :cursor_id))"
+            )
+            params["cursor_count"] = decoded["count"]
+            params["cursor_id"] = decoded["id"]
 
         having_sql = (" HAVING " + " AND ".join(having_conditions)) if having_conditions else ""
 
@@ -205,25 +197,18 @@ class PersonRepository:
         Same trashed-asset filtering as ``list_with_face_counts`` — see
         the comment there for the COUNT(a.asset_id) pattern.
         """
-        import base64 as _b64
-
         having_conditions: list[str] = []
         params: dict[str, object] = {"limit": limit, "within": self.within}
 
         if after:
-            try:
-                decoded = json.loads(_b64.urlsafe_b64decode(after + "=="))
-                cursor_count = decoded["count"]
-                cursor_id = decoded["id"]
-                having_conditions.append(
-                    "(COUNT(a.asset_id)::int < :cursor_count"
-                    "  OR (COUNT(a.asset_id)::int = :cursor_count"
-                    "      AND p.person_id > :cursor_id))"
-                )
-                params["cursor_count"] = cursor_count
-                params["cursor_id"] = cursor_id
-            except Exception:
-                pass
+            decoded = cursors.unpacked(after, count=cursors.whole, id=cursors.text)
+            having_conditions.append(
+                "(COUNT(a.asset_id)::int < :cursor_count"
+                "  OR (COUNT(a.asset_id)::int = :cursor_count"
+                "      AND p.person_id > :cursor_id))"
+            )
+            params["cursor_count"] = decoded["count"]
+            params["cursor_id"] = decoded["id"]
 
         having_sql = (" HAVING " + " AND ".join(having_conditions)) if having_conditions else ""
 
@@ -446,7 +431,7 @@ class PersonRepository:
 
         if after:
             conditions.append("f.face_id > :after")
-            params["after"] = after
+            params["after"] = cursors.plain(after)  # the last face's id
 
         where_sql = " AND ".join(conditions)
         sql = f"""

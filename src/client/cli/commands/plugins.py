@@ -32,10 +32,10 @@ def plugins_list() -> None:
     table.add_column("FOR THE SERVER")
     for p in plugins:
         accepted = p.get("acknowledged")
-        table.add_row(p["plugin_id"], p["title"], STATES.get(p["state"], p["state"]),
-                      f"version {accepted['version']}, {accepted['at'][:10]}" + (f", {accepted['by']}"
-                                                                                 if accepted.get("by") else "")
-                      if accepted else "", _data(p.get("data")))
+        when = (f"version {accepted['version']}, {accepted['at'][:10]}"
+                + (f", {accepted['by']}" if accepted.get("by") else "")) if accepted else ""
+        table.add_row(escape(p["plugin_id"]), escape(p["title"]), escape(STATES.get(p["state"], p["state"])),
+                      escape(when), escape(_data(p.get("data"))))
     console.print(table)
 
 

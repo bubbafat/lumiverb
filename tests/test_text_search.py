@@ -114,6 +114,45 @@ def _scene(env, clip: str, start_ms: int, end_ms: int, description: str, tags: l
 
 
 # ---------------------------------------------------------------------------
+# How big a search can be
+# ---------------------------------------------------------------------------
+
+
+def test_a_search_of_up_to_its_words_and_searches_runs_and_a_bigger_one_is_refused(env):
+    from src.server.search.text_search import MAX_TERMS, MAX_WORDS
+
+    client, headers, *_ = env
+    lib = _library(env)
+    long_one = _clip(env, lib, "long/IMG_0001.jpg")
+    words = [f"word{n}" for n in range(MAX_WORDS)]
+    _describe(env, long_one, " ".join(words))
+    assert _search(env, lib, " ".join(words)) == [long_one]  # as many words as a search takes
+    assert _search(env, lib, f'"{words[0]} {words[1]}" ' + " ".join(words[2:])) == [long_one]  # a phrase's count
+    assert _search(env, lib, *words[:MAX_TERMS]) == [long_one]  # as many searches as can be combined
+
+    def refused(*terms: str, public: bool = False) -> dict:
+        f = "&".join(f"f=query:{quote(t)}" for t in terms)
+        for path in ("/v1/query", "/v1/assets/facets"):
+            r = client.get(f"{path}?{f}&f=library:{lib}", headers=None if public else headers)
+            assert r.status_code == 400 and r.json()["error"]["code"] == "search_too_long", (path, r.text)
+        return r.json()["error"]
+
+    said = refused(" ".join(words + ["one-more"]))
+    assert said["message"] == f"A search is at most {MAX_WORDS} words; this one has {MAX_WORDS + 1}. Leave some out."
+    assert said["details"] == {"max_words": MAX_WORDS, "max_searches": MAX_TERMS}
+    assert refused(f'"{" ".join(words)}" extra')["message"].startswith(f"A search is at most {MAX_WORDS} words")
+    assert refused(*words[:MAX_TERMS + 1])["message"] == (
+        f"At most {MAX_TERMS} searches can be combined; this has {MAX_TERMS + 1}.")
+    # A public page's searches are held to the same.
+    assert client.patch(f"/v1/libraries/{lib}", json={"is_public": True}, headers=headers).status_code == 200
+    refused(" ".join(words + ["x"]), public=True)
+    # Saved as a project, the same search is refused the same way.
+    r = client.post("/v1/projects", headers=headers, json={"name": f"too long {uuid.uuid4().hex[:6]}", "from_search": {
+        "filters": [{"type": "library", "value": lib}, {"type": "query", "value": " ".join(words + ["x"])}]}})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "search_too_long", r.text
+
+
+# ---------------------------------------------------------------------------
 # Words
 # ---------------------------------------------------------------------------
 

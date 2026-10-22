@@ -81,6 +81,15 @@ def _exists(admin_url: str, name: str) -> bool:
         engine.dispose()
 
 
+# An account's id as Lumiverb makes one ("ten_" and a ULID): a restore takes no other (backups._entry_problem).
+TEN = "ten_01JA0000000000000000000000"
+
+
+def _account_id(tag: str) -> str:
+    """An account id of that shape, told apart by tag (a test worker's, so workers' databases differ)."""
+    return "ten_" + "".join(c for c in tag.upper() if c.isalnum()).ljust(26, "0")[:26]
+
+
 def _routing(control_url: str) -> dict[str, str]:
     engine = create_engine(control_url)
     try:
@@ -90,7 +99,7 @@ def _routing(control_url: str) -> dict[str, str]:
         engine.dispose()
 
 
-def _install(base: str, control: str, tenant_db: str, tenant_id: str = "ten_a", *, create: bool = True) -> tuple[str, str]:
+def _install(base: str, control: str, tenant_db: str, tenant_id: str = TEN, *, create: bool = True) -> tuple[str, str]:
     """A migrated install on `base` (a server URL): its control plane and one account."""
     from src.server.models.control_plane import Tenant, TenantDbRouting
 
@@ -176,7 +185,7 @@ def test_every_database_is_backed_up_and_put_back_as_it_was(server, tmp_path):
 
     made = backups.back_up(tmp_path, control_url, "now", pg_bin=PG_BIN)
     assert made.path.parent == tmp_path / "backups"
-    assert sorted(d["file"] for d in made.databases) == ["control_plane.dump", "ten_a.dump"]
+    assert sorted(d["file"] for d in made.databases) == ["control_plane.dump", f"{TEN}.dump"]
     assert stat.S_IMODE(made.path.stat().st_mode) == 0o700
     assert all(stat.S_IMODE((made.path / d["file"]).stat().st_mode) == 0o600 for d in made.databases)
     assert backups.read_state(tmp_path)["last_error"] is None
@@ -185,7 +194,7 @@ def test_every_database_is_backed_up_and_put_back_as_it_was(server, tmp_path):
          "INSERT INTO system_metadata (key, value, updated_at) VALUES ('later', 'x', now())",
          "DELETE FROM asset_search")
     assert _found(tenant_url, "ferry") == []
-    _run(control_url, "UPDATE tenants SET name = 'Renamed' WHERE tenant_id = 'ten_a'")
+    _run(control_url, f"UPDATE tenants SET name = 'Renamed' WHERE tenant_id = '{TEN}'")
 
     said: list[str] = []
     left = backups.restore(backups.read(made.path), control_url, tenant_url_template=None, pg_bin=PG_BIN,
@@ -194,7 +203,7 @@ def test_every_database_is_backed_up_and_put_back_as_it_was(server, tmp_path):
     assert _value(tenant_url, "note") == "before" and _value(tenant_url, "later") is None
     engine = create_engine(control_url)
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT name FROM tenants WHERE tenant_id = 'ten_a'")).scalar() == "A"
+        assert conn.execute(text("SELECT name FROM tenants WHERE tenant_id = :t"), {"t": TEN}).scalar() == "A"
     engine.dispose()
     # Search is in the account's database (ADR-019): it comes back with it, nothing to remake.
     assert _found(tenant_url, "ferry") == [clip]
@@ -206,13 +215,14 @@ def test_on_a_new_install_the_accounts_are_routed_to_it(server, tmp_path):
     """Its accounts' databases go where this install's template says."""
     base, name = server
     w = _worker()
-    control_url, _ = _install(base, name(f"bk2_control_{w}"), name(f"bk2_old_{w}"), tenant_id=f"ten_new_{w}")
-    name(f"ten_new_{w}")
+    new = _account_id(f"NEW{w}")
+    control_url, _ = _install(base, name(f"bk2_control_{w}"), name(f"bk2_old_{w}"), tenant_id=new)
+    name(new)
     made = backups.back_up(tmp_path, control_url, "now", pg_bin=PG_BIN)
     template = make_url(base).set(database="{tenant_id}").render_as_string(hide_password=False)
     backups.restore(made, control_url, tenant_url_template=template, pg_bin=PG_BIN, say=lambda _: None)
-    assert _routing(control_url) == {f"ten_new_{w}": template.format(tenant_id=f"ten_new_{w}")}
-    assert _exists(base, f"ten_new_{w}")
+    assert _routing(control_url) == {new: template.format(tenant_id=new)}
+    assert _exists(base, new)
 
 
 def test_as_linux_s_database_role_which_may_only_create_databases(tmp_path):
@@ -222,9 +232,9 @@ def test_as_linux_s_database_role_which_may_only_create_databases(tmp_path):
         admin = root.set(database="postgres").render_as_string(hide_password=False)
         _run(root.set(database="template1").render_as_string(hide_password=False), "CREATE EXTENSION IF NOT EXISTS vector")
         _run(admin, "CREATE ROLE app LOGIN PASSWORD 'apppw' CREATEDB",
-             "CREATE DATABASE control_plane OWNER app", "CREATE DATABASE ten_a OWNER app", autocommit=True)
+             "CREATE DATABASE control_plane OWNER app", f'CREATE DATABASE "{TEN}" OWNER app', autocommit=True)
         base = root.set(username="app", password="apppw", database="postgres").render_as_string(hide_password=False)
-        control_url, tenant_url = _install(base, "control_plane", "ten_a", create=False)
+        control_url, tenant_url = _install(base, "control_plane", TEN, create=False)
         _run(tenant_url, "INSERT INTO system_metadata (key, value, updated_at) VALUES ('note', 'before', now())")
         made = backups.back_up(tmp_path, control_url, "now", pg_bin=PG_BIN)
         _run(tenant_url, "UPDATE system_metadata SET value = 'after' WHERE key = 'note'")
@@ -240,11 +250,11 @@ def test_a_restore_that_fails_changes_nothing(server, tmp_path):
     made = backups.back_up(tmp_path, control_url, "now", pg_bin=PG_BIN)
     _run(tenant_url, "INSERT INTO system_metadata (key, value, updated_at) VALUES ('note', 'now', now())")
     # The account's archive is broken, but listed as it is (so it gets past verify).
-    broken = made.path / "ten_a.dump"
+    broken = made.path / f"{TEN}.dump"
     broken.write_bytes(broken.read_bytes()[: broken.stat().st_size // 2])
     manifest = json.loads((made.path / backups.MANIFEST).read_text())
     for d in manifest["databases"]:
-        if d["file"] == "ten_a.dump":
+        if d["file"] == f"{TEN}.dump":
             d["sha256"] = backups._sha256(broken)
     (made.path / backups.MANIFEST).write_text(json.dumps(manifest))
     with pytest.raises(BackupError, match=f"pg_restore couldn't put back bk3_ten_{w}"):

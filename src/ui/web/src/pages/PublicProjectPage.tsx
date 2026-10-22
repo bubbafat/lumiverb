@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { AssetCell } from "../components/AssetCell";
 import { Lightbox } from "../components/Lightbox";
 import type { AssetPageItem } from "../api/types";
+import { apiPath } from "../api/paths";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import type { VirtualRowKind } from "../lib/virtualRows";
@@ -39,7 +40,7 @@ interface PublicAssetsResponse {
 }
 
 async function fetchPublicProject(projectId: string): Promise<PublicProjectDetail> {
-  const res = await fetch(`/v1/public/projects/${projectId}`);
+  const res = await fetch(`/v1${apiPath`/public/projects/${projectId}`}`);
   if (!res.ok) throw new Error("Project not found");
   return res.json();
 }
@@ -51,7 +52,7 @@ async function fetchPublicAssets(
   const qs = new URLSearchParams();
   if (cursor) qs.set("after", cursor);
   qs.set("limit", String(PAGE_SIZE));
-  const res = await fetch(`/v1/public/projects/${projectId}/assets?${qs.toString()}`);
+  const res = await fetch(`/v1${apiPath`/public/projects/${projectId}/assets`}?${qs.toString()}`);
   if (!res.ok) throw new Error("Failed to load assets");
   return res.json();
 }

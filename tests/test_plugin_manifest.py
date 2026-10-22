@@ -118,6 +118,12 @@ def test_only_what_it_needs_is_required() -> None:
     (lambda d: d.update(colour="red"), "colour: not a field Lumiverb knows"),
     (lambda d: d["work"].update(speed=3), "work.speed: not a field Lumiverb knows"),
     (lambda d: d.update(id="GeoNames"), "id: lowercase letters"),
+    # A name ends where it ends: a final newline (which `$` lets by) reaches folders, sockets and SQL text.
+    (lambda d: d.update(id="geonames\n"), "id: lowercase letters"),
+    (lambda d: d["settings"][0].update(key="radius_km\n"), "settings[0].key: lowercase letters"),
+    (lambda d: d["work"]["outputs"][0].update(key="town\n"), "work.outputs[0].key: lowercase letters"),
+    (lambda d: d["work"]["outputs"][0].update(was="near\n"), "work.outputs[0].was: the key it had before"),
+    (lambda d: d.update(version="3\n"), "version: numbers with dots"),
     (lambda d: d.pop("title"), "title: required"),
     (lambda d: d.update(version="four"), "version: numbers with dots"),
     (lambda d: d.update(protocol=2), "protocol: the plug-in protocol it speaks: 1"),

@@ -80,7 +80,7 @@ class ExportClip:
     def timecode(self) -> str | None:
         """The start timecode if it's well formed; a bad one never breaks an export."""
         tc = self.start_timecode
-        return tc if tc and TIMECODE.match(tc) else None
+        return tc if tc and TIMECODE.fullmatch(tc) else None
 
     @property
     def is_drop_frame(self) -> bool:

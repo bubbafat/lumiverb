@@ -123,7 +123,7 @@ def now_called(word: str, family: str | None = None) -> str | None:
     if word.startswith("redo_") and family in (None, "kind"):
         name = now_called(word.removeprefix("redo_"), "kind")
         return remakes_of(name) if name else None
-    match = _ADDED_ID.match(word)
+    match = _ADDED_ID.fullmatch(word)
     if match and family in (None, "artifact", "producer", "kind"):
         plugin_id = match.group(1).replace("_", "-")
         return None if is_reserved(plugin_id) else plugin_id
@@ -194,9 +194,18 @@ def sql_spelling(name: str) -> str:
     """The one spelling of a name (or a plug-in's id) for where SQL needs an identifier or a bind parameter:
     each dot and dash an underscore. A spelling, never a second name: never stored, sent or typed. Anything
     else (a remake's kind, `redo:<name>`) is refused."""
-    if not (NAME.match(name) or PLUGIN_ID.match(name)):
+    if not (NAME.fullmatch(name) or PLUGIN_ID.fullmatch(name)):
         raise ValueError(f"{name!r} is neither a name nor a plug-in's id")
     return name.replace(".", "_").replace("-", "_")
+
+
+def sql_literal(plugin_id: str) -> str:
+    """A plug-in's id as an SQL string literal, for SQL text that can't bind it (a producer's applies and made
+    are text the scheduler joins into its queries): only an id PLUGIN_ID takes, whole, so nothing but its own
+    letters, digits and dashes is ever written there."""
+    if not PLUGIN_ID.fullmatch(plugin_id):
+        raise ValueError(f"{plugin_id!r} isn't a plug-in's id")
+    return f"'{plugin_id}'"
 
 
 def makers() -> dict[str, Data]:

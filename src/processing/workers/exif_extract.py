@@ -170,7 +170,7 @@ def parse_gps_accuracy_m(exif: dict) -> float | None:
 _SUBSEC_RE = re.compile(r"\.\d+")
 _OFFSET_RE = re.compile(r"^([+-])(\d{1,2}):?(\d{2})$")
 # A zone at the end of a date string: "2024:05:01 14:02:03+02:00", "...Z".
-_ZONE_SUFFIX_RE = re.compile(r"(Z|[+-]\d{1,2}:?\d{2})$")
+_ZONE_SUFFIX_RE = re.compile(r"(Z|[+-]\d{1,2}:?\d{2})\Z")
 
 # Where the time a clip was taken comes from, in order: the photo's EXIF,
 # a phone video's QuickTime Keys (it carries its zone), then the container's
@@ -183,7 +183,7 @@ def _offset_minutes(raw: object) -> int | None:
     s = str(raw).strip()
     if s in ("Z", "+00:00", "-00:00"):
         return 0
-    m = _OFFSET_RE.match(s)
+    m = _OFFSET_RE.fullmatch(s)
     if not m:
         return None
     minutes = int(m.group(2)) * 60 + int(m.group(3))

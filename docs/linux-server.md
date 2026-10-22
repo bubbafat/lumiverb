@@ -61,6 +61,8 @@ sudo bash scripts/deploy-web.sh --domain _ --api-upstream http://127.0.0.1:8100 
 
 Lumiverb is then at http://192.168.86.166 and http://100.94.35.123.
 
+`--domain` is a domain name (or `_` for any name or address) and `--api-upstream` the API's address, `http://HOST:PORT` (a name, an IPv4 or a bracketed IPv6 address): both go into nginx's config as they're typed, so anything else is refused before anything is installed.
+
 ### 4. Create your user
 
 The install has an account but nobody to log in. Make its first admin on

@@ -521,10 +521,10 @@ def _prompt_move_decision(console: Console, moves: list[dict]) -> str:
 def _show_moves(console: Console, moves: list[dict], *, limit: int | None = 10, indent: str = "  ") -> None:
     """Each move as `from → to`, the first `limit` of them (None: every one)."""
     for m in moves[:limit]:
-        console.print(f"{indent}{_shown(m['moved_from'])} [dim]→[/dim] {_shown(m['rel_path'])}",
+        console.print(f"{escape(indent)}{_shown(m['moved_from'])} [dim]→[/dim] {_shown(m['rel_path'])}",
                       highlight=False, soft_wrap=True)
     if limit is not None and len(moves) > limit:
-        console.print(f"{indent}[dim]... and {len(moves) - limit:,} more[/dim]")
+        console.print(f"{escape(indent)}[dim]... and {len(moves) - limit:,} more[/dim]")
 
 
 def _shown(rel_path: str) -> str:
@@ -533,7 +533,7 @@ def _shown(rel_path: str) -> str:
 
 
 def _progress(console: Console, label: str, *, eta: bool = False) -> Progress:
-    columns = [SpinnerColumn(), TextColumn(f"[bold]{label}"), BarColumn(bar_width=30), MofNCompleteColumn()]
+    columns = [SpinnerColumn(), TextColumn(f"[bold]{escape(label)}"), BarColumn(bar_width=30), MofNCompleteColumn()]
     return Progress(*columns, *([TimeRemainingColumn()] if eta else []), console=console, refresh_per_second=4)
 
 
@@ -905,7 +905,7 @@ def _listed(client: ApiClient, path: str, key: str, console: Console, label: str
     if cursor:
         progress = _progress(console, label)
         with progress:
-            tid = progress.add_task(label, total=page.get("total"), completed=len(items))
+            tid = progress.add_task(escape(label), total=page.get("total"), completed=len(items))
             while cursor:
                 page = client.get(path, params={**params, "after": cursor}).json()
                 items.extend(page[key])
@@ -943,7 +943,8 @@ def _group(console: Console, title: str, paths: list[str], note: str = "") -> No
     line, in order. Nothing when there are none."""
     if not paths:
         return
-    console.print(f"  [bold]{title}[/bold] ({len(paths):,})" + (f": {note}" if note else ""), highlight=False)
+    console.print(f"  [bold]{escape(title)}[/bold] ({len(paths):,})" + (f": {escape(note)}" if note else ""),
+                  highlight=False)
     for p in sorted(paths):
         console.print(f"    {_shown(p)}", highlight=False, soft_wrap=True)
 
@@ -1144,8 +1145,9 @@ def _run(
                         unlisted=stats.unlisted, filtered=d.filtered if d is not None else None,
                         refused_names=d.refused if d is not None else None)
     if stats.unlisted:
+        folders = ", ".join(_shown(u) for u in stats.unlisted[:5]) or "/"
         console.print(f"[yellow]Couldn't list {len(stats.unlisted):,} folder(s), so this scan "
-                      "doesn't remove anything: {}[/yellow]".format(", ".join(map(_shown, stats.unlisted[:5])) or "/"))
+                      f"doesn't remove anything: {folders}[/yellow]")
 
     # Every media file on disk is sent, of every media type, empty ones (on
     # disk, never ingested) and ones still being written (a later scan takes
@@ -1338,7 +1340,8 @@ def _run(
                          if p in on_disk and p not in stats.unreadable}
     if stats.unreadable:
         stats.unreadable.sort()
-        console.print(f"[yellow]{len(stats.unreadable):,} file(s) can't be read: {reader_named()} isn't allowed to "
+        console.print(f"[yellow]{len(stats.unreadable):,} file(s) can't be read: {escape(reader_named())} isn't "
+                      "allowed to "
                       f"read {escape(some_of(stats.unreadable))}. Make them readable and the next scan takes them in."
                       "[/yellow]")
     if proxy_cache is not None:

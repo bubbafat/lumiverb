@@ -5,6 +5,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
@@ -58,11 +59,11 @@ def keys_list() -> None:
         last_used_raw = k.get("last_used_at")
         created_raw = k.get("created_at", "")
         table.add_row(
-            k.get("key_id", ""),
-            k.get("label") or "",
-            k.get("role", ""),
-            _human_relative(last_used_raw),
-            created_raw or "",
+            escape(k.get("key_id", "")),
+            escape(k.get("label") or ""),
+            escape(k.get("role", "")),
+            escape(_human_relative(last_used_raw)),
+            escape(created_raw or ""),
         )
 
     console.print(table)
@@ -84,7 +85,7 @@ def keys_create(
     resp = client.post("/v1/keys", json=body)
     data = resp.json()
     plaintext = data.get("plaintext", "")
-    console.print(f"[green]Created key:[/green] {plaintext}")
+    console.print(f"[green]Created key:[/green] {escape(plaintext)}")
     console.print("Copy this now — it will not be shown again.")
 
     table = Table(show_header=True)
@@ -93,9 +94,9 @@ def keys_create(
     table.add_column("Role")
 
     table.add_row(
-        data.get("key_id", ""),
-        data.get("label") or "",
-        data.get("role", ""),
+        escape(data.get("key_id", "")),
+        escape(data.get("label") or ""),
+        escape(data.get("role", "")),
     )
     console.print(table)
 
@@ -113,7 +114,7 @@ def keys_revoke(
     client = LumiverbClient()
     resp = client.raw("DELETE", f"/v1/keys/{key_id}")
     if resp.status_code == 204:
-        console.print(f"[green]Revoked {key_id}[/green]")
+        console.print(f"[green]Revoked {escape(key_id)}[/green]")
         return
     if resp.status_code == 409:
         try:

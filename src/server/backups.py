@@ -52,6 +52,7 @@ from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.server import drives, write_check
+from src.server.database import ACCOUNT_ID
 from src.shared.secrets_env import without_secrets
 
 logger = logging.getLogger(__name__)
@@ -349,7 +350,7 @@ def list_backups(where: Path) -> list[Backup]:
         return []
     found = []
     for entry in entries:
-        if not entry.is_dir() or not _NAME.match(entry.name) or entry.name.endswith(PARTIAL):
+        if not entry.is_dir() or not _NAME.fullmatch(entry.name) or entry.name.endswith(PARTIAL):
             continue
         with contextlib.suppress(BackupError):
             found.append(read(entry))
@@ -385,7 +386,7 @@ def prune(where: Path, now: datetime | None = None) -> list[Path]:
     removed = [b.path for b in backups if b.path not in keep]
     try:
         for entry in where.iterdir():
-            if (entry.is_dir() and _NAME.match(entry.name) and entry.name.endswith(PARTIAL)
+            if (entry.is_dir() and _NAME.fullmatch(entry.name) and entry.name.endswith(PARTIAL)
                     and now - datetime.fromtimestamp(entry.stat().st_mtime, UTC) > PARTIAL_STALE):
                 removed.append(entry)
     except OSError:
@@ -548,8 +549,28 @@ def parse_time(value: object) -> datetime | None:
 # -- Restoring -----------------------------------------------------------------------
 
 
+def _entry_problem(entry: object) -> str | None:
+    """Why a manifest's entry isn't one a backup writes, or None: its file is a plain name in the backup's
+    own folder, and an account's is named by its id as Lumiverb makes them (the database a restore makes)."""
+    if not isinstance(entry, dict) or entry.get("role") not in ("control", "account"):
+        return "isn't a database of the control plane or of an account"
+    file = entry.get("file")
+    if (not isinstance(file, str) or file in ("", ".", "..") or "/" in file or "\\" in file or "\x00" in file
+            or len(file) > 255):
+        return f"names the file {file!r}, not a file in the backup's folder"
+    tenant_id = entry.get("tenant_id")
+    if entry["role"] == "account" and not (isinstance(tenant_id, str) and ACCOUNT_ID.fullmatch(tenant_id)):
+        return f"names the account {tenant_id!r}, not an account's id"
+    return None
+
+
 def verify(backup: Backup) -> None:
-    """Every file the manifest lists is there, whole. Raises BackupError."""
+    """Every file the manifest lists is the backup's own (_entry_problem), there, and whole. Raises
+    BackupError, saying which backup and which entry."""
+    for n, d in enumerate(backup.databases, 1):
+        problem = _entry_problem(d)
+        if problem:
+            raise BackupError(f"{backup.path.name}'s manifest, database {n}: {problem}. Nothing was restored.")
     if not backup.databases or not any(d.get("role") == "control" for d in backup.databases):
         raise BackupError(f"{backup.path} has no control plane in it.")
     for d in backup.databases:

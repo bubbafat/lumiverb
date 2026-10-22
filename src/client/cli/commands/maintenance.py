@@ -6,6 +6,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
@@ -52,12 +53,12 @@ def cleanup(
     table.add_column(style="dim")
     table.add_column()
 
-    table.add_row("Orphan files", str(result.get("orphan_files", 0)))
+    table.add_row("Orphan files", f"{result.get('orphan_files', 0):,}")
     table.add_row("Space freed" if execute else "Space to free", _size(result.get("bytes_freed", 0)))
 
     skipped = result.get("skipped_libraries", 0)
     if skipped:
-        table.add_row("Skipped libraries", f"[yellow]{skipped}[/yellow]")
+        table.add_row("Skipped libraries", f"[yellow]{skipped:,}[/yellow]")
 
     console.print(table)
 
@@ -65,7 +66,7 @@ def cleanup(
     if errors:
         console.print(f"\n  [yellow]Warnings ({len(errors)}):[/yellow]")
         for err in errors:
-            console.print(f"    [dim]•[/dim] {err}")
+            console.print(f"    [dim]•[/dim] {escape(err)}")
 
     if not execute and result.get("orphan_files", 0):
         console.print("\n  [dim]Run with --execute to delete these files.[/dim]")
@@ -74,7 +75,7 @@ def cleanup(
     if folders:
         console.print(f"\n  [yellow]Kept {len(folders)} folder(s) the database doesn't list:[/yellow]")
         for f in folders:
-            console.print(f"    {f['folder_id']}  {_size(f.get('bytes', 0))}  {f.get('newest_mtime') or ''}")
+            console.print(f"    {escape(f['folder_id'])}  {_size(f.get('bytes', 0))}  {escape(f.get('newest_mtime') or '')}")
         console.print("  [dim]`lumiverb maintenance remove-orphan-folders` removes them.[/dim]")
 
     console.print()
@@ -87,7 +88,7 @@ def _size(n: int) -> str:
         return f"{n / 1_000_000:.1f} MB"
     if n > 1_000:
         return f"{n / 1_000:.1f} KB"
-    return f"{n} bytes"
+    return f"{n:,} bytes"
 
 
 @maintenance_app.command("remove-orphan-folders")
@@ -106,11 +107,11 @@ def remove_orphan_folders(
     result = client.post("/v1/upkeep/remove-orphan-folders", json=body).json()
     verb = "Would remove" if dry_run else "Removed"
     for f in result.get("removed", []):
-        console.print(f"{verb} {f['path']}  {_size(f.get('bytes', 0))}")
+        console.print(f"{verb} {escape(f['path'])}  {_size(f.get('bytes', 0))}")
     for fid in result.get("not_found", []):
-        console.print(f"[yellow]Not an orphan folder: {fid}[/yellow]")
+        console.print(f"[yellow]Not an orphan folder: {escape(fid)}[/yellow]")
     for err in result.get("errors", []):
-        console.print(f"[red]{err}[/red]")
+        console.print(f"[red]{escape(err)}[/red]")
     console.print(f"{verb} {len(result.get('removed', []))} folder(s), {_size(result.get('bytes_freed', 0))}")
 
 
@@ -149,7 +150,7 @@ def search_sync(
         total_transcripts += transcripts
 
         if synced > 0 or transcripts > 0:
-            console.print(f"  Batch {batch}: {synced} clips, {transcripts} transcripts synced")
+            console.print(f"  Batch {batch:d}: {synced:d} clips, {transcripts:d} transcripts synced")
 
         # Done when nothing was written, or something failed (the next upkeep tries again)
         if (synced == 0 and transcripts == 0) or failed:
@@ -159,9 +160,9 @@ def search_sync(
     table.add_column(style="dim")
     table.add_column()
 
-    table.add_row("Clips synced", str(total_synced))
-    table.add_row("Transcripts synced", str(total_transcripts))
-    table.add_row("Failed", str(total_failed))
+    table.add_row("Clips synced", f"{total_synced:d}")
+    table.add_row("Transcripts synced", f"{total_transcripts:d}")
+    table.add_row("Failed", f"{total_failed:d}")
 
     console.print()
     console.print(table)
@@ -185,7 +186,7 @@ def cleanup_dismissed(
     result = resp.json()
     deleted = result.get("deleted", 0)
     if deleted:
-        console.print(f"  Deleted {deleted} empty dismissed people.")
+        console.print(f"  Deleted {deleted:,} empty dismissed people.")
     else:
         console.print("  No empty dismissed people found.")
 
@@ -227,10 +228,10 @@ def upgrade(
         if step_id is not None:
             match = next((s for s in steps_info if s.get("step_id") == step_id), None)
             if match is None:
-                console.print(f"[red]Unknown upgrade step: {step_id}[/red]")
+                console.print(f"[red]Unknown upgrade step: {escape(step_id)}[/red]")
                 raise typer.Exit(1)
-            console.print(f"Tenant upgrade dry-run for step: {step_id}")
-            console.print(f"  Step status: {match.get('status')}")
+            console.print(f"Tenant upgrade dry-run for step: {escape(step_id)}")
+            console.print(f"  Step status: {escape(str(match.get('status')))}")
             try:
                 target_index = next(i for i, s in enumerate(steps_info) if s.get("step_id") == step_id)
             except StopIteration:
@@ -243,7 +244,7 @@ def upgrade(
             if pending_or_failed_preceding:
                 console.print(f"  Preceding pending/failed steps: {len(pending_or_failed_preceding)}")
                 for sid in pending_or_failed_preceding:
-                    console.print(f"  - {sid}")
+                    console.print(f"  - {escape(sid)}")
             else:
                 console.print("  Preceding steps: ready")
             return
@@ -253,13 +254,13 @@ def upgrade(
             return
         console.print(f"Tenant upgrade (dry-run): {len(pending_step_ids)} of {steps_total} steps pending.")
         for sid in pending_step_ids:
-            console.print(f"  - {sid}")
+            console.print(f"  - {escape(sid)}")
         return
 
     if step_id is not None:
         match = next((s for s in steps_info if s.get("step_id") == step_id), None)
         if match is None:
-            console.print(f"[red]Unknown upgrade step: {step_id}[/red]")
+            console.print(f"[red]Unknown upgrade step: {escape(step_id)}[/red]")
             raise typer.Exit(1)
 
         pending_or_failed_preceding = []
@@ -273,9 +274,9 @@ def upgrade(
                     pending_or_failed_preceding.append(s.get("step_id", ""))
 
         if pending_or_failed_preceding and not force:
-            console.print(f"[red]Refusing to run {step_id}: preceding steps are not complete.[/red]")
+            console.print(f"[red]Refusing to run {escape(step_id)}: preceding steps are not complete.[/red]")
             for sid in pending_or_failed_preceding:
-                console.print(f"  - {sid}")
+                console.print(f"  - {escape(sid)}")
             console.print("Run without --step, or re-run with --force to override.")
             raise typer.Exit(1)
 
@@ -303,7 +304,7 @@ def upgrade(
         bar.update(completed=0, done=0, failed=0)
         if step_id is not None:
             label = name_by_id.get(step_id, step_id)
-            bar.update(completed=0, description=f"{label}…", done=0, failed=0)
+            bar.update(completed=0, description=f"{escape(label)}…", done=0, failed=0)
             resp = client.post(
                 "/v1/tenant/upgrade/execute",
                 json={"max_steps": 1, "step_id": step_id, "force": force},
@@ -319,7 +320,8 @@ def upgrade(
             while has_work and (max_steps <= 0 or executed_steps < max_steps):
                 current_id = remaining[0] if remaining else None
                 label = name_by_id.get(current_id, current_id) if current_id else "Upgrading tenant"
-                bar.update(completed=executed_steps, description=f"{label}…", done=executed_steps, failed=failed)
+                bar.update(completed=executed_steps, description=f"{escape(label)}…", done=executed_steps,
+                           failed=failed)
                 resp = client.post(
                     "/v1/tenant/upgrade/execute",
                     json={"max_steps": 1},
@@ -337,6 +339,6 @@ def upgrade(
         console.print("Tenant upgrade: [green]completed[/green].")
     else:
         if step_id is not None:
-            console.print(f"Tenant upgrade: step '{step_id}' executed (or skipped).")
+            console.print(f"Tenant upgrade: step '{escape(step_id)}' executed (or skipped).")
         else:
             console.print(f"Tenant upgrade: stopped after {executed_steps} step(s).")

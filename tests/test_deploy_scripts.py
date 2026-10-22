@@ -896,6 +896,44 @@ def test_web_on_its_own_machine_uses_defaults_and_flags(tmp_path):
     assert s["NO_FIREWALL"] == "true"
 
 
+def _web_dry_run(tmp_path: Path, domain: str, upstream: str) -> subprocess.CompletedProcess:
+    conf = tmp_path / "conf"
+    conf.mkdir(exist_ok=True)
+    return subprocess.run(
+        ["bash", str(DEPLOY_WEB), "--domain", domain, "--api-upstream", upstream, "--dry-run"],
+        capture_output=True, text=True, env={**os.environ, "LUMIVERB_CONF_DIR": str(conf)}, timeout=30, check=False,
+    )
+
+
+@pytest.mark.parametrize(("domain", "upstream"), [
+    ("_", "http://127.0.0.1:8100"), ("app.lumiverb.io", "http://10.0.0.5:8000/"), ("lumiverb.local", "https://api:8443"),
+    ("_", "http://[::1]:8100"), ("photos.home.arpa", "http://localhost:8000"),
+])
+def test_web_takes_a_domain_and_the_api_s_address(tmp_path, domain, upstream):
+    out = _web_dry_run(tmp_path, domain, upstream)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert f"DOMAIN={domain}\n" in out.stdout and f"API_UPSTREAM={upstream}\n" in out.stdout
+
+
+@pytest.mark.parametrize(("domain", "upstream", "said"), [
+    ("app.lumiverb.io;", "http://127.0.0.1:8100", "Not a domain name"),
+    ("a.io; location / { return 200; }", "http://127.0.0.1:8100", "Not a domain name"),
+    ("app.lumiverb.io\n", "http://127.0.0.1:8100", "Not a domain name"),
+    ("$host", "http://127.0.0.1:8100", "Not a domain name"),
+    ("_", "http://127.0.0.1:8100; }", "Not the API's address"),
+    ("_", "http://127.0.0.1:8100/v1/x", "Not the API's address"),
+    ("_", "ftp://127.0.0.1:8100", "Not the API's address"),
+    ("_", "http://$host:8100", "Not the API's address"),
+    ("_", "127.0.0.1:8100", "Not the API's address"),
+])
+def test_web_refuses_anything_else_before_writing_nginx_s_config(tmp_path, domain, upstream, said):
+    # Each is written into nginx's config as typed: a value that's more than a name or an address is refused,
+    # as deploy-site.sh refuses its names, before anything is installed or written.
+    out = _web_dry_run(tmp_path, domain, upstream)
+    assert out.returncode != 0 and said in out.stderr, out.stdout + out.stderr
+    assert "DOMAIN=" not in out.stdout
+
+
 def _deploy_web_site(tmp_path: Path, upstream: str = "http://127.0.0.1:8100") -> str:
     """The nginx site deploy-web.sh writes for --domain _."""
     text = DEPLOY_WEB.read_text()

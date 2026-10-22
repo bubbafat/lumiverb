@@ -15,7 +15,6 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_optional_user_id, get_tenant_session
 from src.server.api.rate_limit import anonymous_search_limited
-from src.server.models.filter_registry import parse_f_params
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +47,9 @@ def get_facets(
     Accepts the same ``?f=prefix:value`` params as ``/v1/query``.
     """
     from src.server.api.routers.projects import guard_project_filters
-    from src.server.api.routers.query import guard_public_spec, in_sight_spec
+    from src.server.api.routers.query import guard_public_spec, in_sight_spec, parsed_filters
 
-    spec = parse_f_params(f)
+    spec = parsed_filters(f)
     public_cap_ms = guard_public_spec(request, session, spec)
     guard_project_filters(request, session, spec)
     spec, library_ids = in_sight_spec(request, session, spec)

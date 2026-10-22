@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.sql import text as sa_text
 from sqlmodel import Session, select
 
+from src.server import cursors
 from src.shared.utils import utcnow
 from src.server.models.tenant import (
     Asset,
@@ -396,21 +397,17 @@ class ProjectRepository:
         query = query.order_by(order_col.asc(), Asset.asset_id.asc())  # type: ignore[union-attr]
 
         if after_cursor:
-            try:
-                padded = after_cursor + "=" * (-len(after_cursor) % 4)
-                decoded = json.loads(_b64.urlsafe_b64decode(padded))
-                cursor_val = decoded["v"]
-                cursor_id = decoded["id"]
-                if sort_order in ("added_at", "taken_at"):
-                    cursor_val = datetime.fromisoformat(cursor_val)
-                query = query.where(
-                    or_(
-                        order_col > cursor_val,  # type: ignore[operator]
-                        and_(order_col == cursor_val, Asset.asset_id > cursor_id),  # type: ignore[operator]
-                    )
+            # The last row's sort value (a time, or a manual position) and id; anything else is a 400
+            # (src/server/cursors.py).
+            decoded = cursors.unpacked(after_cursor, id=cursors.text,
+                                       v=cursors.time if sort_order in ("added_at", "taken_at") else cursors.whole)
+            cursor_val, cursor_id = decoded["v"], decoded["id"]
+            query = query.where(
+                or_(
+                    order_col > cursor_val,  # type: ignore[operator]
+                    and_(order_col == cursor_val, Asset.asset_id > cursor_id),  # type: ignore[operator]
                 )
-            except Exception:
-                pass  # ignore bad cursors
+            )
 
         rows = self._session.execute(query.limit(limit + 1)).all()
 

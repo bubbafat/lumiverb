@@ -21,6 +21,9 @@ from src.server.backups import Backup, BackupError
 pytestmark = pytest.mark.fast
 
 
+TEN = "ten_01JA0000000000000000000000"  # an account's id as Lumiverb makes one
+
+
 def _local(*args: int) -> datetime:
     """A wall-clock time here, aware."""
     return datetime(*args).astimezone()
@@ -34,7 +37,7 @@ def _backup(where: Path, made_at: datetime, kind: str = "nightly", *, partial: b
         "made_at": made_at.astimezone(UTC).isoformat(), "kind": kind,
         "databases": [{"role": "control", "file": "control_plane.dump", "bytes": 1000,
                        "sha256": hashlib.sha256(b"x").hexdigest()},
-                      {"role": "account", "tenant_id": "ten_a", "file": "ten_a.dump", "bytes": 24, "sha256": ""}]}))
+                      {"role": "account", "tenant_id": TEN, "file": f"{TEN}.dump", "bytes": 24, "sha256": ""}]}))
     return path
 
 
@@ -128,11 +131,47 @@ def test_an_unfinished_backup_isnt_read_as_one(tmp_path):
 
 def test_verify_says_which_file_is_missing_or_changed(tmp_path):
     path = _backup(tmp_path, datetime.now(UTC))
-    with pytest.raises(BackupError, match=r"ten_a\.dump is missing"):
+    with pytest.raises(BackupError, match=rf"{TEN}\.dump is missing"):
         backups.verify(backups.read(path))
-    (path / "ten_a.dump").write_bytes(b"y")
+    (path / f"{TEN}.dump").write_bytes(b"y")
     with pytest.raises(BackupError, match="SHA-256 differs"):
         backups.verify(backups.read(path))
+
+
+@pytest.mark.parametrize(("entry", "said"), [
+    ({"file": "../../etc/passwd"}, "names the file '../../etc/passwd', not a file in the backup's folder"),
+    ({"file": "/tmp/control_plane.dump"}, "not a file in the backup's folder"),
+    ({"file": ".."}, "not a file in the backup's folder"),
+    ({"file": "x\x00.dump"}, "not a file in the backup's folder"),
+    ({"file": None}, "not a file in the backup's folder"),
+    ({"tenant_id": "ten_a"}, "names the account 'ten_a', not an account's id"),
+    ({"tenant_id": "ten_01JA0000000000000000000000?host=elsewhere"}, "not an account's id"),
+    ({"tenant_id": "ten_01JA0000000000000000000000\n"}, "not an account's id"),
+    ({"tenant_id": None}, "not an account's id"),
+    ({"role": "other"}, "isn't a database of the control plane or of an account"),
+])
+def test_a_restore_reads_only_the_backups_own_files_and_accounts(tmp_path, entry, said):
+    # Its manifest is read before anything is put back: a file outside its folder, or an account's id that
+    # isn't one (it names the database put back), and nothing is restored, saying which backup and entry.
+    path = _backup(tmp_path, datetime.now(UTC))
+    manifest = json.loads((path / backups.MANIFEST).read_text())
+    manifest["databases"][1].update(entry)
+    (path / backups.MANIFEST).write_text(json.dumps(manifest))
+    (path / f"{TEN}.dump").write_bytes(b"")
+    with pytest.raises(BackupError) as refused:
+        backups.verify(backups.read(path))
+    assert str(refused.value).startswith(f"{path.name}'s manifest, database 2: ") and said in str(refused.value)
+    with pytest.raises(BackupError, match="database 2"):
+        backups.restore(backups.read(path), "postgresql://nowhere/control", tenant_url_template="postgresql://x/{tenant_id}")
+
+
+def test_a_backups_own_accounts_and_files_pass(tmp_path):
+    path = _backup(tmp_path, datetime.now(UTC))
+    (path / f"{TEN}.dump").write_bytes(b"")
+    manifest = json.loads((path / backups.MANIFEST).read_text())
+    manifest["databases"][1]["sha256"] = hashlib.sha256(b"").hexdigest()
+    (path / backups.MANIFEST).write_text(json.dumps(manifest))
+    backups.verify(backups.read(path))
 
 
 # -- When --------------------------------------------------------------------------

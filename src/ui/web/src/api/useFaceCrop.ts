@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "./client";
+import { apiPath } from "./paths";
 
 /**
  * Fetch a face's crop (`/v1/faces/{faceId}/crop`) with auth and return an
@@ -19,7 +20,9 @@ export function useFaceCrop(faceId: string): { url: string | null; isLoading: bo
     let objectUrl: string | null = null;
     let cancelled = false;
 
-    authFetch(`/faces/${faceId}/crop`)
+    // The id one path segment (paths.ts): one that can't be is no crop, as a failed request is.
+    Promise.resolve()
+      .then(() => authFetch(apiPath`/faces/${faceId}/crop`))
       .then(async (res) => {
         if (cancelled || !res.ok) return; // no crop: stay null
         const blob = await res.blob();

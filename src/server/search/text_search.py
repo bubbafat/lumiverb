@@ -45,7 +45,16 @@ CONFIG = "lumiverb"  # English's, accents aside and a hyphenated word by its par
 # A prefix match ranks at half an exact one.
 PREFIX_PENALTY = 0.5
 # A prefix is only a whole token of letters and digits (any language's): to_tsquery reads anything else as syntax.
-_PREFIXABLE = re.compile(r"^[^\W_]+$")
+_PREFIXABLE = re.compile(r"[^\W_]+")
+# How big a search can be: far more than anyone types (a long search is a handful of words, and a search
+# stacked on another two or three), small enough that no search, a public page's included, is a query too
+# big to run (each word is two tsqueries in it, and each row's rank weighs them all).
+MAX_WORDS = 32  # in one search: its words, a quoted phrase's each
+MAX_TERMS = 16  # searches that must each match (query: filters)
+
+
+class SearchTooLongError(ValueError):
+    """A search past MAX_WORDS or MAX_TERMS: refused (GET /v1/query's 400 search_too_long), saying which."""
 
 
 @dataclass(frozen=True)
@@ -71,7 +80,10 @@ class Query:
 
 def build(terms: list[str]) -> Query | None:
     """The tsquery for search terms (each what a person typed; all must
-    match), or None when none has a word."""
+    match), or None when none has a word. SearchTooLongError past
+    MAX_TERMS terms, or a term past MAX_WORDS words."""
+    if len(terms) > MAX_TERMS:
+        raise SearchTooLongError(f"At most {MAX_TERMS} searches can be combined; this has {len(terms)}.")
     params: dict[str, str] = {}
 
     def bind(value: str) -> str:
@@ -83,7 +95,7 @@ def build(terms: list[str]) -> Query | None:
         return f"plainto_tsquery('{CONFIG}', {bind(token)})"
 
     def prefix(token: str) -> str:
-        if len(token) < PREFIX_MIN_LENGTH or not _PREFIXABLE.match(token):
+        if len(token) < PREFIX_MIN_LENGTH or not _PREFIXABLE.fullmatch(token):
             return word(token)
         return f"to_tsquery('{CONFIG}', {bind(token + ':*')})"
 
@@ -97,6 +109,10 @@ def build(terms: list[str]) -> Query | None:
         parsed = parse_query(raw)
         if not parsed:
             continue
+        words = sum(len(t.tokens) for t in parsed)
+        if words > MAX_WORDS:
+            raise SearchTooLongError(f"A search is at most {MAX_WORDS} words; this one has {words}. "
+                                     "Leave some out.")
         quoted = [t.tokens for t in parsed if t.is_phrase]
         free = [t.tokens[0] for t in parsed if not t.is_phrase]
         required = [phrase(q) for q in quoted]

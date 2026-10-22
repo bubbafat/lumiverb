@@ -193,10 +193,10 @@ def _backward(f, end: int) -> Iterator[tuple[int, bytes]]:
 
 def _parsed(raw: bytes) -> tuple[str | None, str]:
     line = raw.decode("utf-8", "replace").rstrip("\r")
-    named = _NAMED.match(line)
+    named = _NAMED.fullmatch(line)
     if named:
         return named.group(1), named.group(2)
-    own = _RUNS_OWN.match(line)
+    own = _RUNS_OWN.fullmatch(line)
     return RUN, (own.group(1) if own else line)  # unnamed: run's own (a crash's traceback)
 
 
@@ -287,7 +287,9 @@ class _JournalReader:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise LogUnavailableError(f"journalctl didn't answer: {exc}") from exc
         records = []
-        for raw in out.stdout.splitlines():
+        # A record a line: split on "\n" alone, as journalctl writes them (splitlines() also splits on U+2028,
+        # U+0085 and others, which a message can hold: that record was lost).
+        for raw in out.stdout.split("\n"):
             try:
                 records.append(json.loads(raw))
             except ValueError:

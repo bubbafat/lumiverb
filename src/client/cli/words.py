@@ -53,7 +53,7 @@ def resolved(word: str, listed: Iterable[str], what: str = "producer", *, server
 
         found = PREFIX + word if PREFIX + word in makers() else word
     if found is None:
-        console.print(f"[red]No {what} is called {escape(word)}: one of "
+        console.print(f"[red]No {escape(what)} is called {escape(word)}: one of "
                       f"{', '.join(escape(shown(x)) for x in listed)}.[/red]")
         raise typer.Exit(2)
     return found

@@ -412,7 +412,7 @@ Only Postgres is irreplaceable: people's work (names, corrections, ratings, note
 
 ### 8.2 Postgres Backups
 
-`src/server/backups.py`: every database (the control plane and each account's) as `pg_dump` archives, a folder each with a manifest, in the backups folder (Settings › Backups). Nightly, started by the every-account upkeep when none has run since 03:00, kept 7 days plus 4 weekly; a Mac's service and a Linux update also back up before an upgrade's migrations (3 kept). `lumiverb-server restore` puts one back beside the live database, then swaps it in. Search is in the databases, so it comes back with them.
+`src/server/backups.py`: every database (the control plane and each account's) as `pg_dump` archives, a folder each with a manifest, in the backups folder (Settings › Backups). Nightly, started by the every-account upkeep when none has run since 03:00, kept 7 days plus 4 weekly; a Mac's service and a Linux update also back up before an upgrade's migrations (3 kept). `lumiverb-server restore` puts one back beside the live database, then swaps it in. It reads only the backup's own files: each manifest entry's file a plain name in the backup's folder, each account's id as Lumiverb makes them (`ten_` and a ULID: it names the database put back), checked before anything changes (`verify`, `_entry_problem`). Search is in the databases, so it comes back with them.
 
 ### 8.3 Stored Files
 

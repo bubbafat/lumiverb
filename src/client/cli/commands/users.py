@@ -29,7 +29,7 @@ def _find_user_by_email(client: LumiverbClient, email: str) -> dict:
     users: list[dict] = resp.json()
     user = next((u for u in users if u.get("email") == email), None)
     if user is None:
-        console.print(f"[red]Error: user not found: {email}[/red]")
+        console.print(f"[red]Error: user not found: {escape(email)}[/red]")
         raise typer.Exit(1)
     return user
 
@@ -51,7 +51,7 @@ def create_user(
         help="They see only the libraries they're given a role on (lumiverb library role).")] = False,
 ) -> None:
     """Invite someone: they get a link to choose their own password."""
-    if not _EMAIL_RE.match(email):
+    if not _EMAIL_RE.fullmatch(email):
         console.print("[red]Error: invalid email address.[/red]")
         raise typer.Exit(1)
 
@@ -69,7 +69,7 @@ def create_user(
         console.print(f"[red]Error: {escape(err.get('message') or resp.text or f'HTTP {resp.status_code}')}[/red]")
         raise typer.Exit(1)
     data = resp.json()
-    console.print(f"[green]Invited {escape(data['email'])} ({data['role']})[/green]")
+    console.print(f"[green]Invited {escape(data['email'])} ({escape(data['role'])})[/green]")
     _say_link(data["email"], data["invite_urls"])
 
 
@@ -108,7 +108,7 @@ def list_users() -> None:
         else:
             last_login = "never"
         libraries = "every one" if u.get("every_library", True) or u.get("role") == "admin" else "only given"
-        table.add_row(u.get("email", ""), u.get("role", ""), libraries, last_login)
+        table.add_row(escape(u.get("email", "")), escape(u.get("role", "")), libraries, escape(last_login))
     console.print(table)
 
 
@@ -132,11 +132,11 @@ def set_user_role(
         if err == "last_admin":
             console.print("[red]Error: cannot demote the last admin.[/red]")
         else:
-            console.print(f"[red]Error: {resp.json().get('error', {}).get('message', 'conflict')}[/red]")
+            console.print(f"[red]Error: {escape(resp.json().get('error', {}).get('message', 'conflict'))}[/red]")
         raise typer.Exit(1)
     resp.raise_for_status()
     data = resp.json()
-    console.print(f"[green]Role updated: {data['email']} → {data['role']}[/green]")
+    console.print(f"[green]Role updated: {escape(data['email'])} → {escape(data['role'])}[/green]")
 
 
 @user_app.command("libraries")

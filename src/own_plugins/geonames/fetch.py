@@ -263,7 +263,7 @@ def parse_names(text: Iterator[str], own: dict[int, tuple[str, ...]],
         geonameid = int(p[1])
         names = own.get(geonameid)
         name = p[3].strip()
-        if names is None or not name or p[6] == "1" or p[7] == "1" or not _LANGUAGE.match(p[2]):
+        if names is None or not name or p[6] == "1" or p[7] == "1" or not _LANGUAGE.fullmatch(p[2]):
             continue
         folded = fold(name)
         if folded and folded not in names:

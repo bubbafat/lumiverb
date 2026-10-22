@@ -136,6 +136,10 @@ def get_tenant_session(tenant_id: str) -> Generator[Session, None, None]:
 
 # Tenant ID from our code is always "ten_" + ULID (alphanumeric + underscore). Allow only safe identifiers.
 _SAFE_TENANT_ID = re.compile(r"^[a-zA-Z0-9_]+$")
+# An account's id exactly as Lumiverb makes one (repository/control_plane.py: "ten_" and a ULID), the shape a
+# device's id is held to too (dev_, tenant migration c6d2e8a4f1b7): where an id from outside (a backup's
+# manifest) would name a database.
+ACCOUNT_ID = re.compile(r"ten_[0-9A-Z]{26}")
 
 
 def provision_tenant_database(tenant_id: str) -> None:
@@ -144,7 +148,7 @@ def provision_tenant_database(tenant_id: str) -> None:
     alembic -c alembic-tenant.ini upgrade heads against it.
     Raises on failure.
     """
-    if not _SAFE_TENANT_ID.match(tenant_id):
+    if not _SAFE_TENANT_ID.fullmatch(tenant_id):
         raise ValueError(f"Invalid tenant_id for database creation: {tenant_id!r}")
 
     settings = get_settings()
@@ -197,7 +201,7 @@ def provision_tenant_database(tenant_id: str) -> None:
 
 def deprovision_tenant_database(tenant_id: str) -> None:
     """Drop the physical tenant database. No-op if it doesn't exist. Raises on unexpected errors."""
-    if not _SAFE_TENANT_ID.match(tenant_id):
+    if not _SAFE_TENANT_ID.fullmatch(tenant_id):
         raise ValueError(f"Invalid tenant_id for database drop: {tenant_id!r}")
 
     settings = get_settings()

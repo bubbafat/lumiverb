@@ -105,6 +105,9 @@ interface FilterBarProps {
   folder?: string | null;
   /** A public page's visitor: no rating or people filters (those are signed-in people's). */
   isPublic?: boolean;
+  /** Why the server refused the search itself (too many words, say: client.ts searchRefusal), said under
+   * the search box so it can be changed there. */
+  searchError?: string | null;
 }
 
 function PersonChiclet({ personId, onClear }: { personId: string; onClear: () => void }) {
@@ -202,6 +205,7 @@ export function FilterBar({
   onSaveAsProject,
   folder,
   isPublic = false,
+  searchError = null,
 }: FilterBarProps) {
   // --- Read individual values from filter array ---
   const q = getFilterValue(filters, "query") ?? null;
@@ -595,6 +599,13 @@ export function FilterBar({
           )}
         </div>
       </div>
+
+      {/* What the server refused about the search, under the box it's changed in */}
+      {searchError && (
+        <p role="alert" className="text-xs text-red-400">
+          {searchError}
+        </p>
+      )}
 
       {/* Row 2: date presets */}
       {showDateRow && (

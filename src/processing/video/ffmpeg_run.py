@@ -166,6 +166,6 @@ def decoded_by(choice: str) -> str | None:
         if vulkan_decodes():
             return "vulkan"
         return "videotoolbox" if videotoolbox_decodes() else None
-    if not NAME.match(choice):
+    if not NAME.fullmatch(choice):
         raise ValueError(f"decoder: auto, cpu or an ffmpeg hwaccel's name, not {choice[:40]!r}")
     return choice

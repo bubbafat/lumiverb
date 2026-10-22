@@ -12,10 +12,11 @@ import json
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
+from src.server import cursors
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_signed_in, require_tenant_admin
 from src.server.api.errors import DecisionRequiredError
 from src.server.api.limits import MAX_PAGE
@@ -52,13 +53,11 @@ def encode_cursor(row: dict) -> str:
 
 
 def decode_cursor(cursor: str | None) -> tuple[datetime, str] | None:
+    """The last clip's time and id; a cursor this list didn't give is a 400 bad_cursor (src/server/cursors.py)."""
     if not cursor:
         return None
-    try:
-        data = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
-        return datetime.fromisoformat(data["t"]), str(data["id"])
-    except (ValueError, KeyError, TypeError) as e:
-        raise HTTPException(status_code=400, detail="Bad cursor") from e
+    decoded = cursors.unpacked(cursor, t=cursors.time, id=cursors.text)
+    return decoded["t"], decoded["id"]
 
 
 _KINDS = {"all": ("archived", "missing"), "by_hand": ("archived",), "missing": ("missing",)}

@@ -178,6 +178,58 @@ def test_what_an_upload_can_be(env):
     assert client.get(upload["chunk_url"], headers=headers).status_code == 404
 
 
+def _put_counting(client, path: str, headers: dict, chunks: int) -> tuple[int, int]:
+    """PUT a body of `chunks` messages straight to the app; (the status, how many of them it read)."""
+    from src.server.api.main import app
+
+    read = 0
+
+    async def receive():
+        nonlocal read
+        if read < chunks:
+            read += 1
+            return {"type": "http.request", "body": b"x" * 65536, "more_body": read < chunks}
+        return {"type": "http.disconnect"}
+
+    sent: list[dict] = []
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"}, "http_version": "1.1",
+             "method": "PUT", "scheme": "http", "path": path, "raw_path": path.encode(), "root_path": "",
+             "query_string": b"offset=0", "client": ("testclient", 50000), "server": ("testserver", 80),
+             "headers": [(b"host", b"testserver"), (b"authorization", headers["Authorization"].encode()),
+                         (b"content-type", b"application/octet-stream"),
+                         (b"content-length", str(chunks * 65536).encode())], "state": {}}
+    client.portal.call(app, scope, receive, send)
+    return next(m["status"] for m in sent if m["type"] == "http.response.start"), read
+
+
+@pytest.mark.slow
+def test_a_chunk_for_no_upload_or_one_kept_is_refused_before_its_body_is_read(env, data_dir, monkeypatch):
+    client, headers, *_ = env
+    written: list[str] = []
+    real = uploads.chunk_file
+    monkeypatch.setattr(uploads, "chunk_file", lambda tenant_id, upload_id: written.append(upload_id)
+                        or real(tenant_id, upload_id))
+    assert _put_counting(client, "/v1/uploads/upl_nope", headers, chunks=8) == (404, 0)
+    assert not written and not (data_dir / "uploads").exists(), "nothing of it was kept, even for a moment"
+
+    asset_id = _ingest(env, "chunks/kept.mov")
+    data = playable()
+    upload = _start(env, asset_id, data)
+    assert _put(env, upload, data, 0, len(data)).status_code == 200
+    assert _finish(env, upload).status_code == 200
+    written.clear()
+    assert _put_counting(client, upload["chunk_url"], headers, chunks=8) == (409, 0)
+    assert not written
+    # A chunk of an upload there is read and added, as ever.
+    other = _start(env, _ingest(env, "chunks/open.mov"), data)
+    assert _put(env, other, data, 0, 1000).json() == {"received": 1000}
+    assert written == [other["upload_id"]]
+
+
 @pytest.mark.slow
 def test_a_viewer_sends_nothing(env):
     from tests.test_archive_trash_safety import _key_with_role

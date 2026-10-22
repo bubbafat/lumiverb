@@ -22,7 +22,7 @@ console = Console()
 
 
 def clips(n: int) -> str:
-    return f"{n} {'clip' if n == 1 else 'clips'}"
+    return f"{n:,} {'clip' if n == 1 else 'clips'}"
 
 
 def library_id_for(client: LumiverbClient, library: str) -> str:
@@ -92,7 +92,7 @@ def archive_add(
     skipped = data.get("skipped", [])
     if skipped:
         console.print(f"Skipped {clips(len(skipped))} not in sight (already archived, in the trash, or unknown): "
-                      + ", ".join(skipped))
+                      + escape(", ".join(skipped)))
 
 
 @archive_app.command("restore")
@@ -105,7 +105,7 @@ def archive_restore(asset_ids: _ASSET_IDS = None, library: _LIBRARY = None, fold
     skipped = data.get("skipped", [])
     if skipped:
         console.print(f"Skipped {clips(len(skipped))} not archived by a person (a missing file comes back "
-                      "with its file): " + ", ".join(skipped))
+                      "with its file): " + escape(", ".join(skipped)))
 
 
 @archive_app.command("list")
@@ -134,7 +134,7 @@ def archive_list(
         return
     table = hidden_table("Archived", "")
     for item in items:
-        table.add_row(item["asset_id"], escape(item["library_name"]), escape(item["rel_path"]),
+        table.add_row(escape(item["asset_id"]), escape(item["library_name"]), escape(item["rel_path"]),
                       day(item["archived_at"]), "file missing" if item.get("file_missing") else "")
     console.print(table)
     total = page.get("total", len(items))
@@ -184,4 +184,4 @@ def archive_delete_missing(
     )
     deleted = r.json().get("deleted", 0)
     console.print(f"Deleted {clips(deleted)} whose files were missing, for good." if deleted
-                  else f"No clips with missing files{where}.")
+                  else f"No clips with missing files{escape(where)}.")

@@ -126,12 +126,17 @@ async def put_chunk(upload_id: str, request: Request, session: Annotated[Session
                     offset: int = Query(ge=0)) -> Received:
     """A chunk, the request's body, beginning at offset in the file: what's
     new in it is added (a chunk sent again adds nothing). Returns received.
-    409 upload_gap (details.received) for one beginning past what the
-    server has; 413 past max_chunk or the upload's size; 409
-    upload_finished once it's kept."""
+    404 for no such upload and 409 upload_finished once it's kept, both
+    before the body is read; 409 upload_gap (details.received) for one
+    beginning past what the server has; 413 past max_chunk or the upload's
+    size."""
     tenant_id = request.state.tenant_id
     if not upload_id.startswith("upl_") or "/" in upload_id:
         raise HTTPException(status_code=404, detail="Upload not found")
+    # The upload first: a chunk for none (or one kept already) is refused before a byte of it is read or written.
+    if _held(session, upload_id, lock=False)["finished_at"] is not None:
+        raise ConflictError("upload_finished", "This upload is kept already.")
+    session.rollback()  # no transaction left open while the chunk arrives; it's locked once it's here
     chunk = uploads.chunk_file(tenant_id, upload_id)
     try:
         total = 0

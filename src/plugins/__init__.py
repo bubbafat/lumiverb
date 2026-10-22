@@ -17,6 +17,6 @@ _VERSION = re.compile(r"^[0-9]{1,6}(\.[0-9]{1,6}){0,3}$")
 
 def version_key(version: str | None) -> tuple[int, ...] | None:
     """A version as numbers, to compare; None for one that isn't a version."""
-    if version is None or not _VERSION.match(version):
+    if version is None or not _VERSION.fullmatch(version):
         return None
     return tuple(int(part) for part in version.split("."))

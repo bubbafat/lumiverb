@@ -7,6 +7,7 @@ import {
   getFilteredFacets,
   listLibraries,
   queryAssets,
+  searchRefusal,
 } from "../api/client";
 import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
@@ -529,6 +530,7 @@ export default function UnifiedBrowsePage() {
         onClearAll={handleClearAll}
         facets={facetsQuery.data ?? null}
         onSaveAsProject={canEdit ? () => setShowSaveAsProject(true) : undefined}
+        searchError={searchRefusal(browseQuery.error)}
       />
 
       {showSaveAsProject && (

@@ -30,9 +30,9 @@ def parse_srt_to_text(srt_content: str) -> str:
         stripped = line.strip()
         if not stripped:
             continue
-        if _SEQUENCE_RE.match(stripped):
+        if _SEQUENCE_RE.fullmatch(stripped):
             continue
-        if _TIMESTAMP_RE.match(stripped):
+        if _TIMESTAMP_RE.fullmatch(stripped):
             continue
         text_parts.append(stripped)
 
@@ -108,7 +108,7 @@ def parse_srt_segments(srt_content: str) -> list[SrtSegment]:
         seq = i + 1
         if ts_line_idx > 0:
             seq_line = lines[ts_line_idx - 1].strip()
-            if _SEQUENCE_RE.match(seq_line):
+            if _SEQUENCE_RE.fullmatch(seq_line):
                 try:
                     seq = int(seq_line)
                 except ValueError:
@@ -133,7 +133,7 @@ def validate_srt(srt_content: str) -> bool:
         return False
 
     for line in srt_content.splitlines():
-        if _TIMESTAMP_RE.match(line.strip()):
+        if _TIMESTAMP_RE.fullmatch(line.strip()):
             return True
 
     return False

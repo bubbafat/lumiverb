@@ -6,6 +6,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
@@ -36,7 +37,7 @@ def project_list(
 
     if json:
         import json as _json
-        console.print(_json.dumps(items, indent=2))
+        console.print(_json.dumps(items, indent=2), markup=False)
         return
 
     table = Table(title="Projects")
@@ -48,12 +49,12 @@ def project_list(
     table.add_column("Status")
     for col in items:
         table.add_row(
-            col.get("project_id", ""),
-            col.get("name", ""),
-            str(col.get("asset_count", 0)),
-            col.get("visibility", ""),
-            col.get("ownership", ""),
-            col.get("status", "active"),
+            escape(col.get("project_id", "")),
+            escape(col.get("name", "")),
+            f"{col.get('asset_count', 0):,}",
+            escape(col.get("visibility", "")),
+            escape(col.get("ownership", "")),
+            escape(col.get("status", "active")),
         )
     console.print(table)
 
@@ -78,11 +79,11 @@ def project_create(
     client = LumiverbClient()
     resp = client.post("/v1/projects", json=body)
     data = resp.json()
-    console.print(f"[green]Project created: {data.get('project_id', '')}[/green]")
-    console.print(f"  name: {data.get('name', name)}")
+    console.print(f"[green]Project created: {escape(data.get('project_id', ''))}[/green]")
+    console.print(f"  name: {escape(data.get('name', name))}")
     if data.get("description"):
-        console.print(f"  description: {data['description']}")
-    console.print(f"  visibility: {data.get('visibility', visibility)}")
+        console.print(f"  description: {escape(data['description'])}")
+    console.print(f"  visibility: {escape(data.get('visibility', visibility))}")
 
 
 @projects_app.command("show")
@@ -100,16 +101,16 @@ def project_show(
         assets_resp = client.get(f"/v1/projects/{project_id}/assets?limit=500")
         assets_data = assets_resp.json()
         import json as _json
-        console.print(_json.dumps({"project": col, "assets": assets_data}, indent=2))
+        console.print(_json.dumps({"project": col, "assets": assets_data}, indent=2), markup=False)
         return
 
-    console.print(f"[bold]{col.get('name', '')}[/bold]")
+    console.print(f"[bold]{escape(col.get('name', ''))}[/bold]")
     if col.get("description"):
-        console.print(f"  {col['description']}")
-    console.print(f"  ID: {col.get('project_id', '')}")
-    console.print(f"  Assets: {col.get('asset_count', 0)}")
-    console.print(f"  Visibility: {col.get('visibility', '')}")
-    console.print(f"  Sort: {col.get('sort_order', '')}")
+        console.print(f"  {escape(col['description'])}")
+    console.print(f"  ID: {escape(col.get('project_id', ''))}")
+    console.print(f"  Assets: {col.get('asset_count', 0):,}")
+    console.print(f"  Visibility: {escape(col.get('visibility', ''))}")
+    console.print(f"  Sort: {escape(str(col.get('sort_order', '')))}")
     console.print()
 
     # List assets
@@ -126,15 +127,15 @@ def project_show(
     table.add_column("Type")
     for asset in items:
         table.add_row(
-            asset.get("asset_id", ""),
-            asset.get("rel_path", ""),
-            asset.get("media_type", ""),
+            escape(asset.get("asset_id", "")),
+            escape(asset.get("rel_path", "")),
+            escape(asset.get("media_type", "")),
         )
     console.print(table)
     if assets_data.get("next_cursor"):
         remaining = col.get("asset_count", 0) - len(items)
         if remaining > 0:
-            console.print(f"  [dim]... and {remaining} more[/dim]")
+            console.print(f"  [dim]... and {remaining:,} more[/dim]")
 
 
 @projects_app.command("add")
@@ -150,7 +151,7 @@ def project_add(
     )
     data = resp.json()
     added = data.get("added", 0)
-    console.print(f"[green]Added {added} asset(s) to project.[/green]")
+    console.print(f"[green]Added {added:,} asset(s) to project.[/green]")
 
 
 @projects_app.command("remove")
@@ -166,7 +167,7 @@ def project_remove(
     )
     data = resp.json()
     removed = data.get("removed", 0)
-    console.print(f"[green]Removed {removed} asset(s) from project.[/green]")
+    console.print(f"[green]Removed {removed:,} asset(s) from project.[/green]")
 
 
 @projects_app.command("delete")
@@ -178,8 +179,8 @@ def project_delete(
     client = LumiverbClient()
     resp = client.raw("DELETE", f"/v1/projects/{project_id}")
     if resp.status_code == 204:
-        console.print(f"[green]Moved {project_id} to the trash.[/green]")
-        console.print(f"[dim]Undo with: lumiverb project restore --id {project_id}[/dim]")
+        console.print(f"[green]Moved {escape(project_id)} to the trash.[/green]")
+        console.print(f"[dim]Undo with: lumiverb project restore --id {escape(project_id)}[/dim]")
         return
     client._handle_response(resp)  # type: ignore[attr-defined]
 
@@ -188,11 +189,11 @@ def _set_status(project_id: str, status: str) -> None:
     client = LumiverbClient()
     data = client.patch(f"/v1/projects/{project_id}", json={"status": status}).json()
     verb = "archived" if status == "archived" else "restored"
-    console.print(f"[green]Project {verb}: {data.get('name', project_id)} ({project_id})[/green]")
+    console.print(f"[green]Project {verb}: {escape(data.get('name', project_id))} ({escape(project_id)})[/green]")
 
 
 def _plural(n: int, one: str, many: str) -> str:
-    return f"{n} {one if n == 1 else many}"
+    return f"{n:,} {one if n == 1 else many}"
 
 
 def _archived_note(archived: int) -> None:
@@ -257,7 +258,7 @@ def project_restore(
         resp = client.raw("POST", path, json={"with_clips": with_clips})
     client._handle_response(resp)  # type: ignore[attr-defined]
     data = resp.json()
-    console.print(f"[green]Took {project_id} out of the trash.[/green]")
+    console.print(f"[green]Took {escape(project_id)} out of the trash.[/green]")
     restored, missing = data.get("restored_clips", 0), data.get("missing_clips", 0)
     left = data.get("trashed_clips", 0)
     if restored:
@@ -266,7 +267,7 @@ def project_restore(
     if left:
         console.print(
             f"Left {_plural(left, 'clip', 'clips')} in the trash; restore later with: "
-            f"lumiverb project restore-clips --id {project_id}"
+            f"lumiverb project restore-clips --id {escape(project_id)}"
         )
     if missing:
         console.print(
@@ -304,7 +305,8 @@ def project_empty_trash(
         console.print("The trash is empty." if not project_ids else "None of those projects are in the trash.")
         return
     for p in trashed:
-        console.print(f"  {p.get('name', '')} ({p.get('project_id', '')}, {p.get('asset_count', 0)} clips)")
+        console.print(f"  {escape(p.get('name', ''))} ({escape(p.get('project_id', ''))}, "
+                      f"{p.get('asset_count', 0):,} clips)")
     if not yes and not typer.confirm(
         f"Delete {_plural(len(trashed), 'project', 'projects')} for good? Their clips stay in your libraries.",
         default=False,
@@ -354,7 +356,7 @@ def project_export(
         output = name
     path = Path(output)
     path.write_bytes(resp.content)
-    console.print(f"[green]Exported to {path}[/green]")
+    console.print(f"[green]Exported to {escape(str(path))}[/green]")
 
     stills = int(resp.headers.get("x-lumiverb-stills", "0") or 0)
     if stills:
@@ -366,7 +368,8 @@ def project_export(
     if trashed:
         console.print(
             f"[yellow]{_plural(trashed, 'clip in the trash wasn', 'clips in the trash weren')}'t included; "
-            f"restore {'it' if trashed == 1 else 'them'} with: lumiverb project restore-clips --id {project_id}[/yellow]"
+            f"restore {'it' if trashed == 1 else 'them'} with: lumiverb project restore-clips --id "
+            f"{escape(project_id)}[/yellow]"
         )
     missing = int(resp.headers.get("x-lumiverb-skipped-missing", "0") or 0)
     if missing:

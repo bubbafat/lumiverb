@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { authFetch, publicQuery } from "./client";
+import { apiPath } from "./paths";
 import { PREVIEW, THUMBNAIL, VIDEO_PREVIEW } from "../lib/names";
 
 type MediaType = typeof THUMBNAIL | typeof PREVIEW | typeof VIDEO_PREVIEW;
 
-/** The one route for each picture: /assets/{id}/artifacts/{name} (ADR-024: by the file's name). */
+/** The one route for each picture: /assets/{id}/artifacts/{name} (ADR-024: by the file's name), the id one
+ * segment (paths.ts). */
 function mediaPath(assetId: string, type: MediaType): string {
-  return `/assets/${assetId}/artifacts/${type}`;
+  return apiPath`/assets/${assetId}/artifacts/${type}`;
 }
 
 /** A 503 that says when to ask again (a capped preview being made); null otherwise. */
@@ -49,16 +51,17 @@ export function useAuthenticatedImage(
     setIsLoading(true);
     setError(null);
     setGenerating(false);
-    const path = mediaPath(assetId, type);
     let objectUrl: string | null = null;
     let cancelled = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
 
     // Public pages send no token, so there is nothing to refresh; signed-in
     // requests go through authFetch, which refreshes on a 401 and signs out
-    // only when that fails.
-    const ask = (): Promise<Response> =>
-      isPublic ? fetch(`/v1${path}${publicQuery(publicLibraryId, publicProjectId)}`) : authFetch(path);
+    // only when that fails. An id that can't be a path segment is this one's error.
+    const ask = (): Promise<Response> => {
+      const path = mediaPath(assetId, type);
+      return isPublic ? fetch(`/v1${path}${publicQuery(publicLibraryId, publicProjectId)}`) : authFetch(path);
+    };
     const askUntilReady = async (tries: number): Promise<Response> => {
       const res = await ask();
       const wait = retryAfterMs(res);

@@ -34,6 +34,9 @@ import type {
   BatchRatingResponse,
 } from "./types";
 import { noteFailed, sendFailed } from "./failedRequests";
+import { apiPath } from "./paths";
+
+export { apiPath, segment } from "./paths";
 
 export class ApiError extends Error {
   constructor(
@@ -247,7 +250,7 @@ export async function createLibrary(
 /** Who reads a library's files (account admins): "server", this server, or a registered device's id, never both at once.
  * rootPath: the folder as the new reader sees it (left out, it stays). */
 export async function chooseLibraryReader(libraryId: string, reader: string, rootPath?: string): Promise<LibraryResponse> {
-  return apiFetch<LibraryResponse>(`/libraries/${libraryId}/reader`, {
+  return apiFetch<LibraryResponse>(apiPath`/libraries/${libraryId}/reader`, {
     method: "PUT",
     body: { reader, ...(rootPath !== undefined ? { root_path: rootPath } : {}) },
   });
@@ -279,21 +282,21 @@ export async function registerDevice(name: string): Promise<DeviceWithKey> {
 }
 
 export async function renameDevice(deviceId: string, name: string): Promise<Device> {
-  return apiFetch<Device>(`/devices/${deviceId}`, { method: "PATCH", body: { name } });
+  return apiFetch<Device>(apiPath`/devices/${deviceId}`, { method: "PATCH", body: { name } });
 }
 
 /** A new key, shown this once: the old one stops at once. */
 export async function newDeviceKey(deviceId: string): Promise<DeviceWithKey> {
-  return apiFetch<DeviceWithKey>(`/devices/${deviceId}/key`, { method: "POST" });
+  return apiFetch<DeviceWithKey>(apiPath`/devices/${deviceId}/key`, { method: "POST" });
 }
 
 export async function endDeviceKey(deviceId: string): Promise<void> {
-  return apiFetch<void>(`/devices/${deviceId}/key`, { method: "DELETE" });
+  return apiFetch<void>(apiPath`/devices/${deviceId}/key`, { method: "DELETE" });
 }
 
 /** 409 device_reads_libraries (details.libraries) while a library names it as its reader. */
 export async function removeDevice(deviceId: string): Promise<void> {
-  return apiFetch<void>(`/devices/${deviceId}`, { method: "DELETE" });
+  return apiFetch<void>(apiPath`/devices/${deviceId}`, { method: "DELETE" });
 }
 
 /**
@@ -303,7 +306,7 @@ export async function removeDevice(deviceId: string): Promise<void> {
  * agreed: hidden there now, and gone from them once deleted for good.
  */
 export async function deleteLibrary(libraryId: string, removeFromProjects = false): Promise<void> {
-  return apiFetch<void>(`/libraries/${libraryId}`, {
+  return apiFetch<void>(apiPath`/libraries/${libraryId}`, {
     method: "DELETE",
     body: { remove_from_projects: removeFromProjects },
   });
@@ -311,21 +314,21 @@ export async function deleteLibrary(libraryId: string, removeFromProjects = fals
 
 /** Take a library out of the trash with the clips that went with it. It comes back private. */
 export async function restoreLibrary(libraryId: string): Promise<LibraryResponse> {
-  return apiFetch<LibraryResponse>(`/libraries/${libraryId}/restore`, { method: "POST" });
+  return apiFetch<LibraryResponse>(apiPath`/libraries/${libraryId}/restore`, { method: "POST" });
 }
 
 export async function getLibrary(libraryId: string): Promise<LibraryResponse> {
-  return apiFetch<LibraryResponse>(`/libraries/${libraryId}`);
+  return apiFetch<LibraryResponse>(apiPath`/libraries/${libraryId}`);
 }
 
 /** Who can see and edit a library: everyone in the account with their role on it (its admin's). */
 export async function getLibraryPeople(libraryId: string): Promise<LibraryPeople> {
-  return apiFetch<LibraryPeople>(`/libraries/${libraryId}/people`);
+  return apiFetch<LibraryPeople>(apiPath`/libraries/${libraryId}/people`);
 }
 
 /** Set someone's role on a library (its admin's); null: the account's rule again. */
 export async function setLibraryRole(libraryId: string, userId: string, role: LibraryRole | null): Promise<LibraryPerson> {
-  return apiFetch<LibraryPerson>(`/libraries/${libraryId}/people/${encodeURIComponent(userId)}`, {
+  return apiFetch<LibraryPerson>(apiPath`/libraries/${libraryId}/people/${userId}`, {
     method: "PUT",
     body: { role },
   });
@@ -333,7 +336,7 @@ export async function setLibraryRole(libraryId: string, userId: string, role: Li
 
 /** Private: only the account's admins and the people given a role on it see it (its admin's). */
 export async function setLibraryPrivate(libraryId: string, isPrivate: boolean): Promise<LibraryResponse> {
-  return apiFetch<LibraryResponse>(`/libraries/${libraryId}`, { method: "PATCH", body: { private: isPrivate } });
+  return apiFetch<LibraryResponse>(apiPath`/libraries/${libraryId}`, { method: "PATCH", body: { private: isPrivate } });
 }
 
 /** Every plug-in and its state in this account (ADR-021). */
@@ -349,14 +352,14 @@ export async function listKeptPlugins(): Promise<KeptPlugin[]> {
 /** A kept plug-in's facts deleted from this account (account admins): 409 confirm_delete_facts (details: count,
  * title) until count is how many clips it made facts for here. */
 export async function deleteKeptFacts(pluginId: string, count: number): Promise<{ deleted: number }> {
-  return apiFetch<{ deleted: number }>(`/plugins/${encodeURIComponent(pluginId)}/facts?count=${count}`,
+  return apiFetch<{ deleted: number }>(apiPath`/plugins/${pluginId}/facts` + `?count=${count}`,
                                        { method: "DELETE" });
 }
 
 /** Turn a plug-in on or off (account admins). Turning on one that asks an acknowledgment: 409
  * acknowledgment_required (details: version, title, text, links) unless acknowledged is that version. */
 export async function setPlugin(pluginId: string, enabled: boolean, acknowledged?: string): Promise<Plugin> {
-  return apiFetch<Plugin>(`/plugins/${pluginId}`, {
+  return apiFetch<Plugin>(apiPath`/plugins/${pluginId}`, {
     method: "PUT",
     body: { enabled, ...(acknowledged !== undefined ? { acknowledged } : {}) },
   });
@@ -373,7 +376,7 @@ export async function setPluginSettings(
   scope: "account" | "server",
   redo?: boolean,
 ): Promise<Plugin> {
-  return apiFetch<Plugin>(`/plugins/${pluginId}/${scope === "server" ? "server-settings" : "settings"}`, {
+  return apiFetch<Plugin>(apiPath`/plugins/${pluginId}/${scope === "server" ? "server-settings" : "settings"}`, {
     method: "PUT",
     body: { settings, ...(redo !== undefined ? { redo } : {}) },
   });
@@ -386,7 +389,7 @@ export async function setLibraryInferLocation(
   on: boolean,
   removeGuesses = false,
 ): Promise<LibraryResponse> {
-  return apiFetch<LibraryResponse>(`/libraries/${libraryId}`, {
+  return apiFetch<LibraryResponse>(apiPath`/libraries/${libraryId}`, {
     method: "PATCH",
     body: { infer_location: on, ...(removeGuesses ? { remove_guesses: true } : {}) },
   });
@@ -396,7 +399,7 @@ export async function updateLibraryVisibility(
   libraryId: string,
   is_public: boolean,
 ): Promise<LibraryResponse> {
-  return apiFetch<LibraryResponse>(`/libraries/${libraryId}`, {
+  return apiFetch<LibraryResponse>(apiPath`/libraries/${libraryId}`, {
     method: "PATCH",
     body: { is_public },
   });
@@ -563,7 +566,7 @@ export async function listDirectories(
   const qs = new URLSearchParams();
   if (parent) qs.set("parent", parent);
   return apiFetch<DirectoryNode[]>(
-    `/libraries/${libraryId}/directories?${qs.toString()}`,
+    apiPath`/libraries/${libraryId}/directories` + `?${qs.toString()}`,
   );
 }
 
@@ -571,7 +574,7 @@ export async function listDirectories(
 export async function getLibraryRevision(
   libraryId: string,
 ): Promise<LibraryRevision> {
-  return apiFetch<LibraryRevision>(`/libraries/${libraryId}/revision`);
+  return apiFetch<LibraryRevision>(apiPath`/libraries/${libraryId}/revision`);
 }
 
 /** Bulk health check — one row per non-trashed library, single SQL call.
@@ -651,6 +654,15 @@ export async function queryAssets(
   return apiFetch<QueryResponse>(`/query?${params}`);
 }
 
+/** What GET /v1/query refused about the search itself, in the server's words, to say under the search
+ * box (FilterBar's searchError): too long (search_too_long: more words than a search takes) or a filter no
+ * search can run (bad_filter). null for any other error, or none. */
+export function searchRefusal(error: unknown): string | null {
+  return error instanceof ApiError && (error.code === "search_too_long" || error.code === "bad_filter")
+    ? error.message
+    : null;
+}
+
 /** Fetch facets scoped by the active filter set. */
 export async function getFilteredFacets(
   filters: LeafFilter[],
@@ -664,7 +676,7 @@ export async function getFilteredFacets(
 
 /** List detected faces for an asset. */
 export async function listFaces(assetId: string): Promise<FaceListResponse> {
-  return apiFetch<FaceListResponse>(`/assets/${assetId}/faces`);
+  return apiFetch<FaceListResponse>(apiPath`/assets/${assetId}/faces`);
 }
 
 // ---------- People ----------
@@ -741,12 +753,12 @@ export async function searchPeople(q: string, limit = 10): Promise<PersonListRes
 
 /** Get a person by ID. */
 export async function getPerson(personId: string): Promise<PersonItem> {
-  return apiFetch<PersonItem>(`/people/${personId}`);
+  return apiFetch<PersonItem>(apiPath`/people/${personId}`);
 }
 
 /** Update a person's display name. */
 export async function updatePerson(personId: string, displayName: string): Promise<PersonItem> {
-  return apiFetch<PersonItem>(`/people/${personId}`, {
+  return apiFetch<PersonItem>(apiPath`/people/${personId}`, {
     method: "PATCH",
     body: { display_name: displayName },
   });
@@ -761,12 +773,12 @@ export async function listDismissedPeople(cursor?: string, limit = 50): Promise<
 
 /** Get named people sorted by similarity to a person's centroid. */
 export async function getNearestPeopleForPerson(personId: string, limit = 5): Promise<NearestPersonItem[]> {
-  return apiFetch<NearestPersonItem[]>(`/people/${personId}/nearest?limit=${limit}`);
+  return apiFetch<NearestPersonItem[]>(apiPath`/people/${personId}/nearest` + `?limit=${limit}`);
 }
 
 /** Restore a dismissed person and give them a name. */
 export async function undismissPerson(personId: string, displayName: string): Promise<PersonItem> {
-  return apiFetch<PersonItem>(`/people/${personId}/undismiss`, {
+  return apiFetch<PersonItem>(apiPath`/people/${personId}/undismiss`, {
     method: "POST",
     body: { display_name: displayName },
   });
@@ -774,7 +786,7 @@ export async function undismissPerson(personId: string, displayName: string): Pr
 
 /** Delete a person and all their face matches. */
 export async function deletePerson(personId: string): Promise<void> {
-  await apiFetch<void>(`/people/${personId}`, { method: "DELETE" });
+  await apiFetch<void>(apiPath`/people/${personId}`, { method: "DELETE" });
 }
 
 /** List faces matched to a person, cursor-paginated. */
@@ -782,7 +794,7 @@ export async function listPersonFaces(personId: string, cursor?: string, limit =
   const params = new URLSearchParams();
   if (cursor) params.set("after", cursor);
   params.set("limit", String(limit));
-  return apiFetch<PersonFacesResponse>(`/people/${personId}/faces?${params}`);
+  return apiFetch<PersonFacesResponse>(apiPath`/people/${personId}/faces` + `?${params}`);
 }
 
 /** Get face clusters (unassigned faces grouped by similarity). */
@@ -808,7 +820,7 @@ export async function nameCluster(
 ): Promise<PersonItem> {
   const body: Record<string, unknown> = { display_name: opts.displayName };
   if ("personId" in opts) body.person_id = opts.personId;
-  return apiFetch<PersonItem>(`/faces/clusters/${clusterId}/name`, {
+  return apiFetch<PersonItem>(apiPath`/faces/clusters/${clusterId}/name`, {
     method: "POST",
     body,
   });
@@ -823,7 +835,7 @@ export interface NearestPersonItem {
 
 /** Get people sorted by similarity to a cluster's centroid. */
 export async function getNearestPeople(clusterId: string, limit = 5): Promise<NearestPersonItem[]> {
-  return apiFetch<NearestPersonItem[]>(`/faces/clusters/${clusterId}/nearest-people?limit=${limit}`);
+  return apiFetch<NearestPersonItem[]>(apiPath`/faces/clusters/${clusterId}/nearest-people` + `?limit=${limit}`);
 }
 
 /** Get people sorted by similarity to a single face's embedding. Used by
@@ -831,12 +843,12 @@ export async function getNearestPeople(clusterId: string, limit = 5): Promise<Ne
  * ordered by who actually looks like the clicked face, instead of by
  * total face count (which has nothing to do with whether they match). */
 export async function getNearestPeopleForFace(faceId: string, limit = 5): Promise<NearestPersonItem[]> {
-  return apiFetch<NearestPersonItem[]>(`/faces/${faceId}/nearest-people?limit=${limit}`);
+  return apiFetch<NearestPersonItem[]>(apiPath`/faces/${faceId}/nearest-people` + `?limit=${limit}`);
 }
 
 /** Dismiss a cluster: creates a dismissed person that absorbs future similar faces. Returns person_id for undo. */
 export async function dismissCluster(clusterId: string): Promise<{ person_id: string }> {
-  return apiFetch<{ person_id: string }>(`/faces/clusters/${clusterId}/dismiss`, {
+  return apiFetch<{ person_id: string }>(apiPath`/faces/clusters/${clusterId}/dismiss`, {
     method: "POST",
   });
 }
@@ -851,7 +863,7 @@ export interface ClusterFacesResponse {
 export async function listClusterFaces(clusterId: string, cursor?: string, limit = 50): Promise<ClusterFacesResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) params.set("after", cursor);
-  return apiFetch<ClusterFacesResponse>(`/faces/clusters/${clusterId}/faces?${params}`);
+  return apiFetch<ClusterFacesResponse>(apiPath`/faces/clusters/${clusterId}/faces` + `?${params}`);
 }
 
 /** Assign a face to a person (existing or new). */
@@ -861,7 +873,7 @@ export async function assignFace(
 ): Promise<{ person_id: string; display_name: string }> {
   const body: Record<string, string> =
     "personId" in opts ? { person_id: opts.personId } : { new_person_name: opts.newPersonName };
-  return apiFetch(`/faces/${faceId}/assign`, {
+  return apiFetch(apiPath`/faces/${faceId}/assign`, {
     method: "POST",
     body,
   });
@@ -869,12 +881,12 @@ export async function assignFace(
 
 /** Remove a face from its assigned person. */
 export async function unassignFace(faceId: string): Promise<void> {
-  await apiFetch<void>(`/faces/${faceId}/assign`, { method: "DELETE" });
+  await apiFetch<void>(apiPath`/faces/${faceId}/assign`, { method: "DELETE" });
 }
 
 /** Merge source person into target person. Source is deleted. */
 export async function mergePerson(targetPersonId: string, sourcePersonId: string): Promise<PersonItem> {
-  return apiFetch<PersonItem>(`/people/${targetPersonId}/merge`, {
+  return apiFetch<PersonItem>(apiPath`/people/${targetPersonId}/merge`, {
     method: "POST",
     body: { source_person_id: sourcePersonId },
   });
@@ -888,7 +900,7 @@ export function publicQuery(publicLibraryId?: string, publicProjectId?: string):
 }
 
 export async function getAsset(assetId: string, publicLibraryId?: string, publicProjectId?: string): Promise<AssetDetail> {
-  return apiFetch<AssetDetail>(`/assets/${assetId}${publicQuery(publicLibraryId, publicProjectId)}`);
+  return apiFetch<AssetDetail>(apiPath`/assets/${assetId}` + publicQuery(publicLibraryId, publicProjectId));
 }
 
 /** Write a clip's description, OCR or tags (editors): the one copy, which the
@@ -898,7 +910,7 @@ export async function correctAsset(
   assetId: string,
   body: { description?: string | null; ocr_text?: string | null; tags?: string[] | null },
 ): Promise<AssetDetail> {
-  return apiFetch<AssetDetail>(`/assets/${assetId}/corrections`, { method: "PATCH", body });
+  return apiFetch<AssetDetail>(apiPath`/assets/${assetId}/corrections`, { method: "PATCH", body });
 }
 
 /** A signed link a <video> element can stream and seek (no auth header needed). */
@@ -916,7 +928,7 @@ export interface Playback {
 }
 
 export async function getPlayback(assetId: string, publicLibraryId?: string, publicProjectId?: string): Promise<Playback> {
-  return apiFetch<Playback>(`/assets/${assetId}/playback${publicQuery(publicLibraryId, publicProjectId)}`);
+  return apiFetch<Playback>(apiPath`/assets/${assetId}/playback` + publicQuery(publicLibraryId, publicProjectId));
 }
 
 export interface TenantSettings {
@@ -1030,13 +1042,13 @@ export async function addMachine(body: MachineFields): Promise<AiSettings> {
  * the job's work waits (Processing says why). The built-in machine takes no
  * api_url or api_key, and only the jobs it can do (409 built_in_machine). */
 export async function updateMachine(machineId: string, body: Partial<MachineFields>): Promise<AiSettings> {
-  return apiFetch<AiSettings>(`/ai/machines/${machineId}`, { method: "PATCH", body });
+  return apiFetch<AiSettings>(apiPath`/ai/machines/${machineId}`, { method: "PATCH", body });
 }
 
 /** Remove a machine (admins); the last doing a job too (its work waits).
  * 409 built_in_machine for the built-in one (turn it off instead). */
 export async function removeMachine(machineId: string): Promise<AiSettings> {
-  return apiFetch<AiSettings>(`/ai/machines/${machineId}`, { method: "DELETE" });
+  return apiFetch<AiSettings>(apiPath`/ai/machines/${machineId}`, { method: "DELETE" });
 }
 
 /** One request of a Test: the producers it stands for and what came back (POST /v1/ai/machines/{id}/try). */
@@ -1064,7 +1076,7 @@ export interface MachineTry {
 /** Try a machine (admins): it's sent what descriptions & text's work sends, a picture Lumiverb draws and a
  * video's scenes, with the job's model or the one given. 409 no_model, 409 built_in_machine. */
 export async function tryMachine(machineId: string, model = ""): Promise<MachineTry> {
-  return apiFetch<MachineTry>(`/ai/machines/${machineId}/try`, { method: "POST", body: { model } });
+  return apiFetch<MachineTry>(apiPath`/ai/machines/${machineId}/try`, { method: "POST", body: { model } });
 }
 
 /** Set a job's model (admins); "" turns the job off. Every machine doing it is
@@ -1073,7 +1085,7 @@ export async function tryMachine(machineId: string, model = ""): Promise<Machine
  * 409 redo_on_change (details: model, clips, question "remake", artifacts[{artifact, title, clips}])
  * until `redo` says: true, remade too, after everything else; false, new files only. */
 export async function setJobModel(job: string, model: string, redo?: boolean): Promise<AiSettings> {
-  return apiFetch<AiSettings>(`/ai/jobs/${job}`, {
+  return apiFetch<AiSettings>(apiPath`/ai/jobs/${job}`, {
     method: "PUT",
     body: redo === undefined ? { model } : { model, redo },
   });
@@ -1207,7 +1219,7 @@ export async function redoBelow(
   artifact: string,
   body: { asset_ids?: string[]; all?: true; library_id?: string },
 ): Promise<{ redo: number; paused: boolean; redo_stopped: boolean }> {
-  return apiFetch(`/producers/${artifact}/below/redo`, { method: "POST", body });
+  return apiFetch(apiPath`/producers/${artifact}/below/redo`, { method: "POST", body });
 }
 
 /** Change a producer's settings (admins): null puts one back to its default.
@@ -1220,7 +1232,7 @@ export async function setProducerSettings(
   settings: Record<string, unknown>,
   redo?: boolean,
 ): Promise<Producer> {
-  return apiFetch<Producer>(`/producers/${artifact}/settings`, {
+  return apiFetch<Producer>(apiPath`/producers/${artifact}/settings`, {
     method: "PUT",
     body: redo === undefined ? { settings } : { settings, redo },
   });
@@ -1551,7 +1563,7 @@ export interface LibraryPreviews {
 }
 
 export async function getLibraryPreviews(libraryId: string): Promise<LibraryPreviews> {
-  return apiFetch<LibraryPreviews>(`/libraries/${encodeURIComponent(libraryId)}/previews`);
+  return apiFetch<LibraryPreviews>(apiPath`/libraries/${libraryId}/previews`);
 }
 
 /** Without move, a 409 move_previews with the facts (unless there's nothing to move or say); with it, the move
@@ -1559,7 +1571,7 @@ export async function getLibraryPreviews(libraryId: string): Promise<LibraryPrev
 export async function moveLibraryPreviews(
   libraryId: string, folder: string | null, move: boolean, makeFolder = false,
 ): Promise<LibraryPreviews> {
-  return apiFetch<LibraryPreviews>(`/libraries/${encodeURIComponent(libraryId)}/previews`, {
+  return apiFetch<LibraryPreviews>(apiPath`/libraries/${libraryId}/previews`, {
     method: "PUT", body: { folder, move, make_folder: makeFolder },
   });
 }
@@ -1648,23 +1660,23 @@ export async function retryFailures(body: { artifact?: string; library_id?: stri
 /** Stop redoing a producer's stale clips (admins): its switch's redo scope; what's missing is still made.
  * 409 cant_redo. */
 export async function stopRedo(artifact: string): Promise<void> {
-  await apiFetch<void>(`/producers/${artifact}/pause`, { method: "POST", body: { scope: "redo" } });
+  await apiFetch<void>(apiPath`/producers/${artifact}/pause`, { method: "POST", body: { scope: "redo" } });
 }
 
 /** Redo a producer's stale clips again (admins), after anything missing. */
 export async function resumeRedo(artifact: string): Promise<void> {
-  await apiFetch<void>(`/producers/${artifact}/resume`, { method: "POST", body: { scope: "redo" } });
+  await apiFetch<void>(apiPath`/producers/${artifact}/resume`, { method: "POST", body: { scope: "redo" } });
 }
 
 /** Pause one switch's work ("upkeep" or a producer's artifact), or "all" (admins). The target is
  * always named. What's running finishes. 409 not_scheduled for what scans make (a library's scans pause it). */
 export async function pauseProcessing(target: string): Promise<void> {
-  await apiFetch<void>(`/producers/${target}/pause`, { method: "POST", body: { scope: "work" } });
+  await apiFetch<void>(apiPath`/producers/${target}/pause`, { method: "POST", body: { scope: "work" } });
 }
 
 /** Resume one switch's work, or "all" (admins). */
 export async function resumeProcessing(target: string): Promise<void> {
-  await apiFetch<void>(`/producers/${target}/resume`, { method: "POST", body: { scope: "work" } });
+  await apiFetch<void>(apiPath`/producers/${target}/resume`, { method: "POST", body: { scope: "work" } });
 }
 
 /** Pause these libraries' scans, or every library's ("all", named, never inferred) (admins): no new or
@@ -1683,7 +1695,7 @@ export async function resumeScans(libraries: string[] | "all"): Promise<void> {
 /** Ask the library's reader for a scan of the whole library, at its next check-in (editors). 409 scans_paused
  * while its scans are paused; asked again before it's done, the first ask stands. */
 export async function scanNow(libraryId: string): Promise<void> {
-  await apiFetch<void>(`/libraries/${encodeURIComponent(libraryId)}/scan-now`, { method: "POST" });
+  await apiFetch<void>(apiPath`/libraries/${libraryId}/scan-now`, { method: "POST" });
 }
 
 export async function findSimilar(params: {
@@ -1727,7 +1739,7 @@ export async function getLibraryFilters(
   libraryId: string,
 ): Promise<LibraryFiltersResponse> {
   return apiFetch<LibraryFiltersResponse>(
-    `/libraries/${libraryId}/filters`,
+    apiPath`/libraries/${libraryId}/filters`,
   );
 }
 
@@ -1742,7 +1754,7 @@ export async function addLibraryFilter(
   removeFromProjects = false,
 ): Promise<CreatedFilterResponse> {
   return apiFetch<CreatedFilterResponse>(
-    `/libraries/${libraryId}/filters`,
+    apiPath`/libraries/${libraryId}/filters`,
     { method: "POST", body: { type, pattern, trash_matching: trashMatching, remove_from_projects: removeFromProjects } },
   );
 }
@@ -1753,7 +1765,7 @@ export async function previewLibraryFilter(
   pattern: string,
 ): Promise<PreviewFilterResponse> {
   return apiFetch<PreviewFilterResponse>(
-    `/libraries/${libraryId}/filters/preview`,
+    apiPath`/libraries/${libraryId}/filters/preview`,
     { method: "POST", body: { type, pattern } },
   );
 }
@@ -1762,7 +1774,7 @@ export async function deleteLibraryFilter(
   libraryId: string,
   filterId: string,
 ): Promise<void> {
-  return apiFetch<void>(`/libraries/${libraryId}/filters/${filterId}`, {
+  return apiFetch<void>(apiPath`/libraries/${libraryId}/filters/${filterId}`, {
     method: "DELETE",
   });
 }
@@ -1782,26 +1794,26 @@ export async function inviteUser(email: string, role: string, everyLibrary = tru
 
 /** Whether someone sees every library (their account role on each), or only the ones they're given a role on. */
 export async function setUserEveryLibrary(userId: string, everyLibrary: boolean): Promise<UserItem> {
-  return apiFetch<UserItem>(`/users/${userId}`, { method: "PATCH", body: { every_library: everyLibrary } });
+  return apiFetch<UserItem>(apiPath`/users/${userId}`, { method: "PATCH", body: { every_library: everyLibrary } });
 }
 
 /** A new link for someone who hasn't signed in yet; the old one stops working (409 already_joined otherwise). */
 export async function newInviteLink(userId: string): Promise<InviteLink> {
-  return apiFetch<InviteLink>(`/users/${encodeURIComponent(userId)}/invite`, { method: "POST" });
+  return apiFetch<InviteLink>(apiPath`/users/${userId}/invite`, { method: "POST" });
 }
 
 export async function updateUserRole(
   userId: string,
   role: string,
 ): Promise<UserItem> {
-  return apiFetch<UserItem>(`/users/${userId}`, {
+  return apiFetch<UserItem>(apiPath`/users/${userId}`, {
     method: "PATCH",
     body: { role },
   });
 }
 
 export async function deleteUser(userId: string): Promise<void> {
-  return apiFetch<void>(`/users/${userId}`, { method: "DELETE" });
+  return apiFetch<void>(apiPath`/users/${userId}`, { method: "DELETE" });
 }
 
 // --- The install's accounts and server admins (a server admin's: Admin › Accounts) ---
@@ -1816,14 +1828,14 @@ export async function createAccount(name: string, email: string): Promise<Accoun
 }
 
 export async function renameAccount(tenantId: string, name: string): Promise<void> {
-  await apiFetch(`/admin/tenants/${encodeURIComponent(tenantId)}`, { method: "PATCH", body: { name } });
+  await apiFetch(apiPath`/admin/tenants/${tenantId}`, { method: "PATCH", body: { name } });
 }
 
 /** 409 confirm_delete_account (details: name, users, libraries, clips) until confirm is its name; own_account and
  * last_server_admin 409s too. */
 export async function deleteAccount(tenantId: string, confirm?: string): Promise<void> {
   const query = confirm === undefined ? "" : `?confirm=${encodeURIComponent(confirm)}`;
-  return apiFetch<void>(`/admin/tenants/${encodeURIComponent(tenantId)}${query}`, { method: "DELETE" });
+  return apiFetch<void>(apiPath`/admin/tenants/${tenantId}` + query, { method: "DELETE" });
 }
 
 export async function listServerAdmins(): Promise<ServerAdminItem[]> {
@@ -1839,7 +1851,7 @@ export async function addServerAdmin(email: string): Promise<{ server_admins: Se
 
 /** 409 last_server_admin for the last one. */
 export async function removeServerAdmin(userId: string): Promise<void> {
-  return apiFetch<void>(`/admin/server-admins/${encodeURIComponent(userId)}`, { method: "DELETE" });
+  return apiFetch<void>(apiPath`/admin/server-admins/${userId}`, { method: "DELETE" });
 }
 
 export async function getCurrentUser(): Promise<CurrentUser> {
@@ -1886,7 +1898,7 @@ export async function createApiKey(label: string, role?: string): Promise<ApiKey
 }
 
 export async function revokeApiKey(keyId: string): Promise<void> {
-  return apiFetch<void>(`/keys/${keyId}`, { method: "DELETE" });
+  return apiFetch<void>(apiPath`/keys/${keyId}`, { method: "DELETE" });
 }
 
 // ---------------------------------------------------------------------------
@@ -1912,7 +1924,7 @@ export async function setProjectStatus(
   projectId: string,
   status: ProjectStatus,
 ): Promise<ProjectItem> {
-  return apiFetch<ProjectItem>(`/projects/${projectId}`, {
+  return apiFetch<ProjectItem>(apiPath`/projects/${projectId}`, {
     method: "PATCH",
     body: { status },
   });
@@ -1921,7 +1933,7 @@ export async function setProjectStatus(
 export async function getProject(
   projectId: string,
 ): Promise<ProjectItem> {
-  return apiFetch<ProjectItem>(`/projects/${projectId}`);
+  return apiFetch<ProjectItem>(apiPath`/projects/${projectId}`);
 }
 
 export async function createProject(
@@ -1951,7 +1963,7 @@ export async function updateProject(
     cover_asset_id?: string | null;
   },
 ): Promise<ProjectItem> {
-  return apiFetch<ProjectItem>(`/projects/${projectId}`, {
+  return apiFetch<ProjectItem>(apiPath`/projects/${projectId}`, {
     method: "PATCH",
     body,
   });
@@ -1959,7 +1971,7 @@ export async function updateProject(
 
 /** Move a project to the trash. Restore brings it back as it was. */
 export async function trashProject(projectId: string): Promise<void> {
-  return apiFetch<void>(`/projects/${projectId}`, { method: "DELETE" });
+  return apiFetch<void>(apiPath`/projects/${projectId}`, { method: "DELETE" });
 }
 
 /** Take a project out of the trash, back to active or archived as it was.
@@ -1969,7 +1981,7 @@ export async function restoreProject(
   projectId: string,
   withClips?: boolean,
 ): Promise<{ restored_clips: number; trashed_clips: number; missing_clips: number }> {
-  return apiFetch<{ restored_clips: number; trashed_clips: number; missing_clips: number }>(`/projects/${projectId}/restore`, {
+  return apiFetch<{ restored_clips: number; trashed_clips: number; missing_clips: number }>(apiPath`/projects/${projectId}/restore`, {
     method: "POST",
     body: withClips === undefined ? {} : { with_clips: withClips },
   });
@@ -1988,7 +2000,7 @@ export async function emptyProjectTrash(projectIds: string[]): Promise<{ deleted
 export async function restoreProjectClips(
   projectId: string,
 ): Promise<{ restored: number; missing: number }> {
-  return apiFetch<{ restored: number; missing: number }>(`/projects/${projectId}/restore-clips`, {
+  return apiFetch<{ restored: number; missing: number }>(apiPath`/projects/${projectId}/restore-clips`, {
     method: "POST",
   });
 }
@@ -2002,7 +2014,7 @@ export async function listProjectAssets(
   if (after) qs.set("after", after);
   qs.set("limit", String(limit));
   return apiFetch<ProjectAssetsResponse>(
-    `/projects/${projectId}/assets?${qs.toString()}`,
+    apiPath`/projects/${projectId}/assets` + `?${qs.toString()}`,
   );
 }
 
@@ -2010,7 +2022,7 @@ export async function addAssetsToProject(
   projectId: string,
   assetIds: string[],
 ): Promise<BatchAddResponse> {
-  return apiFetch<BatchAddResponse>(`/projects/${projectId}/assets`, {
+  return apiFetch<BatchAddResponse>(apiPath`/projects/${projectId}/assets`, {
     method: "POST",
     body: { asset_ids: assetIds },
   });
@@ -2020,7 +2032,7 @@ export async function removeAssetsFromProject(
   projectId: string,
   assetIds: string[],
 ): Promise<BatchRemoveResponse> {
-  return apiFetch<BatchRemoveResponse>(`/projects/${projectId}/assets`, {
+  return apiFetch<BatchRemoveResponse>(apiPath`/projects/${projectId}/assets`, {
     method: "DELETE",
     body: { asset_ids: assetIds },
   });
@@ -2034,7 +2046,7 @@ export async function rateAsset(
   assetId: string,
   body: { favorite?: boolean; stars?: number; color?: string | null },
 ): Promise<RatingResponse> {
-  return apiFetch<RatingResponse>(`/assets/${assetId}/rating`, {
+  return apiFetch<RatingResponse>(apiPath`/assets/${assetId}/rating`, {
     method: "PUT",
     body,
   });
@@ -2092,14 +2104,14 @@ export async function updateSavedView(
   viewId: string,
   body: { name?: string; query_params?: string; icon?: string | null },
 ): Promise<SavedViewItem> {
-  return apiFetch<SavedViewItem>(`/views/${viewId}`, {
+  return apiFetch<SavedViewItem>(apiPath`/views/${viewId}`, {
     method: "PATCH",
     body,
   });
 }
 
 export async function deleteSavedView(viewId: string): Promise<void> {
-  return apiFetch<void>(`/views/${viewId}`, { method: "DELETE" });
+  return apiFetch<void>(apiPath`/views/${viewId}`, { method: "DELETE" });
 }
 
 /** Upload or replace an SRT transcript for a video asset. */
@@ -2109,7 +2121,7 @@ export async function uploadTranscript(
   language?: string,
 ): Promise<{ asset_id: string; status: string }> {
   return apiFetch<{ asset_id: string; status: string }>(
-    `/assets/${assetId}/transcript`,
+    apiPath`/assets/${assetId}/transcript`,
     { method: "POST", body: { srt, language: language ?? null, source: "manual" } },
   );
 }
@@ -2118,17 +2130,17 @@ export async function uploadTranscript(
  * machine makes one again) or the machine's (for good). 409 transcript_changed
  * when it shows the other one. */
 export async function deleteTranscript(assetId: string, which: "manual" | "machine"): Promise<void> {
-  await apiFetch<void>(`/assets/${assetId}/transcript?which=${which}`, { method: "DELETE" });
+  await apiFetch<void>(apiPath`/assets/${assetId}/transcript` + `?which=${which}`, { method: "DELETE" });
 }
 
 /** Add or update a note on an asset. */
 export async function updateNote(assetId: string, text: string): Promise<void> {
-  await apiFetch<void>(`/assets/${assetId}/note`, { method: "PUT", body: { text } });
+  await apiFetch<void>(apiPath`/assets/${assetId}/note`, { method: "PUT", body: { text } });
 }
 
 /** Delete a note from an asset. */
 export async function deleteNote(assetId: string): Promise<void> {
-  await apiFetch<void>(`/assets/${assetId}/note`, { method: "DELETE" });
+  await apiFetch<void>(apiPath`/assets/${assetId}/note`, { method: "DELETE" });
 }
 
 // ---------------------------------------------------------------------------
@@ -2217,7 +2229,7 @@ function filenameFromDisposition(header: string | null): string | null {
  * stills, pointing at the originals as the libraries know them (relinked in the editor). */
 export async function exportProject(projectId: string, format: string): Promise<ProjectExportFile> {
   const qs = new URLSearchParams({ format });
-  const res = await authFetch(`/projects/${projectId}/export?${qs.toString()}`);
+  const res = await authFetch(apiPath`/projects/${projectId}/export` + `?${qs.toString()}`);
   if (!res.ok) {
     let message = `Export failed (${res.status})`;
     try {

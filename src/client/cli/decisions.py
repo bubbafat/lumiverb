@@ -58,7 +58,7 @@ def send_until_decided(
             if any(body.get(k) != v for k, v in more.items()):
                 body = {**body, **more}
                 continue
-        console.print(f"[red]{failed}: {escape(err.get('message') or r.text)}[/red]")
+        console.print(f"[red]{escape(failed)}: {escape(err.get('message') or r.text)}[/red]")
         raise typer.Exit(1)
 
 
@@ -68,13 +68,14 @@ def projects_say_yes(details: dict, *, what: str, yes: bool) -> bool:
     from src.client.cli.commands.archive import clips
 
     n = int(details.get("assets_in_projects", 0))
-    console.print(f"[yellow]{clips(n)} {'is' if n == 1 else 'are'} in projects; {what}:[/yellow]")
+    console.print(f"[yellow]{clips(n)} {'is' if n == 1 else 'are'} in projects; {escape(what)}:[/yellow]")
     for p in details.get("projects", []):
         notes = ", ".join(x for x in ("archived" if p.get("status") == "archived" else "",
                                       "in the trash" if p.get("in_trash") else "") if x)
-        console.print(f"  {escape(p.get('name', ''))}: {p.get('clips', 0)}" + (f" ({notes})" if notes else ""))
+        console.print(f"  {escape(p.get('name', ''))}: {int(p.get('clips') or 0):,}"
+                      + (f" ({escape(notes)})" if notes else ""))
     if details.get("other_projects"):
-        console.print(f"  and {details['other_projects']} more you can't see")
+        console.print(f"  and {int(details['other_projects']):,} more you can't see")
     if yes:
         console.print("[red]Add --remove-from-projects to go ahead.[/red]")
         return False

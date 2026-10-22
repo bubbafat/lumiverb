@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 
 
@@ -121,7 +122,7 @@ class UnifiedProgress:
         )
         self._progress.__enter__()
         task_id = self._progress.add_task(
-            f"{self._spec.label}…",
+            f"{escape(self._spec.label)}…",
             total=self._spec.total,
             completed=0,
             unit_display="",
