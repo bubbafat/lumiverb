@@ -11,7 +11,8 @@ export function editsIt(role: string | undefined): boolean {
   return role === "admin" || role === "editor";
 }
 
-/** Runs the library: its settings, folder, reader, Scans pause, privacy and people. */
+/** Runs the library: its settings, Scans pause, privacy and people. Its folder and who reads it are an account
+ * admin's, as adding a library is: the library's own admin sees them. */
 export function runsIt(role: string | undefined): boolean {
   return role === "admin";
 }

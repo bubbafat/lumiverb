@@ -9,27 +9,55 @@ const SERVER = "server";
 
 /** Who reads the library's files (ADR-018 decision 1): this server, or a device (Settings › Devices), never both at
  * once. The reader scans the library and makes what needs its files; this server does everything else either way.
- * Its admin's choice, with the folder as the new reader sees it. The account's devices are listed for an account
- * admin (Settings › Devices); another of its admins chooses this server or the device it has. */
+ * An account admin's choice, with the folder as the new reader sees it, as adding a library is: the library's own
+ * admin sees who reads it and where, and that an account admin chooses them. */
 export default function LibraryReaderSection({ libraryId }: { libraryId: string }) {
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const { data: library } = useQuery({ queryKey: ["library", libraryId], queryFn: () => getLibrary(libraryId) });
   const accountAdmin = user?.role === "admin";
   const { data: devices } = useQuery({ queryKey: DEVICES_QUERY_KEY, queryFn: listDevices, enabled: accountAdmin });
-  if (!library || !runsIt(roleOn(library, user?.role))) return null;
+  if (!library || !user || !runsIt(roleOn(library, user.role))) return null;
+  const reader = library.reader ?? SERVER;
+  const readerName = library.reader_name ?? null;
+  if (!accountAdmin) return <ReaderShown reader={reader} readerName={readerName} root={library.root_path} />;
   // Built once the library is here, so the choice starts from it.
-  return <ReaderForm key={`${library.reader}:${library.root_path}`} libraryId={libraryId} reader={library.reader ?? SERVER}
-                     readerName={library.reader_name ?? null} root={library.root_path} devices={devices ?? []}
-                     accountAdmin={accountAdmin} />;
+  return <ReaderForm key={`${library.reader}:${library.root_path}`} libraryId={libraryId} reader={reader}
+                     readerName={readerName} root={library.root_path} devices={devices ?? []} />;
 }
 
-function ReaderForm({ libraryId, reader, readerName, root, devices, accountAdmin }: {
+function Intro({ reader, readerName }: { reader: string; readerName: string | null }) {
+  const now = reader === SERVER ? "This server reads its files." : `${readerName ?? "A device"} reads its files.`;
+  return (
+    <>
+      <h2 className="text-lg font-semibold text-gray-100">Who reads it</h2>
+      <p className="text-sm text-gray-400">
+        {now} Its reader scans it and makes what needs its files (previews, video facts, analysis copies); this server
+        does everything else (search, faces, descriptions, scenes, transcripts).
+      </p>
+    </>
+  );
+}
+
+/** For the library's admin who isn't an account admin: who reads it and its folder, as they are. */
+function ReaderShown({ reader, readerName, root }: { reader: string; readerName: string | null; root: string }) {
+  return (
+    <div className="space-y-3 rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-3" aria-label="Who reads it">
+      <Intro reader={reader} readerName={readerName} />
+      <p className="text-sm text-gray-300">
+        Its folder {reader === SERVER ? "on this server" : `as ${readerName ?? "the device"} sees it`}:{" "}
+        <span className="break-all font-mono">{root}</span>
+      </p>
+      <p className="text-xs text-gray-500">An account admin chooses its folder and who reads it.</p>
+    </div>
+  );
+}
+
+function ReaderForm({ libraryId, reader, readerName, root, devices }: {
   libraryId: string;
   reader: string;
   readerName: string | null;
   root: string;
   devices: { device_id: string; name: string }[];
-  accountAdmin: boolean;
 }) {
   const queryClient = useQueryClient();
   const [choice, setChoice] = useState(reader);
@@ -44,16 +72,11 @@ function ReaderForm({ libraryId, reader, readerName, root, devices, accountAdmin
     },
   });
   const chosen = devices.find((d) => d.device_id === choice);
-  const now = reader === SERVER ? "This server reads its files." : `${readerName ?? "A device"} reads its files.`;
   const changed = choice !== reader || folder.trim() !== root;
 
   return (
     <div className="space-y-3 rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-3" aria-label="Who reads it">
-      <h2 className="text-lg font-semibold text-gray-100">Who reads it</h2>
-      <p className="text-sm text-gray-400">
-        {now} Its reader scans it and makes what needs its files (previews, video facts, analysis copies); this server
-        does everything else (search, faces, descriptions, scenes, transcripts).
-      </p>
+      <Intro reader={reader} readerName={readerName} />
       <form
         className="space-y-3"
         onSubmit={(e) => {
@@ -80,7 +103,7 @@ function ReaderForm({ libraryId, reader, readerName, root, devices, accountAdmin
             )}
           </select>
         </label>
-        {accountAdmin && devices.length === 0 && (
+        {devices.length === 0 && (
           <p className="text-xs text-gray-500">
             To have another computer read it, register it in <Link to="/settings/devices" className="text-indigo-400 hover:text-indigo-300">Settings › Devices</Link>.
           </p>

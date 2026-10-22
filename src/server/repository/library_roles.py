@@ -4,7 +4,8 @@ library, only view another, and not see a third.
 A person's role on a library, the one rule (roles_of, role_on):
 - an account admin's is "admin" on every library;
 - else the one set for them on it (library_roles), if there is one: "admin"
-  (the library's admin: its settings, its reader, its people), "editor",
+  (the library's admin: its settings, its Scans pause, its people; its
+  folder and reader are an account admin's), "editor",
   "viewer", or "none" (they don't see it);
 - else "none" on a private library (libraries.private), and on every
   library for someone who sees only the ones they're given
