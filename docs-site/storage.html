@@ -178,6 +178,13 @@
 <li>It says how much moves and how much room there is. Click <strong>Move them</strong> (or <strong>Use it</strong>, when there's nothing to move yet).</li>
 </ol>
 <p>New previews go to the new folder at once, and the rest move in the background. The page shows how many files and how much are across. Lumiverb keeps working meanwhile: previews not moved yet show from where they are.</p>
+<p>Lumiverb moves, sweeps and deletes what's in a previews folder as its own, so the folder must be one of its own:</p>
+<ul>
+<li>Not a library's folder, not inside one, and not a folder holding one: previews stay apart from every library's files.</li>
+<li>Not inside Lumiverb's own folders in the data folder, nor a folder holding the data folder. A new, empty folder in the data folder is fine.</li>
+<li>One that belongs to the user Lumiverb runs as: on a Mac, you; on Linux, <code>lumiverb</code> (see below).</li>
+</ul>
+<p>Each is refused saying why. Lumiverb never follows a symbolic link inside a previews folder: a file or folder linked from elsewhere is left alone, never read, moved or deleted.</p>
 <p>If the move stops (the new drive full or unplugged, say), the page says why. It's tried again in 15 minutes, or click <strong>Try again</strong>. <strong>Back to the data folder…</strong> moves them back.</p>
 <p>From any other computer, the page says &quot;Move them on the computer Lumiverb is installed on.&quot;</p>
 <h2 id="a-librarys-own-previews-folder">A library's own previews folder<a class="anchor" href="#a-librarys-own-previews-folder" aria-label="Link to this section">#</a></h2>
@@ -195,6 +202,8 @@
 ReadWritePaths=/mnt/big/lumiverb-previews</code></pre>
 <p>Save, then restart the API:</p>
 <div class="cmd"><pre><code>sudo systemctl restart lumiverb-api</code></pre></div>
+<p>The folder must belong to the <code>lumiverb</code> user:</p>
+<div class="cmd"><pre><code>sudo chown lumiverb: /mnt/big/lumiverb-previews</code></pre></div>
 <p>Then choose the folder in Settings.</p>
 <h2 id="caches-and-their-caps">Caches and their caps<a class="anchor" href="#caches-and-their-caps" aria-label="Link to this section">#</a></h2>
 <p>A few things are kept only to save time, each with a cap in gigabytes, set in the env file:</p>

@@ -220,6 +220,41 @@ def test_a_server_admin_is_out_of_an_account_admin_s_reach(install):
         "robert@example.com"]
 
 
+def _invited(client: TestClient, admin: dict[str, str], email: str) -> tuple[str, str]:
+    """Someone an account admin invites: their user id and their link's token."""
+    invited = client.post("/v1/users", json={"email": email, "role": "editor"}, headers=admin)
+    assert invited.status_code == 201, invited.text
+    return invited.json()["user_id"], invited.json()["invite_urls"][0].split("token=", 1)[1]
+
+
+def _joins(client: TestClient, token: str) -> tuple[int, str | None]:
+    r = client.post("/v1/auth/join", json={"token": token, "password": "a long enough password"})
+    return r.status_code, (r.json().get("error") or {}).get("code")
+
+
+def test_naming_someone_a_server_admin_ends_the_links_they_havent_used(install, control, tmp_path, capsys):  # noqa: F811
+    """A link an account admin made before they were named would set a server admin's password, which only a
+    server admin gives them a link for: named one, their links not yet used end, and the answer says how many."""
+    client, robert, tenant_id = install
+    other = someone(client, tenant_id, "admin")
+    newcomer, token = _invited(client, other, "newcomer@example.com")
+    named = client.post("/v1/admin/server-admins", json={"email": "newcomer@example.com"}, headers=robert)
+    assert named.status_code == 200 and named.json()["links_ended"] == 1, named.text
+    assert _joins(client, token) == (400, "invite_not_valid")
+    again = client.post("/v1/admin/server-admins", json={"email": "newcomer@example.com"}, headers=robert)
+    assert again.json()["links_ended"] == 0, "one already is: nothing changes"
+    link = client.post(f"/v1/users/{newcomer}/invite", headers=robert)
+    assert link.status_code == 200, link.text
+    assert _joins(client, link.json()["invite_urls"][0].split("token=", 1)[1])[0] == 200, "a server admin's link"
+
+    # On the machine itself, the same.
+    _, token = _invited(client, other, "second@example.com")
+    assert cli.main(["server-admins", "add", "second@example.com", "--env", str(_env_file(tmp_path, control))]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "✓ second@example.com is a server admin; the 1 link they hadn't used has stopped working")
+    assert _joins(client, token) == (400, "invite_not_valid")
+
+
 def _waiting_on_locks() -> int:
     """How many connections wait for a lock now (a session of its own: a transaction sees pg_stat_activity once)."""
     from sqlalchemy import text

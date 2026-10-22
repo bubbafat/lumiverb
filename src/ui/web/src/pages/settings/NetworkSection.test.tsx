@@ -162,6 +162,23 @@ describe("NetworkSection", () => {
     expect(screen.getByText("No device has opened Lumiverb over HTTPS yet.")).toBeTruthy();
   });
 
+  it("says which of this Mac's names its certificate leaves out, and what to use instead", async () => {
+    // Lumiverb's authority vouches for the names the Mac had when it was made: renamed since, the new name isn't.
+    otherDevices = true;
+    https = true;
+    certificate = { ...OURS, names: ["studio-2.local", "192.168.86.55", "localhost", "127.0.0.1"],
+                    names_left_out: ["studio-2"] } as typeof OURS;
+    renderSection();
+    const note = await screen.findByRole("note");
+    expect(note.textContent).toMatch(/doesn't name studio-2, so other devices can't use that name over HTTPS/);
+    expect(note.textContent).toMatch(/Use studio-2.local, 192.168.86.55 instead/);
+    cleanup();
+    certificate = OURS;
+    renderSection();
+    await screen.findByText("Each device trusts Lumiverb once");
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
   it("keeps plain HTTP on until a device has used HTTPS", async () => {
     otherDevices = true;
     https = true;

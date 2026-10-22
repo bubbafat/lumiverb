@@ -44,6 +44,7 @@ from pathlib import Path
 
 from src.server import drives, write_check
 from src.server.storage.files import PARTIAL
+from src.server.storage.local import through_a_link
 from src.shared import previews_location
 from src.shared.previews_location import Location
 
@@ -71,7 +72,14 @@ LOOK_WAIT_SEC = 2.0
 
 
 class MoveError(Exception):
-    """A move that can't start, or stopped; the message says why, plainly."""
+    """A move that can't start, or stopped; the message says why, plainly.
+    `code` and `status` are the API's answer (400 folder_not_usable unless
+    said)."""
+
+    def __init__(self, message: str, code: str = "folder_not_usable", status: int = 400) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -100,22 +108,33 @@ class Scope:
 
 
 def _accounts(root: Path) -> list[Path]:
+    """The account folders in root, never a link to one."""
     try:
-        return sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith(ACCOUNT_PREFIX))
+        return sorted(p for p in root.iterdir()
+                      if p.name.startswith(ACCOUNT_PREFIX) and p.is_dir() and not p.is_symlink())
     except OSError:
         return []
 
 
 def _files(root: Path, scope: Scope) -> Iterator[Path]:
-    """The scope's files in the root's account folders, playback cuts too."""
+    """The scope's files in the root's account folders, playback cuts too.
+    Never through a symbolic link: a linked folder isn't walked into (os.walk
+    doesn't either) and a link isn't a file of the move's (it stays, logged)."""
     for account in _accounts(root):
         tops = [account / scope.library_id] if scope.library_id else [account]
         for top in tops:
+            if through_a_link(root, top):
+                logger.warning("Passed by %s: a symbolic link, never followed in a previews folder", top)
+                continue
             for folder, dirs, names in os.walk(top):
                 if scope.library_id is None and Path(folder) == account:
                     dirs[:] = [d for d in dirs if d not in scope.leaves]
                 for name in names:
-                    yield Path(folder, name)
+                    path = Path(folder, name)
+                    if path.is_symlink():
+                        logger.warning("Passed by %s: a symbolic link, never followed in a previews folder", path)
+                        continue
+                    yield path
 
 
 def size_of(root: Path, scope: Scope | None = None) -> Size:
@@ -133,11 +152,68 @@ def size_of(root: Path, scope: Scope | None = None) -> Size:
     return Size(files, total)
 
 
-def check_target(data_dir: Path, to: str | Path, need: Size | None = None, *, current: Path | None = None) -> Path:
+def _overlap(a: Path, b: Path) -> bool:
+    """One folder is the other, or inside it, as the disk has them (links followed)."""
+    real_a, real_b = Path(os.path.realpath(a)), Path(os.path.realpath(b))
+    return real_a == real_b or real_a.is_relative_to(real_b) or real_b.is_relative_to(real_a)
+
+
+def _owner_name(uid: int) -> str:
+    import pwd
+
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return f"user {uid}"
+
+
+def _holds_only_previews(folder: Path) -> bool:
+    """Nothing in it but what a previews folder has (its marker, account folders): empty, or one chosen before."""
+    try:
+        return all(e.name == previews_location.MARKER or e.name.startswith(ACCOUNT_PREFIX) for e in os.scandir(folder))
+    except OSError:
+        return False
+
+
+def _trusted(data_dir: Path, chosen: Path, originals: dict[str, Path]) -> None:
+    """A folder an admin chooses is trusted as Lumiverb's own: what's in it is
+    moved, swept and deleted. So it's in none of DATA_DIR's own folders (one
+    in DATA_DIR with anything but previews in it: its models, plug-ins,
+    uploads, database...), nor a folder holding DATA_DIR (409 data_folder;
+    a new folder of its own in DATA_DIR is fine); it's no library's folder
+    (`originals`: each library this server reads, by name, its folder here),
+    inside one or holding one (409 originals_folder); and it's the service's
+    own user's (422 folder_not_owned). DATA_DIR itself, the previews' first
+    home, is always theirs."""
+    data = Path(os.path.realpath(data_dir))
+    real = Path(os.path.realpath(chosen))
+    if real == data:
+        return
+    if real.is_relative_to(data):
+        own = data / real.relative_to(data).parts[0]
+        if not _holds_only_previews(own):
+            raise MoveError(f"{chosen} is in {own}, one of Lumiverb's own folders in its data folder: choose a "
+                            "folder of its own.", "data_folder", 409)
+    if data.is_relative_to(real):
+        raise MoveError(f"{chosen} holds Lumiverb's own data folder ({data_dir}): choose a folder of its own.",
+                        "data_folder", 409)
+    for name, folder in sorted(originals.items()):
+        if _overlap(chosen, folder):
+            raise MoveError(f"{chosen} and {name}'s folder ({folder}) are one inside the other: previews go in a "
+                            "folder of their own, apart from every library's files.", "originals_folder", 409)
+    if (owner := chosen.stat().st_uid) != os.getuid():
+        raise MoveError(f"{chosen} belongs to {_owner_name(owner)}: Lumiverb keeps its previews only in a folder "
+                        f"its own user ({_owner_name(os.getuid())}) owns.", "folder_not_owned", 422)
+
+
+def check_target(data_dir: Path, to: str | Path, need: Size | None = None, *, current: Path | None = None,
+                 originals: dict[str, Path] | None = None) -> Path:
     """The folder, when previews can move there: a full path to a folder this
     machine's Lumiverb can write, not where they are (`current`: the server's
     previews folder unless said), not inside any previews folder's accounts,
-    and with room for them (`need`). Raises MoveError saying why not."""
+    one it can trust (_trusted: `originals`, the folders of the libraries
+    this server reads), and with room for them (`need`). Raises MoveError
+    saying why not."""
     raw = str(to).strip()
     if not raw:
         raise MoveError("Say which folder.")
@@ -158,6 +234,8 @@ def check_target(data_dir: Path, to: str | Path, need: Size | None = None, *, cu
             first = chosen.relative_to(root).parts[:1]
             if first and first[0].startswith(ACCOUNT_PREFIX):
                 raise MoveError("That folder is inside the previews themselves.")
+    if chosen != location.previews:  # a library's back to the server's: that one's chosen already
+        _trusted(data_dir, chosen, originals or {})
     if (why := write_check.try_write(chosen)) is not None:
         raise MoveError(why)
     if need is not None and not same_disk(chosen, current):
@@ -236,10 +314,12 @@ def running(data_dir: Path) -> bool:
 # -- Starting ---------------------------------------------------------------------------
 
 
-def plan(data_dir: Path, to: str | Path | None, *, library_id: str | None = None) -> tuple[Path, Path, Size]:
+def plan(data_dir: Path, to: str | Path | None, *, library_id: str | None = None,
+         originals: dict[str, Path] | None = None) -> tuple[Path, Path, Size]:
     """(from, to, what moves) for moving the server's previews (library_id
     None; `to` None: back to DATA_DIR) or a library's (`to` None: back to
-    the server's folder). Raises MoveError when it can't."""
+    the server's folder). `originals`: the folders of the libraries this
+    server reads (check_target). Raises MoveError when it can't."""
     data_dir = Path(os.path.abspath(data_dir))
     location = previews_location.read(data_dir)
     if location.moving:
@@ -251,15 +331,16 @@ def plan(data_dir: Path, to: str | Path | None, *, library_id: str | None = None
         old, target = location.root_for(library_id), (location.previews if to is None else to)
         scope = Scope(library_id)
     need = size_of(old, scope)
-    return old, check_target(data_dir, target, need, current=old), need
+    return old, check_target(data_dir, target, need, current=old, originals=originals), need
 
 
-def start(data_dir: Path, to: str | Path | None, *, library_id: str | None = None, background: bool = True) -> Path:
+def start(data_dir: Path, to: str | Path | None, *, library_id: str | None = None, background: bool = True,
+          originals: dict[str, Path] | None = None) -> Path:
     """Moves the server's previews (or a library's) to `to`: new files go
     there from now on, and the rest move in the background. Returns the
     folder. Raises MoveError before changing anything when it can't."""
     data_dir = Path(os.path.abspath(data_dir))
-    old, chosen, need = plan(data_dir, to, library_id=library_id)
+    old, chosen, need = plan(data_dir, to, library_id=library_id, originals=originals)
     with _one_at_a_time(data_dir, wait=LOOK_WAIT_SEC):
         location = previews_location.read(data_dir)
         if chosen != data_dir:
@@ -378,7 +459,7 @@ def _removed_everywhere(data_dir: Path, location: Location, rel: Path) -> list[P
     removed: list[Path] = []
     for root in location.roots:
         folder = root / rel
-        if not location.available(data_dir, root) or not folder.is_dir() or folder.is_symlink():
+        if not location.available(data_dir, root) or not folder.is_dir() or through_a_link(root, folder):
             continue
         shutil.rmtree(folder)
         removed.append(folder)
@@ -466,6 +547,9 @@ def _move_all(data_dir: Path, location: Location, scope: Scope, old: Path, new: 
                 if time.time() - path.stat().st_mtime > STALE_TMP_SEC:
                     path.unlink()
             continue
+        if through_a_link(new, new / rel):  # its place in the new folder is through a link: never followed
+            logger.warning("Left %s where it is: its place in %s is through a symbolic link", path, new)
+            continue
         try:
             size = path.stat().st_size
             _move_one(path, new / rel)
@@ -528,7 +612,7 @@ def _remove_empty(old: Path, scope: Scope) -> None:
     then the account folder if nothing else is left in it."""
     for account in _accounts(old):
         top = account / scope.library_id if scope.library_id else account
-        if not top.exists():
+        if not top.exists() or through_a_link(old, top):
             continue
         for folder, _dirs, _names in sorted(os.walk(top), key=lambda w: len(w[0]), reverse=True):
             with contextlib.suppress(OSError):

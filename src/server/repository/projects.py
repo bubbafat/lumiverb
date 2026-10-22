@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from sqlalchemy import and_, func, or_, text
+from sqlalchemy import and_, false, func, or_, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.sql import text as sa_text
 from sqlmodel import Session, select
@@ -116,16 +116,17 @@ class ProjectRepository:
         stmt = select(Project).where(Project.deleted_at.is_not(None), Project.deleted_at < cutoff)  # type: ignore[union-attr]
         return list(self._session.exec(stmt).all())
 
-    def list_trashed(self, user_id: str) -> list[Project]:
-        """The user's trash: projects they own (or nobody owns) that were
-        deleted, most recently deleted first."""
+    def list_trashed(self, user_id: str, *, nobodys: bool = False) -> list[Project]:
+        """The user's trash: projects they own that were deleted, and with
+        nobodys (an account admin's) those nobody owns, most recently deleted
+        first."""
         return list(
             self._session.exec(
                 select(Project)
                 .where(
                     or_(
                         Project.owner_user_id == user_id,
-                        Project.owner_user_id.is_(None),  # type: ignore[union-attr]
+                        Project.owner_user_id.is_(None) if nobodys else false(),  # type: ignore[union-attr]
                     ),
                     Project.deleted_at.is_not(None),  # type: ignore[union-attr]
                 )

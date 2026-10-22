@@ -1342,6 +1342,9 @@ export interface NetworkCertificate {
   ca_addresses: string[];
   /** Its SHA-256 fingerprint, to compare on the device (it reached it over plain HTTP). */
   ca_fingerprint: string | null;
+  /** This machine's names Lumiverb's own authority can't vouch for (it was made when the machine had others):
+   * not in its certificate, so other devices can't use them over HTTPS. */
+  names_left_out?: string[];
 }
 
 /** Whether other devices on the network may use a Mac's Lumiverb (Settings → Network). */
@@ -1827,10 +1830,11 @@ export async function listServerAdmins(): Promise<ServerAdminItem[]> {
   return (await apiFetch<{ server_admins: ServerAdminItem[] }>("/admin/server-admins")).server_admins;
 }
 
-/** 404 user_not_found when nobody signs in here with that email. */
-export async function addServerAdmin(email: string): Promise<ServerAdminItem[]> {
-  return (await apiFetch<{ server_admins: ServerAdminItem[] }>("/admin/server-admins",
-                                                               { method: "POST", body: { email } })).server_admins;
+/** 404 user_not_found when nobody signs in here with that email. links_ended: their links not yet used (an
+ * invite, a reset) that stopped working with it. */
+export async function addServerAdmin(email: string): Promise<{ server_admins: ServerAdminItem[]; links_ended: number }> {
+  return apiFetch<{ server_admins: ServerAdminItem[]; links_ended: number }>("/admin/server-admins",
+                                                                             { method: "POST", body: { email } });
 }
 
 /** 409 last_server_admin for the last one. */

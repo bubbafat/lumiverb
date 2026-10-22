@@ -42,7 +42,8 @@ ADMIN_KEY = "the-operators-admin-key"
 def install(control, monkeypatch, tmp_path):  # noqa: F811
     """A Mac's install (Forgot password there gives the link at once) with
     its first admin, Robert, and Ana, an editor; signed in as Robert."""
-    for limiter in (rate_limit.login_limiter, rate_limit.forgot_password_limiter, rate_limit.reset_password_limiter):
+    for limiter in (rate_limit.login_limiter, rate_limit.forgot_password_limiter, rate_limit.reset_password_limiter,
+                    rate_limit.forgot_password_here, rate_limit.forgot_password_anywhere):
         monkeypatch.setattr(limiter, "_hits", {})
         monkeypatch.setattr(limiter, "max_requests", 100)  # these tests sign in more often than a person may
     monkeypatch.setenv("LUMIVERB_RESET_ON_THIS_MACHINE", "true")

@@ -72,7 +72,7 @@ def libraries(tenant_id: str) -> set[str]:
 
 def _there(prefix: str) -> list[Path]:
     return [root / prefix for root in _reached()[1]
-            if (root / prefix).is_dir() and not (root / prefix).is_symlink()]
+            if (root / prefix).is_dir() and not local.through_a_link(root, root / prefix)]
 
 
 def _measured(prefix: str, paths: list[Path]) -> dict:
@@ -137,13 +137,16 @@ def left_by_a_crash(tenant_id: str, library_ids: Iterable[str], *, dry_run: bool
     library_ids = list(library_ids)
     for root in _reached()[1]:
         for library_id in library_ids:
-            for dirpath, _dirs, names in os.walk(root / tenant_id / library_id):
+            folder = root / tenant_id / library_id
+            if local.through_a_link(root, folder):
+                continue  # never followed: os.walk goes into no linked folder below either
+            for dirpath, _dirs, names in os.walk(folder):
                 for name in names:
                     if not name.startswith(PARTIAL):
                         continue
                     path = Path(dirpath, name)
                     try:
-                        st = path.stat()
+                        st = path.lstat()
                     except OSError:
                         continue
                     if st.st_mtime > cutoff:

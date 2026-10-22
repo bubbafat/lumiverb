@@ -133,6 +133,27 @@ def test_a_folder_it_cant_use_says_why(mac):
         assert where.status_code == 400 and "already" in where.json()["error"]["message"]
 
 
+def test_never_a_folder_with_a_library_s_files_or_lumiverb_s_own(mac):
+    """A library's previews and the server's alike: not a library's folder this server reads, inside one or
+    holding one (409 originals_folder), and not in Lumiverb's own data (409 data_folder); nothing moves."""
+    data, originals, tmp, control_url = mac
+    (data / "models").mkdir(parents=True)
+    (data / "models" / "weights.bin").write_bytes(b"w")
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+        auth, library_id, _ = _library(client, control_url, originals)
+        for put in (lambda folder: client.put(f"/v1/libraries/{library_id}/previews", json=folder, headers=auth),
+                    lambda folder: client.put("/v1/system/storage/previews", json=folder, headers=auth)):
+            for folder in (originals / "Lumiverb previews", originals.parent):
+                refused = put({"folder": str(folder), "make_folder": True, "move": True})
+                assert refused.status_code == 409, refused.text
+                assert refused.json()["error"]["code"] == "originals_folder"
+                assert f"Trips's folder ({originals})" in refused.json()["error"]["message"]
+            refused = put({"folder": str(data / "models"), "move": True})
+            assert (refused.status_code, refused.json()["error"]["code"]) == (409, "data_folder"), refused.text
+        assert not (originals / "Lumiverb previews").exists(), "made for a request that didn't go through: gone"
+    assert previews_location.read(data) == previews_location.Location(data)
+
+
 def test_a_folder_not_there_is_asked_about_then_made(mac):
     data, originals, tmp, control_url = mac
     wanted = tmp / "Video" / "Lumiverb"

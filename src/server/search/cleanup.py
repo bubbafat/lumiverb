@@ -161,8 +161,8 @@ def _sweep_library(
                 continue
             try:
                 st = store.stat(key)
-            except stored.NotFound:
-                continue  # gone meanwhile
+            except (stored.NotFound, stored.UnsafeKeyError):
+                continue  # gone meanwhile, or a symbolic link since: never followed (the listing passes them by)
             if now - st.modified < _MIN_AGE_SECONDS:
                 continue  # may be mid-ingest
             orphans.append((key, st.size))

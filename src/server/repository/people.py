@@ -383,6 +383,19 @@ class PersonRepository:
         ).scalar()
         return result or 0
 
+    def faces_outside(self, person_ids: list[str], libraries: list[str]) -> int:
+        """How many faces of these people are in a library not among
+        `libraries`: every face of theirs (matched, or named on the face),
+        whoever can see it, a trashed clip's too, as deleting or merging them
+        takes every one."""
+        return self._session.execute(text(
+            "SELECT COUNT(*)::int FROM ("
+            "  SELECT face_id FROM faces WHERE person_id = ANY(CAST(:pids AS text[]))"
+            "  UNION SELECT face_id FROM face_person_matches WHERE person_id = ANY(CAST(:pids AS text[]))"
+            ") theirs JOIN faces f ON f.face_id = theirs.face_id JOIN assets a ON a.asset_id = f.asset_id"
+            " WHERE NOT (a.library_id = ANY(CAST(:libraries AS text[])))"),
+            {"pids": list(person_ids), "libraries": list(libraries)}).scalar() or 0
+
     def update_name(self, person_id: str, display_name: str) -> Person | None:
         person = self.get_by_id(person_id)
         if person is None:

@@ -314,3 +314,62 @@ def test_a_key_whose_maker_is_gone_does_nothing(env):
         session.execute(text("DELETE FROM users WHERE user_id = :u"), {"u": user_id})  # keys left behind
         session.commit()
     assert env.client.get("/v1/libraries", headers=key).status_code == 401
+
+
+def _new_face(env, clip: str) -> str:
+    import uuid
+
+    face_id = f"fac_{uuid.uuid4().hex[:12]}"
+    with env.db.begin() as conn:
+        conn.execute(text("INSERT INTO faces (face_id, asset_id, created_at) VALUES (:f, :a, now())"),
+                     {"f": face_id, "a": clip})
+    return face_id
+
+
+def _named(env, face_ids: list[str]) -> set:
+    with env.db.begin() as conn:
+        return {tuple(r) for r in conn.execute(text(
+            "SELECT m.face_id, m.person_id FROM face_person_matches m WHERE m.face_id = ANY(:f)"), {"f": face_ids})}
+
+
+@pytest.mark.slow
+def test_a_person_with_faces_in_a_library_they_dont_edit_is_an_account_admins_to_delete_merge_or_name(env, people):
+    """Deleting, merging and undismissing act on every face a person has: someone who edits A and only views B
+    is refused for a person with a face in B, saying how many, and nothing changes; for a person whose every face
+    is in A they do it; an account admin does it all (routers/people.py _edits_every_face)."""
+    from src.server.repository.people import PersonRepository
+
+    clip_a, clip_b = people.a["asset_id"], people.b["asset_id"]
+    a1, a2, a3, b1, b2 = (_new_face(env, clip) for clip in (clip_a, clip_a, clip_a, clip_b, clip_b))
+    with Session(env.db) as session:
+        repo = PersonRepository(session)
+        both = repo.create("Seen in A and B", face_ids=[a1, b1]).person_id
+        only_a = repo.create("Seen in A", face_ids=[a2]).person_id
+        also_a = repo.create("Also seen in A", face_ids=[a3]).person_id
+        dismissed = repo.create_dismissed(face_ids=[b2]).person_id
+        session.commit()
+    before = _named(env, [a1, a2, a3, b1, b2])
+
+    for r, doing in (
+            (env.client.delete(f"/v1/people/{both}", headers=people.key), "delete them"),
+            (env.client.post(f"/v1/people/{only_a}/merge", json={"source_person_id": both}, headers=people.key),
+             "merge them"),
+            (env.client.post(f"/v1/people/{both}/merge", json={"source_person_id": only_a}, headers=people.key),
+             "merge them"),
+            (env.client.post(f"/v1/people/{dismissed}/undismiss", json={"display_name": "Them"}, headers=people.key),
+             "name them")):
+        assert r.status_code == 403, (r.request.method, r.request.url, r.text)
+        error = r.json()["error"]
+        assert error["code"] == "faces_in_other_libraries" and error["details"] == {"faces_elsewhere": 1}, error
+        assert error["message"].startswith("1 of th") and "in libraries you don't edit" in error["message"]
+        assert error["message"].endswith(f"only an account admin can {doing}."), error["message"]
+    assert _named(env, [a1, a2, a3, b1, b2]) == before, "nothing changed"
+
+    # Every face in a library they edit: theirs to do.
+    _ok(env.client.post(f"/v1/people/{only_a}/merge", json={"source_person_id": also_a}, headers=people.key))
+    assert env.client.delete(f"/v1/people/{only_a}", headers=people.key).status_code == 204
+
+    # An account admin does it all.
+    _ok(env.client.post(f"/v1/people/{dismissed}/undismiss", json={"display_name": "Them"}, headers=env.admin))
+    assert env.client.delete(f"/v1/people/{both}", headers=env.admin).status_code == 204
+    assert _named(env, [a1, a2, a3, b1]) == set()

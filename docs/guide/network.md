@@ -52,6 +52,8 @@ Lumiverb makes its own certificate authority for this Mac and issues the certifi
 
 The page shows the authority's SHA-256 fingerprint: compare it with the one the device shows before trusting it. The certificate is issued again when the Mac's name or address changes, and a month before it ends, without devices needing to trust anything again.
 
+The authority vouches only for names and addresses on your own network: names ending in `.local`, `.lan`, `.internal` or `.home.arpa`, `localhost`, the Mac's own names when the authority was made, and local addresses such as `192.168.x.x`. So a device that trusts it trusts it for nothing else on the internet. If the Mac is renamed later to a name outside those, its certificate leaves that name out and Settings › Network says so: other devices use the Mac's `.local` name or its address over HTTPS instead.
+
 ### Your own certificate
 
 If you have a certificate for an address your devices already trust (from any certificate authority), click **Use your own certificate**. Paste the certificate in PEM form, its chain after it, and the private key without a passphrase, then click **Use it**. It's checked first and refused, saying why, if it can't be used. **Use Lumiverb's own certificate instead** goes back.

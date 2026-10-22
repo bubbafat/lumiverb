@@ -2,11 +2,14 @@
 Lumiverb's own authority's for this machine's names, issued again when they
 change or it nears its end; or one an admin gives, checked first. A device
 that trusts the authority verifies it (a real handshake, Python's ssl), for
-those names and no others. Through real nginx: test_server_run.py."""
+those names and no others; the authority itself vouches for local names and
+addresses and this machine's names alone (its name constraints, checked with
+cryptography's own verifier). Through real nginx: test_server_run.py."""
 
 from __future__ import annotations
 
 import datetime as dt
+import ipaddress
 import socket
 import ssl
 import stat
@@ -109,6 +112,110 @@ def test_a_certificate_the_authority_didnt_sign_is_issued_again(tmp_path):
     again = tls.served(tmp_path, NAMES, NOW)
     assert again.fingerprint != first.fingerprint
     _handshake(again, tls.ca_certificate(tmp_path), "macstudio.local")
+
+
+# -- What the authority vouches for -------------------------------------------------------------
+
+
+def _verifies(ca: x509.Certificate, leaf: x509.Certificate, name: str) -> None:
+    """A device's check of `leaf` for `name`, trusting `ca` alone (cryptography's own verifier: name constraints too)."""
+    from cryptography.x509 import verification
+
+    subject = (verification.IPAddress(ipaddress.ip_address(name)) if _is_address(name)
+               else verification.DNSName(name))
+    (verification.PolicyBuilder().store(verification.Store([ca])).time(NOW + dt.timedelta(minutes=1))
+     .build_server_verifier(subject).verify(leaf, []))
+
+
+def _is_address(name: str) -> bool:
+    try:
+        ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    return True
+
+
+def _ca(data_dir: Path) -> x509.Certificate:
+    return x509.load_pem_x509_certificate(tls.ca_certificate(data_dir).read_bytes())
+
+
+def test_its_authority_vouches_only_for_local_names_and_this_machine_s(tmp_path):
+    served = tls.served(tmp_path, NAMES, NOW)
+    ca = _ca(tmp_path)
+    constraints = ca.extensions.get_extension_for_class(x509.NameConstraints)
+    assert constraints.critical, "a device that can't read it refuses the authority rather than trust it for all"
+    permitted = constraints.value.permitted_subtrees
+    assert {n.value for n in permitted if isinstance(n, x509.DNSName)} == {
+        "local", "localhost", "home.arpa", "lan", "internal", "macstudio.local", "macstudio"}
+    assert {str(n.value) for n in permitted if isinstance(n, x509.IPAddress)} == {
+        "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
+        "::1/128", "fc00::/7", "fe80::/10"}
+    assert constraints.value.excluded_subtrees is None
+    assert ca.not_valid_after_utc - ca.not_valid_before_utc == dt.timedelta(days=tls.CA_DAYS, minutes=5)
+
+    leaf = x509.load_pem_x509_certificate(served.certificate.read_bytes())
+    for name in NAMES:
+        _verifies(ca, leaf, name)
+
+
+def test_a_certificate_for_a_name_outside_them_isn_t_one_a_device_takes(tmp_path):
+    """What the constraints are for: were the authority's key used for any other site, no device trusting it
+    would take that certificate."""
+    tls.served(tmp_path, NAMES, NOW)
+    ca = _ca(tmp_path)
+    ca_key = serialization.load_pem_private_key((tmp_path / "tls" / "ca.key").read_bytes(), password=None)
+    key = ec.generate_private_key(ec.SECP256R1())
+    for name, alt in (("bank.example.com", x509.DNSName("bank.example.com")),
+                      ("203.0.113.7", x509.IPAddress(ipaddress.ip_address("203.0.113.7")))):
+        forged = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)]))
+                  .issuer_name(ca.subject).public_key(key.public_key()).serial_number(x509.random_serial_number())
+                  .not_valid_before(NOW - dt.timedelta(minutes=5)).not_valid_after(NOW + dt.timedelta(days=30))
+                  .add_extension(x509.SubjectAlternativeName([alt]), critical=False)
+                  .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                  .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+                  .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+                                 critical=False)
+                  .sign(ca_key, hashes.SHA256()))
+        from cryptography.x509.verification import VerificationError
+
+        with pytest.raises(VerificationError):
+            _verifies(ca, forged, name)
+
+
+def test_a_name_it_cant_vouch_for_is_left_out_of_the_certificate_and_said(tmp_path):
+    tls.served(tmp_path, NAMES, NOW)
+    renamed = ("studio-2.local", "studio-2", "studio-2.example.com", "203.0.113.7", "192.168.86.55",
+               "localhost", "127.0.0.1", "::1")
+    served = tls.served(tmp_path, renamed, NOW)
+    assert served.left_out == ("studio-2", "studio-2.example.com", "203.0.113.7")
+    assert set(served.names) == {"studio-2.local", "192.168.86.55", "localhost", "127.0.0.1", "::1"}, (
+        "only what the authority permits is issued")
+    leaf = x509.load_pem_x509_certificate(served.certificate.read_bytes())
+    _verifies(_ca(tmp_path), leaf, "studio-2.local")
+    assert tls.served(tmp_path, renamed, NOW).fingerprint == served.fingerprint, "not issued again at every look"
+    assert tls.describe(tmp_path, NOW, names=renamed).left_out == served.left_out, "Settings › Network says so"
+
+
+def test_an_authority_made_before_it_had_constraints_is_kept(tmp_path):
+    """Every device trusting it would have to trust a new one again: it stays, vouching as it always did."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Lumiverb on macstudio")])
+    old = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+           .serial_number(x509.random_serial_number())
+           .not_valid_before(NOW - dt.timedelta(days=1)).not_valid_after(NOW + dt.timedelta(days=tls.CA_DAYS))
+           .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+           .add_extension(x509.KeyUsage(digital_signature=True, key_cert_sign=True, crl_sign=True,
+                                        content_commitment=False, key_encipherment=False, data_encipherment=False,
+                                        key_agreement=False, encipher_only=False, decipher_only=False), critical=True)
+           .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+           .sign(key, hashes.SHA256()))
+    (tmp_path / "tls").mkdir()
+    tls.ca_certificate(tmp_path).write_bytes(old.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "tls" / "ca.key").write_bytes(key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    served = tls.served(tmp_path, (*NAMES, "studio.example.com"), NOW)
+    assert tls.ca_certificate(tmp_path).read_bytes() == old.public_bytes(serialization.Encoding.PEM)
+    assert served.left_out == () and "studio.example.com" in served.names
 
 
 # -- Yours -------------------------------------------------------------------------------------

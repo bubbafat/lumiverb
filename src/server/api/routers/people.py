@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session, require_editor
-from src.server.api.errors import ConflictError
+from src.server.api.errors import ApiError, ConflictError
 from src.server.api.library_access import edited, names, seen
 from src.server.api.limits import MAX_IDS
 from src.server.repository.faces import current_face_model
@@ -114,6 +114,24 @@ def _person_or_404(repo, person_id: str | None, detail: str = "Person not found"
     if person is None or not repo.shows(person):
         raise HTTPException(status_code=404, detail=detail)
     return person
+
+
+def _edits_every_face(request: Request, session: Session, repo, person_ids: list[str], doing: str) -> None:
+    """Deleting, merging and undismissing act on every face a person has, in
+    every library: they're an account admin's, or someone's who edits every
+    library those faces are in (library_access.edited). Anyone else is
+    refused rather than acting on part of them: 403 faces_in_other_libraries,
+    saying how many. Naming a group of faces is the way to name the ones they
+    edit (it takes only those)."""
+    libraries = edited(request, session)
+    if libraries is None:
+        return
+    outside = repo.faces_outside(person_ids, libraries)
+    if outside:
+        whose = "this person's" if len(person_ids) == 1 else "these people's"
+        raise ApiError(403, "faces_in_other_libraries",
+                       f"{outside} of {whose} faces {'is' if outside == 1 else 'are'} in libraries you don't edit, "
+                       f"so only an account admin can {doing}.", {"faces_elsewhere": outside})
 
 
 # ---------- Endpoints ----------
@@ -279,11 +297,14 @@ def undismiss_person(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
-    """Restore a dismissed person and give them a name."""
+    """Restore a dismissed person and give them a name. 403
+    faces_in_other_libraries when some of their faces are in libraries the
+    caller doesn't edit."""
     repo = _people(request, session)
     person = _person_or_404(repo, person_id, "Dismissed person not found")
     if not person.dismissed:
         raise HTTPException(status_code=404, detail="Dismissed person not found")
+    _edits_every_face(request, session, repo, [person_id], "name them")
 
     repo.undismiss(person, body.display_name.strip())
     return _person_item(repo, person, repo.get_face_count(person_id))
@@ -336,9 +357,12 @@ def delete_person(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> None:
-    """Delete a person and all their face matches."""
+    """Delete a person and all their face matches. 403
+    faces_in_other_libraries when some of their faces are in libraries the
+    caller doesn't edit."""
     repo = _people(request, session)
     _person_or_404(repo, person_id)
+    _edits_every_face(request, session, repo, [person_id], "delete them")
     if not repo.delete(person_id):
         raise HTTPException(status_code=404, detail="Person not found")
 
@@ -393,13 +417,16 @@ def merge_person(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
-    """Merge source person into target (person_id). Source is deleted."""
+    """Merge source person into target (person_id). Source is deleted. 403
+    faces_in_other_libraries when some of either's faces are in libraries
+    the caller doesn't edit."""
     if body.source_person_id == person_id:
         raise HTTPException(status_code=400, detail="Cannot merge a person into themselves")
 
     repo = _people(request, session)
     _person_or_404(repo, person_id)
     _person_or_404(repo, body.source_person_id)
+    _edits_every_face(request, session, repo, [person_id, body.source_person_id], "merge them")
     target = repo.merge(person_id, body.source_person_id)
     if target is None:
         raise HTTPException(status_code=404, detail="Person not found")

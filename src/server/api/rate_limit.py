@@ -28,38 +28,96 @@ class RateLimiter:
 
     def check(self, request: Request, key: str | None = None) -> None:
         """Raise 429 if the caller (or ``key``, e.g. an email) has exceeded the rate limit."""
-        ip = key if key is not None else self._client_ip(request)
+        self._take(key if key is not None else self._client_ip(request), count=True)
+
+    def held(self, key: str) -> None:
+        """Raise 429 if ``key`` has reached the limit, counting nothing: what's
+        counted is counted with ``count`` (a failed sign-in, say)."""
+        self._take(key, count=False)
+
+    def count(self, key: str) -> None:
+        """One more for ``key``, whatever the limit."""
+        now = time.monotonic()
+        with self._lock:
+            self._hits[key] = [*self._recent(key, now), now]
+
+    def forget(self, key: str) -> None:
+        """Nothing counted for ``key`` any more."""
+        with self._lock:
+            self._hits.pop(key, None)
+
+    def _recent(self, key: str, now: float) -> list[float]:
+        return [t for t in self._hits.get(key, []) if t > now - self.window]
+
+    def _take(self, key: str, *, count: bool) -> None:
         now = time.monotonic()
         cutoff = now - self.window
 
         with self._lock:
-            hits = self._hits.get(ip, [])
-            # Prune expired entries
-            hits = [t for t in hits if t > cutoff]
-
+            hits = self._recent(key, now)
             if len(hits) >= self.max_requests:
-                self._hits[ip] = hits
+                self._hits[key] = hits
                 raise HTTPException(
                     status_code=429,
                     detail="Too many requests. Please try again later.",
                 )
-            hits.append(now)
-            self._hits[ip] = hits
+            if count:
+                hits.append(now)
+            self._hits[key] = hits
 
-            # Periodic eviction: if dict grows large, prune stale IPs
+            # Periodic eviction: if dict grows large, prune stale keys
             if len(self._hits) > 10_000:
                 stale = [k for k, v in self._hits.items() if not v or v[-1] < cutoff]
                 for k in stale:
                     del self._hits[k]
 
 
-# Shared limiters for auth endpoints
+def _here(request: Request, name: str) -> str:
+    return f"{name} from {client_address(request)}"
+
+
+def name_held(request: Request, name: str, here: RateLimiter, anywhere: RateLimiter) -> None:
+    """429 when `name` (an email, a person) has reached its limit from this
+    address (`here`), or from anywhere (`anywhere`); counts nothing."""
+    here.held(_here(request, name))
+    anywhere.held(name)
+
+
+def name_counted(request: Request, name: str, here: RateLimiter, anywhere: RateLimiter) -> None:
+    """One more for `name`, from this address and from anywhere."""
+    here.count(_here(request, name))
+    anywhere.count(name)
+
+
+def name_cleared(request: Request, name: str, here: RateLimiter) -> None:
+    """What this address counted for `name` forgotten (the right password, at last)."""
+    here.forget(_here(request, name))
+
+
+# Shared limiters for auth endpoints.
+#
+# Signing in is counted by address, every try (a script trying many emails from one place), and by email, only the
+# failed ones: a password guessed at is held back, and nobody keeps someone else out by sending their email, as
+# their own right password never counts. A wrong one counts against the email from this address and from anywhere;
+# the first is held five times sooner, so one address guessing at someone's password is stopped long before the
+# email is held back from everyone (it takes five addresses failing as fast as they're let), and its owner signs in
+# from their own address meanwhile. A sign-in forgets its address's failures.
 login_limiter = RateLimiter(max_requests=5, window_seconds=60)
+login_failures_here = RateLimiter(max_requests=5, window_seconds=15 * 60)
+login_failures = RateLimiter(max_requests=25, window_seconds=15 * 60)
+# A reset link asked for: by address, every request; by email, each link made (and mailed), from this address and
+# from anywhere, the first tighter as for signing in, so one address asking for someone's link again and again is
+# stopped before the owner's own request is held back, and their mailbox gets ten at most in 15 minutes.
 forgot_password_limiter = RateLimiter(max_requests=3, window_seconds=60)
+forgot_password_here = RateLimiter(max_requests=3, window_seconds=15 * 60)
+forgot_password_anywhere = RateLimiter(max_requests=10, window_seconds=15 * 60)
 reset_password_limiter = RateLimiter(max_requests=5, window_seconds=60)
 # Changing a password checks the current one: a session left open on someone else's screen can't be used to
-# guess it (by address, and by the person).
+# guess it. By address, every try; by the person, only wrong current passwords, from this address and from
+# anywhere, as for signing in: someone using a session of theirs elsewhere can't keep them from changing it.
 change_password_limiter = RateLimiter(max_requests=5, window_seconds=60)
+change_password_failures_here = RateLimiter(max_requests=5, window_seconds=15 * 60)
+change_password_failures = RateLimiter(max_requests=25, window_seconds=15 * 60)
 # What a browser couldn't load (routers/me.py report_failed_requests): it sends once a request gets through, so a
 # person sends a few a minute at most; a script filling the log is held back (by address, and by the person).
 failed_requests_limiter = RateLimiter(max_requests=10, window_seconds=60)

@@ -116,3 +116,23 @@ def test_guessing_the_current_password_is_held_back(install):  # noqa: F811 (ins
         assert _change(client, robert, current="a guess at it, wrong").status_code == 400
     assert _change(client, robert).status_code == 429, "even the right one, until the minute is up"
     assert _signs_in(client, PASSWORD) == 200
+
+
+def test_guesses_with_their_session_elsewhere_dont_keep_them_from_changing_it(install):  # noqa: F811
+    """By the person, only wrong current passwords count, from this address and from anywhere, the first held
+    sooner: someone guessing with a session of theirs from another address is held back, and the person
+    changes it from their own (which ends that session)."""
+    from fastapi.testclient import TestClient
+
+    from src.server.api.main import app
+
+    client, _, robert = install
+    elsewhere = TestClient(app, client=("203.0.113.9", 1), base_url=str(client.base_url))
+    for _ in range(rate_limit.change_password_failures_here.max_requests):
+        rate_limit.change_password_limiter._hits.clear()  # a minute later each time
+        assert _change(elsewhere, robert, current="a guess at it, wrong").status_code == 400
+    rate_limit.change_password_limiter._hits.clear()
+    assert _change(elsewhere, robert).status_code == 429, "held back there for a while, even with the right one"
+    changed = _change(client, robert)
+    assert changed.status_code == 200, changed.text
+    assert _works(elsewhere, robert) == 401, "the session used elsewhere ended with the old password"

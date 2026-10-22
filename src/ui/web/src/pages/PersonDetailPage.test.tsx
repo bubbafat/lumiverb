@@ -15,6 +15,7 @@ vi.mock("../components/Lightbox", () => ({
 import PersonDetailPage from "./PersonDetailPage";
 
 const fetchMock = vi.fn();
+let role = "viewer";
 const faces = [
   { face_id: "f_photo", asset_id: "ast_photo", bounding_box: null, detection_confidence: 0.9, rel_path: "beach.jpg",
     media_type: "image", frame_ms: null, seen_ms: null },
@@ -25,13 +26,18 @@ const faces = [
 beforeEach(() => {
   opened.length = 0;
   vi.stubGlobal("fetch", fetchMock);
-  fetchMock.mockImplementation(async (url: string) => {
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
+    if (path === "/people/per_1" && init?.method === "DELETE") {
+      return new Response(JSON.stringify({ error: { code: "faces_in_other_libraries", details: { faces_elsewhere: 3 },
+        message: "3 of this person's faces are in libraries you don't edit, so only an account admin can delete them." } }),
+      { status: 403 });
+    }
     if (path === "/people/per_1") {
       return new Response(JSON.stringify({ person_id: "per_1", display_name: "Ada", face_count: 2 }));
     }
     if (path === "/people/per_1/faces") return new Response(JSON.stringify({ items: faces, next_cursor: null }));
-    if (path === "/me") return new Response(JSON.stringify({ email: "e@x.y", role: "viewer" }));
+    if (path === "/me") return new Response(JSON.stringify({ email: "e@x.y", role }));
     return new Response("{}", { status: 404 });
   });
 });
@@ -40,6 +46,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   fetchMock.mockReset();
+  role = "viewer";
 });
 
 function renderPage() {
@@ -71,6 +78,16 @@ describe("PersonDetailPage", () => {
     expect(opened[opened.length - 1]).toEqual({ asset_id: "ast_video", media_type: "video", startAt: 8 });
     fireEvent.click(screen.getByRole("button", { name: "1:35" }));
     expect(opened[opened.length - 1]).toEqual({ asset_id: "ast_video", media_type: "video", startAt: 95 });
+  });
+
+  it("says why deleting them was refused when some of their faces are in libraries this person doesn't edit", async () => {
+    role = "editor";
+    vi.stubGlobal("confirm", () => true);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete person" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "3 of this person's faces are in libraries you don't edit, so only an account admin can delete them.");
+    expect(screen.getByText("Ada")).toBeTruthy();
   });
 
   it("opens a photo as a photo", async () => {

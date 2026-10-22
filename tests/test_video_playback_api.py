@@ -421,6 +421,31 @@ def test_a_link_plays_while_whoever_it_was_made_for_can_still_see_the_clip(env, 
 
 
 @pytest.mark.slow
+def test_a_link_ends_with_its_account(env, media):
+    """A link made before its account was deleted plays no more, as nothing of the account is reached: a signed-in
+    one is refused as the middleware refuses the account's requests, a public page's is as one that isn't there."""
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import DELETED, TenantRepository
+
+    client, admin, *_ = env
+    asset_id = _video(env, media, "account gone")
+    signed_in = _path(_playback(env, asset_id).json()["url"])
+    public = _path(_playback(env, asset_id, headers={}, params=_public(env)).json()["url"])
+    assert _fetch(client, signed_in).status_code == 200 and _fetch(client, public).status_code == 200
+    tenant_id = client.get("/v1/tenant/context", headers=admin).json()["tenant_id"]
+    with get_control_session() as session:
+        TenantRepository(session).update_status(tenant_id, DELETED)
+    try:
+        gone = client.get(signed_in)
+        assert gone.status_code == 401 and gone.json()["error"]["code"] == "account_deleted", gone.text
+        assert client.get(public).status_code == 404
+    finally:
+        with get_control_session() as session:
+            TenantRepository(session).update_status(tenant_id, "active")
+    assert _fetch(client, signed_in).status_code == 200
+
+
+@pytest.mark.slow
 def test_viewers_can_play(env, media):
     client, _admin, _lib, _storage, keys = env
     body = _playback(env, _video(env, media, "viewer"), headers=keys["viewer"]).json()

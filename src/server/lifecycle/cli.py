@@ -696,9 +696,14 @@ def _server_admins(args: argparse.Namespace) -> int:
                 if user is None:
                     print("✗ Nobody signs in here with that email", file=sys.stderr)
                     return 1
-                users.set_server_admin(user.user_id, args.action == "add")
-                print(f"✓ {user.email} is a server admin" if args.action == "add"
-                      else f"✓ {user.email} is no longer a server admin")
+                if args.action == "add":
+                    ended = users.name_server_admin(user.user_id)
+                    links = (f"; the {ended} link{'s' if ended != 1 else ''} they hadn't used "
+                             f"{'have' if ended != 1 else 'has'} stopped working") if ended else ""
+                    print(f"✓ {user.email} is a server admin{links}")
+                else:
+                    users.set_server_admin(user.user_id, False)
+                    print(f"✓ {user.email} is no longer a server admin")
             names = {t.tenant_id: t.name for t in TenantRepository(session).list_all()}
             admins = [(u.email, names.get(u.tenant_id, "")) for u in users.server_admins()]
     except SQLAlchemyError as exc:

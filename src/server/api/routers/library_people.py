@@ -96,7 +96,10 @@ def set_library_role(
 ) -> LibraryPerson:
     """Set a person's role on this library (null: the rule's again). 404 for
     someone not in the account; 409 account_admin for an account admin, who
-    is every library's admin."""
+    is every library's admin; 403 server_admin_user for a server admin, unless
+    a server admin asks (as for changing them anywhere else, users.py)."""
+    from src.server.api.routers.users import _within_reach
+
     _library_or_404(session, library_id)
     user = next((u for u in _people(request) if u.user_id == user_id), None)
     if user is None:
@@ -104,6 +107,7 @@ def set_library_role(
     if user.role == "admin":
         raise ConflictError("account_admin", f"{user.email} is an account admin, every library's admin.",
                             {"user_id": user_id})
+    _within_reach(request, user)
     by = getattr(request.state, "user_id", None) or getattr(request.state, "key_id", None)
     repo = LibraryRoleRepository(session)
     repo.set(library_id, user_id, body.role, by=by, now=utcnow())

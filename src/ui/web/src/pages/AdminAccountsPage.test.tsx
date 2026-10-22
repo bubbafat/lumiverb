@@ -56,7 +56,7 @@ beforeEach(() => {
         return json({ error: { code: "user_not_found", message: "Nobody.", details: {} } }, 404);
       }
       admins = [...admins, { user_id: "usr_ana", email: "ana@example.com", tenant_id: "ten_ana", account: "Ana's" }];
-      return json({ server_admins: admins });
+      return json({ server_admins: admins, links_ended: 1 });
     }
     if (path.startsWith("/admin/server-admins/") && method === "DELETE") {
       return json({ error: { code: "last_server_admin", message: "The last one.", details: {} } }, 409);
@@ -124,7 +124,7 @@ describe("Admin › Accounts", () => {
     expect(sent.filter((s) => s.method === "DELETE").map((s) => s.query)).toEqual(["", "?confirm=Ana's"]);
   });
 
-  it("names a server admin by email, and says why the last one can't be removed", async () => {
+  it("names a server admin by email, says the links it ended, and why the last one can't be removed", async () => {
     renderPage();
     const list = await screen.findByRole("list", { name: "Server admins" });
     await within(list).findByRole("listitem", { name: "robert@example.com" });
@@ -134,6 +134,9 @@ describe("Admin › Accounts", () => {
     fireEvent.change(screen.getByLabelText("Email of someone who signs in here"), { target: { value: "ana@example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Make server admin" }));
     expect(await within(list).findByRole("listitem", { name: "ana@example.com" })).toBeTruthy();
+    // An invite an account admin made her before ended with it.
+    expect(screen.getByRole("status").textContent).toBe(
+      "The link ana@example.com hadn't used has stopped working: only a server admin makes them a new one.");
     fireEvent.click(within(within(list).getByRole("listitem", { name: "robert@example.com" })).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("They're the last server admin: name another first.")).toBeTruthy();
   });
