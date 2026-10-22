@@ -7,7 +7,12 @@ from pydantic import BaseModel
 from src.server.api.dependencies import require_editor
 from src.server.api.middleware import _error_response
 from src.server.database import get_control_session
-from src.server.repository.control_plane import ApiKeyRepository, TenantRepository
+from src.server.repository.control_plane import (
+    SCHEDULER_LABEL_TAKEN,
+    ApiKeyRepository,
+    TenantRepository,
+    scheduler_label,
+)
 
 router = APIRouter(prefix="/v1/keys", tags=["keys"])
 
@@ -107,7 +112,9 @@ def create_key(
     body: CreateKeyRequest,
     _: Annotated[None, Depends(require_editor)],
 ) -> CreateKeyResponse:
-    """Create a new key for the current tenant. Returns plaintext exactly once."""
+    """Create a new key for the current tenant. Returns plaintext exactly once.
+    400 scheduler_label for the label of Lumiverb's own key, whatever its case:
+    no other key looks like the scheduler's."""
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
         raise HTTPException(status_code=500, detail="Tenant context missing")
@@ -115,6 +122,8 @@ def create_key(
     caller_role = getattr(request.state, "role", "viewer")
     requested_role = body.role or caller_role
 
+    if scheduler_label(body.label):
+        return _error_response(400, "scheduler_label", SCHEDULER_LABEL_TAKEN)
     if requested_role not in _ROLE_RANK:
         return _error_response(400, "invalid_role", f"Invalid role: {requested_role}")
     if _ROLE_RANK[requested_role] > _ROLE_RANK[caller_role]:

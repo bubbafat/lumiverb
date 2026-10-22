@@ -436,6 +436,8 @@ export interface UserItem {
   role: string;
   /** False: they see only the libraries they're given a role on (ADR-018 decision 8). Older servers leave it out. */
   every_library?: boolean;
+  /** A server admin: only another server admin makes them a new link, changes or removes them. Older servers leave it out. */
+  server_admin?: boolean;
   created_at: string;
   last_login_at: string | null;
   /** Made just now by an invite: the link to send them (it works once, for 7 days), at each

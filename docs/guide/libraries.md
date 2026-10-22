@@ -70,7 +70,7 @@ An exclude pattern that matches clips already in Lumiverb asks first: they move 
 
 A shortcut: in the sidebar's folder list, click the clip count beside a folder, then **Exclude folder** (or **Archive folder**).
 
-Filters every new library starts with are set on the command line by an editor or admin, for example:
+Filters every new library starts with are set on the command line by an account admin, for example:
 
 ```bash
 lumiverb filter add "**/Proxy/**" --tenant-default --exclude

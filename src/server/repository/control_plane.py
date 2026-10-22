@@ -16,9 +16,17 @@ from ulid import ULID
 
 # An account deleted by the server admin: kept, never reached (TenantRepository.gone).
 DELETED = "deleted"
-# The label of the key the scheduler makes for itself in each account (scheduler/service.py scheduler_key), made by
-# no person: the one key an AI machine's key is ever handed to (repository/ai_machines.py key_for).
+# The label of the key the scheduler makes for itself in each account (scheduler/service.py scheduler_key): what
+# people see it as in the account's keys. What makes it the scheduler's is api_keys.scheduler, set only by
+# ApiKeyRepository.new_scheduler_key: the one key an AI machine's key is ever handed to (ai_machines.key_for). No
+# other key may be labelled so (scheduler_label), whatever its case, so none looks like it.
 SCHEDULER_KEY_LABEL = "scheduler"
+SCHEDULER_LABEL_TAKEN = "“scheduler” is the label of Lumiverb's own key: give this one another."
+
+
+def scheduler_label(label: str | None) -> bool:
+    """Whether a label is the scheduler's own key's, as people would read it (any case, spaces around it)."""
+    return label is not None and label.strip().casefold() == SCHEDULER_KEY_LABEL
 
 
 class TenantRepository:
@@ -154,7 +162,11 @@ class ApiKeyRepository:
 
         Generates a new lv_ ULID-prefixed key, hashes it, inserts the row, and
         returns (record, plaintext). Plaintext is returned ONCE and never stored.
+        Never labelled as the scheduler's own key (ValueError: the routes
+        refuse it first, 400 scheduler_label): that's new_scheduler_key's.
         """
+        if scheduler_label(label):
+            raise ValueError(SCHEDULER_LABEL_TAKEN)
         plaintext = self._generate_plaintext()
         key_hash = self._hash_key(plaintext)
         key_id = "key_" + str(ULID())
@@ -236,6 +248,17 @@ class ApiKeyRepository:
             self._session.add(api_key)
         return len(keys)
 
+    def revoke_all(self, tenant_id: str) -> int:
+        """Revoke every live key of the account, devices' too. Uncommitted: it
+        goes with the caller's change to the account. Returns how many."""
+        keys = self._session.exec(select(ApiKey).where(
+            ApiKey.tenant_id == tenant_id, ApiKey.revoked_at.is_(None))).all()
+        now = utcnow()
+        for api_key in keys:
+            api_key.revoked_at = now
+            self._session.add(api_key)
+        return len(keys)
+
     def new_device_key(self, tenant_id: str, device_id: str, created_by_user_id: str | None) -> tuple[ApiKey, str]:
         """A new key for the device, and its old one (if any) revoked in the
         same commit: a device has one key. Its role is "device", which is no
@@ -252,6 +275,30 @@ class ApiKeyRepository:
         api_key = ApiKey(key_id="key_" + str(ULID()), key_hash=self._hash_key(plaintext), tenant_id=tenant_id,
                          name="device", label=None, scopes=["scan"], role=DEVICE_ROLE,
                          created_by_user_id=created_by_user_id, device_id=device_id)
+        self._session.add(api_key)
+        self._session.commit()
+        self._session.refresh(api_key)
+        return api_key, plaintext
+
+    def new_scheduler_key(self, tenant_id: str) -> tuple[ApiKey, str]:
+        """A new key for the scheduler's calls on the account's behalf
+        (scheduler/service.py scheduler_key), marked as its own
+        (api_keys.scheduler: what the middleware reads, never the label), and
+        made by no person. The account's earlier ones are revoked in the same
+        commit, with any key still labelled as one from before the label was
+        kept for it. Returns (record, plaintext); the plaintext once, never
+        stored."""
+        now = utcnow()
+        for old in self._session.exec(select(ApiKey).where(
+                ApiKey.tenant_id == tenant_id, ApiKey.revoked_at.is_(None),
+                ApiKey.scheduler | (ApiKey.label == SCHEDULER_KEY_LABEL))).all():
+            old.revoked_at = now
+            self._session.add(old)
+        self._session.flush()
+        plaintext = self._generate_plaintext()
+        api_key = ApiKey(key_id="key_" + str(ULID()), key_hash=self._hash_key(plaintext), tenant_id=tenant_id,
+                         name=SCHEDULER_KEY_LABEL, label=SCHEDULER_KEY_LABEL, scopes=["read", "write"], role="admin",
+                         scheduler=True)
         self._session.add(api_key)
         self._session.commit()
         self._session.refresh(api_key)
@@ -462,16 +509,32 @@ class UserRepository:
         """The install's server admins, every account's, by email."""
         return list(self._session.exec(select(User).where(User.server_admin).order_by(User.email)).all())
 
+    def keeps_a_server_admin(self, *, without_user: str | None = None, without_tenant: str | None = None) -> bool:
+        """Whether a server admin who can still sign in (one in an account
+        not deleted) is left once that user, or that account, goes. The one
+        rule for taking a server admin away, by removing them as one,
+        deleting them or deleting their account. The server admins are
+        locked (FOR UPDATE) until the caller commits or rolls back, so two
+        such changes at once leave one; their accounts are read after the
+        lock is had, as they are then."""
+        admins = self._session.exec(
+            select(User.user_id, User.tenant_id).where(User.server_admin).with_for_update()).all()
+        tenants = {tenant_id for _, tenant_id in admins}
+        live = set(self._session.exec(select(Tenant.tenant_id).where(
+            Tenant.tenant_id.in_(tenants), Tenant.status != DELETED)).all()) if tenants else set()
+        return any(user_id != without_user and tenant_id != without_tenant and tenant_id in live
+                   for user_id, tenant_id in admins)
+
     def set_server_admin(self, user_id: str, server_admin: bool, *, keep_one: bool = False) -> bool:
         """Make the user a server admin or not, and commit. False when
-        keep_one and they're the last one (nothing changes): the server
-        admins are locked while it's decided, so two taking each other's
-        away at once leave one."""
-        admins = self._session.exec(select(User).where(User.server_admin).with_for_update()).all()
+        keep_one and they're the last one who can sign in (nothing changes):
+        keeps_a_server_admin, so two taking each other's away at once leave
+        one."""
+        keeps = keep_one and self.keeps_a_server_admin(without_user=user_id)
         user = self._session.exec(select(User).where(User.user_id == user_id).with_for_update()).first()
         if user is None:
             raise ValueError(f"User not found: {user_id}")
-        if keep_one and not server_admin and user.server_admin and len(admins) == 1:
+        if keep_one and not server_admin and user.server_admin and not keeps:
             self._session.rollback()
             return False
         user.server_admin = server_admin
@@ -527,8 +590,13 @@ class UserRepository:
         return revoked
 
     def delete(self, user_id: str) -> None:
+        """The user, with their reset and invite links, used or not: each names them, so none may outlive them."""
         user = self.get_by_id(user_id)
         if user is not None:
+            for token in self._session.exec(select(PasswordResetToken).where(
+                    PasswordResetToken.user_id == user_id)).all():
+                self._session.delete(token)
+            self._session.flush()
             self._session.delete(user)
             self._session.commit()
 

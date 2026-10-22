@@ -358,8 +358,9 @@ def test_an_editor_never_sees_an_ai_machines_key(env, none):
 @pytest.mark.slow
 def test_only_the_schedulers_own_key_reads_ai_machines_keys(env, none):
     """Keys are write-only: an account admin, signed in or by a key, never reads one back (Settings → AI says
-    only whether one is saved), nor a key a person made and labelled as the scheduler's; the scheduler's own key,
-    made by no person, reads it to send the machine work."""
+    only whether one is saved), nor any key made by no person but the scheduler's own (the account's first key,
+    one the server admin's API made, one those made): it's known by a mark only it gets (api_keys.scheduler), so
+    it reads the key to send the machine work. No other key may be labelled "scheduler", in any case."""
     from tests.producer_fakes import scheduler_client
 
     client, headers, *_ = env
@@ -368,17 +369,61 @@ def test_only_the_schedulers_own_key_reads_ai_machines_keys(env, none):
         _add(env, name="Gaming PC", api_key="sk-1")
         _model(env, "vision", QWEN)
     _, signed_in = _user(client, headers, "ai-keys-admin@example.com", "admin")
-    made = client.post("/v1/keys", json={"label": "scheduler", "role": "admin"}, headers=signed_in)
+    for maker in (headers, signed_in):  # the account's first key, made by no person; a person signed in
+        for label in ("scheduler", " Scheduler "):
+            refused = client.post("/v1/keys", json={"label": label, "role": "admin"}, headers=maker)
+            assert (refused.status_code, refused.json()["error"]["code"]) == (400, "scheduler_label"), refused.text
+    by_install = client.post(f"/v1/admin/tenants/{env[4]}/keys", json={"name": "SCHEDULER"}, headers=_server_admin(env))
+    assert (by_install.status_code, by_install.json()["error"]["code"]) == (400, "scheduler_label"), by_install.text
+    ops = client.post(f"/v1/admin/tenants/{env[4]}/keys", json={"name": "ops"}, headers=_server_admin(env))
+    assert ops.status_code == 200, ops.text
+    ops_key = {"Authorization": f"Bearer {ops.json()['api_key']}"}
+    made = client.post("/v1/keys", json={"label": "cron", "role": "admin"}, headers=ops_key)  # no maker either
     assert made.status_code == 200, made.text
-    posing = {"Authorization": f"Bearer {made.json()['plaintext']}"}
-    for admin in (headers, signed_in, posing):
+    unmade = {"Authorization": f"Bearer {made.json()['plaintext']}"}
+    for admin in (headers, signed_in, ops_key, unmade):
         r = client.get("/v1/ai/jobs/vision", headers=admin)
         assert r.json()["machines"][0]["api_key"] == "" and "sk-1" not in r.text
         assert client.get("/v1/tenant/context", headers=admin).json()["vision_api_key"] == ""
     shown = _machine(_ai(env, headers=signed_in), "Gaming PC")
     assert shown["has_key"] is True and "api_key" not in shown
-    [machine] = scheduler_client(env[4]).get("/v1/ai/jobs/vision").json()["machines"]
+    scheduler = scheduler_client(env[4])
+    [machine] = scheduler.get("/v1/ai/jobs/vision").json()["machines"]
     assert machine["api_key"] == "sk-1"
+    assert scheduler.get("/v1/tenant/context").json()["vision_api_key"] == "sk-1"
+    listed = [k for k in client.get("/v1/keys", headers=headers).json()["keys"] if k["label"] == "scheduler"]
+    assert len(listed) == 1, "the scheduler's own, as people see it"
+
+
+@pytest.mark.slow
+def test_a_key_labelled_scheduler_from_before_is_no_schedulers_and_goes_at_its_next_start(env, none):
+    """A key labelled "scheduler" before the label was kept for the scheduler's own, made by no person and not
+    marked (the migration marks only what today's rule took for the scheduler's), reads no machine's key; the
+    scheduler's next start revokes it with its own old one."""
+    from src.server.database import get_control_session
+    from src.server.models.control_plane import ApiKey
+    from src.server.repository.control_plane import ApiKeyRepository
+    from src.server.scheduler.service import scheduler_key
+
+    client, headers, *_ = env
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
+    with fake:
+        _add(env, name="Gaming PC", api_key="sk-1")
+        _model(env, "vision", QWEN)
+    with get_control_session() as ctrl:
+        plaintext = "lv_from_before_" + "x" * 24
+        ctrl.add(ApiKey(key_id="key_from_before", key_hash=ApiKeyRepository._hash_key(plaintext), tenant_id=env[4],
+                        name="scheduler", label="scheduler", role="admin"))
+        ctrl.commit()
+    old = {"Authorization": f"Bearer {plaintext}"}
+    r = client.get("/v1/ai/jobs/vision", headers=old)
+    assert r.status_code == 200 and r.json()["machines"][0]["api_key"] == "", r.text
+    first = {"Authorization": f"Bearer {scheduler_key(env[4])}"}
+    assert client.get("/v1/ai/jobs/vision", headers=old).status_code == 401, "revoked at the scheduler's start"
+    assert client.get("/v1/ai/jobs/vision", headers=first).json()["machines"][0]["api_key"] == "sk-1"
+    second = {"Authorization": f"Bearer {scheduler_key(env[4])}"}
+    assert client.get("/v1/ai/jobs/vision", headers=first).status_code == 401, "its previous one revoked"
+    assert client.get("/v1/ai/jobs/vision", headers=second).json()["machines"][0]["api_key"] == "sk-1"
 
 
 def _stored_key(env, name: str) -> str:

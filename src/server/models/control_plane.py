@@ -79,6 +79,9 @@ class ApiKey(SQLModel, table=True):
     created_by_user_id: str | None = Field(default=None, nullable=True, index=True)
     # A device's key (role "device"): the device it is, in the account's devices (src/server/api/devices.py).
     device_id: str | None = Field(default=None, nullable=True)
+    # The scheduler's own key (ApiKeyRepository.new_scheduler_key, nothing else sets it; made by no person and no
+    # device's, api_keys_scheduler): the one caller handed an AI machine's key (ai_machines.key_for).
+    scheduler: bool = Field(default=False, sa_column_kwargs={"server_default": "false"}, nullable=False)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

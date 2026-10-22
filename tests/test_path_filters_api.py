@@ -334,6 +334,53 @@ def test_adding_defaults_after_library_creation_does_not_affect_existing(path_fi
     assert "**/Cache/**" not in patterns
 
 
+@pytest.mark.slow
+def test_tenant_defaults_are_an_account_admin_s(path_filters_client: tuple[TestClient, str, str]) -> None:
+    """The account's filter defaults reach every library's reader, so what every library's scans keep: an editor,
+    who may have no role on a library, reads them but never adds or removes one (403); an account admin does. The
+    CLI says the refusal and claims nothing."""
+    from unittest.mock import patch as patched
+
+    from typer.testing import CliRunner
+
+    from src.client.cli.client import LumiverbAPIError, LumiverbClient
+    from src.client.cli.main import app as cli_app
+
+    client, admin_key, _ = path_filters_client
+    admin = {"Authorization": f"Bearer {admin_key}"}
+    made = client.post("/v1/keys", json={"label": "an editor's", "role": "editor"}, headers=admin)
+    assert made.status_code == 200, made.text
+    editor_key = made.json()["plaintext"]
+    editor = {"Authorization": f"Bearer {editor_key}"}
+
+    assert client.get("/v1/tenant/filter-defaults", headers=editor).status_code == 200
+    refused = client.post("/v1/tenant/filter-defaults", json={"type": "exclude", "pattern": "**/Renders/**"},
+                          headers=editor)
+    assert refused.status_code == 403, refused.text
+    added = client.post("/v1/tenant/filter-defaults", json={"type": "exclude", "pattern": "**/Renders/**"},
+                        headers=admin)
+    assert added.status_code == 201, added.text
+    default_id = added.json()["default_id"]
+    assert client.delete(f"/v1/tenant/filter-defaults/{default_id}", headers=editor).status_code == 403
+    patterns = [d["pattern"] for d in client.get("/v1/tenant/filter-defaults", headers=editor).json()["excludes"]]
+    assert "**/Renders/**" in patterns, "an editor's refusal changes nothing"
+
+    cli = LumiverbClient(base_url="http://testserver", token=editor_key)
+    cli._client = TestClient(app, headers=editor)
+    runner = CliRunner()
+    with patched("src.client.cli.main.LumiverbClient", return_value=cli):
+        for args in (["filter", "add", "**/Exports/**", "--exclude", "--tenant-default"],
+                     ["filter", "remove", default_id, "--tenant-default"]):
+            result = runner.invoke(cli_app, args)
+            assert isinstance(result.exception, LumiverbAPIError) and result.exception.status_code == 403, args
+            assert "Error [forbidden]: Admin API key required" in result.stderr, result.stderr
+            assert "Added" not in result.output and "Removed" not in result.output
+
+    assert client.delete(f"/v1/tenant/filter-defaults/{default_id}", headers=admin).status_code == 204
+    left = [d["pattern"] for d in client.get("/v1/tenant/filter-defaults", headers=admin).json()["excludes"]]
+    assert "**/Renders/**" not in left and "**/Exports/**" not in left
+
+
 # --- Preview and trash_matching ---
 
 
