@@ -30,7 +30,9 @@ def env(tmp_path_factory):
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_dir = tmp_path_factory.mktemp("upkeep_data")
 
-    with PostgresContainer(PG_IMAGE) as control_pg:
+    # DATA_DIR put back as it was after (the process's own, tests/conftest.py), never unset: the server's
+    # default is the checkout's data/, where every later test on this worker would write.
+    with pytest.MonkeyPatch.context() as env_vars, PostgresContainer(PG_IMAGE) as control_pg:
         control_url = _ensure_psycopg2(control_pg.get_connection_url())
         _run_control_migrations(control_url)
         os.environ["CONTROL_PLANE_DATABASE_URL"] = control_url
@@ -38,7 +40,7 @@ def env(tmp_path_factory):
             make_url(control_url).set(database="{tenant_id}")
         )
         os.environ["ADMIN_KEY"] = "test-admin-secret"
-        os.environ["DATA_DIR"] = str(data_dir)
+        env_vars.setenv("DATA_DIR", str(data_dir))
         get_settings.cache_clear()
         local.get_storage.cache_clear()  # one per process: an earlier module's would be its folder
         _engines.clear()
@@ -66,7 +68,6 @@ def env(tmp_path_factory):
             with TestClient(app) as client:
                 yield client, api_key, tenant_id, data_dir
 
-    os.environ.pop("DATA_DIR", None)
     get_settings.cache_clear()
     local.get_storage.cache_clear()
     _engines.clear()

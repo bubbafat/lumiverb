@@ -44,6 +44,7 @@ def test_run_with_a_data_dir_that_isnt_a_full_path_is_refused_and_starts_nothing
     monkeypatch.setattr(cli, "migrate_when_ready", lambda *a, **k: pytest.fail("nothing may migrate"))
     env_file = tmp_path / "env"
     env_file.write_text("CONTROL_PLANE_DATABASE_URL=postgresql://x\nDATA_DIR=data\n")
+    monkeypatch.delenv("DATA_DIR")  # the test process's own (tests/conftest.py) would win over the file's
     assert cli.main(["run", "--env", str(env_file)]) == 1
     assert _err(capsys) == "✗ DATA_DIR must be a full path, not data"
 

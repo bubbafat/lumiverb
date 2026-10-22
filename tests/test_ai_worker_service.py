@@ -74,6 +74,7 @@ def test_install_says_when_launchctl_wont_and_is_a_macs_only(tmp_path, monkeypat
 def test_the_command_installs_with_the_env_file_it_was_given(tmp_path, monkeypatch, capsys):
     env = tmp_path / "env"
     env.write_text(f"DATA_DIR={tmp_path}\nCONTROL_PLANE_DATABASE_URL=postgresql://x@127.0.0.1/none\n")
+    monkeypatch.delenv("DATA_DIR")  # the test process's own (tests/conftest.py) would win over the file's
     seen = {}
 
     def install(command, env_file, data, **kw):

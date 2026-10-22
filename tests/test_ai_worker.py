@@ -258,13 +258,14 @@ def test_the_model_takes_turns_however_many_requests_are_taken() -> None:
     assert codes == [200, 200] and clips[0].most == 1
 
 
-def test_its_key_is_made_once_kept_owner_only_and_shown(tmp_path, capsys) -> None:
+def test_its_key_is_made_once_kept_owner_only_and_shown(tmp_path, capsys, monkeypatch) -> None:
     key = ensure_key(tmp_path)
     assert len(key) >= 40 and ensure_key(tmp_path) == key
     path = key_file(tmp_path)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600 and stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     env = tmp_path / "env"
     env.write_text(f"DATA_DIR={tmp_path}\nCONTROL_PLANE_DATABASE_URL=postgresql://x@127.0.0.1/none\n")
+    monkeypatch.delenv("DATA_DIR")  # the test process's own (tests/conftest.py) would win over the file's
     from src.server.lifecycle.cli import main
 
     assert main(["ai-worker", "--env", str(env), "--show-key"]) == 0
