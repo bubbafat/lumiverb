@@ -266,7 +266,8 @@ function MachineRow({ ai, machine, admin }: { ai: AiSettings; machine: AiMachine
       {machine.built_in ? (
         <p className="text-xs text-gray-400">Whisper on the worker&apos;s own computer</p>
       ) : (
-        <p className="break-all font-mono text-xs text-gray-400">{machine.api_url}</p>
+        // Its address is an account admin's: anyone else gets null, and no line for it.
+        machine.api_url && <p className="break-all font-mono text-xs text-gray-400">{machine.api_url}</p>
       )}
       <p className="text-sm text-gray-300">
         {labels.length ? `Does: ${labels.join(", ")}` : "Does nothing yet"} · {machine.at_once} at once

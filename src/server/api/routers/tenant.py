@@ -31,7 +31,8 @@ router = APIRouter(prefix="/v1/tenant", tags=["tenant"])
 
 class TenantContextResponse(BaseModel):
     tenant_id: str
-    vision_api_url: str = ""
+    # The first machine doing vision's address, for an account admin ("": none); None for anyone else.
+    vision_api_url: str | None = ""
     vision_api_key: str = ""
     vision_model_id: str = ""
 
@@ -225,7 +226,7 @@ def get_tenant_context(request: Request) -> TenantContextResponse:
     from src.server.database import get_control_session
     from src.server.repository.control_plane import TenantRepository
 
-    from src.server.repository.ai_machines import first_vision_machine, job_model, key_for
+    from src.server.repository.ai_machines import address_for, first_vision_machine, job_model, key_for
 
     tenant_id = request.state.tenant_id
     with get_control_session() as session:
@@ -235,7 +236,8 @@ def get_tenant_context(request: Request) -> TenantContextResponse:
 
     return TenantContextResponse(
         tenant_id=tenant_id,
-        vision_api_url=machine.api_url if machine else "",
+        # An account admin's, as Settings › AI's addresses are: it can name a host on the server's own network.
+        vision_api_url=address_for(machine, getattr(request.state, "role", None) == "admin"),
         # Never the key (write-only: the scheduler's own key reads it from /v1/ai/jobs); the Mac app keeps its own.
         vision_api_key=key_for(machine, getattr(request.state, "scheduler", False)),
         vision_model_id=job_model(tenant, "vision"),

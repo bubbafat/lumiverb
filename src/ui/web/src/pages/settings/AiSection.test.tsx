@@ -111,9 +111,9 @@ beforeEach(() => {
                    { job: "vision", model: body.model, clips: made, question: "remake",
                      artifacts: [{ artifact: "lumiverb.image.description", title: "Descriptions and tags", clips: made }] });
       }
-      if (body.model && !machines.some((x) => offers[x.api_url]?.includes(body.model))) {
+      if (body.model && !machines.some((x) => offers[x.api_url ?? ""]?.includes(body.model))) {
         return err(409, "model_not_offered", `No machine doing descriptions & text offers ${body.model}.`,
-                   { job: "vision", model: body.model, machines: machines.map((x) => ({ name: x.name, models: offers[x.api_url] ?? [], error: offers[x.api_url] ? "" : "Couldn't reach it." })) });
+                   { job: "vision", model: body.model, machines: machines.map((x) => ({ name: x.name, models: offers[x.api_url ?? ""] ?? [], error: offers[x.api_url ?? ""] ? "" : "Couldn't reach it." })) });
       }
       model = body.model;
       return json(settings());
@@ -205,9 +205,18 @@ describe("AiSection", () => {
 
   it("a viewer sees it all and changes nothing", async () => {
     role = "viewer";
-    machines = [machine({ name: "Gaming PC" })];
+    // An address is an account admin's: the API sends anyone else null, and says it as the machine's name.
+    machines = [machine({ name: "Gaming PC", api_url: null }),
+                machine({ name: "Mac Studio", api_url: null,
+                          status: { online: false, error: "Mac Studio didn't answer (ConnectionError)", models: [],
+                                    checked_at: new Date().toISOString() } })];
     renderSection();
-    await screen.findByText("Gaming PC");
+    const gamingPc = (await screen.findByText("Gaming PC")).closest("li")!;
+    expect(within(gamingPc).getByText("Does: Descriptions & text · 2 at once")).toBeTruthy();
+    expect(within(gamingPc).getByText(/Online · checked just now/)).toBeTruthy();
+    expect(gamingPc.querySelector(".font-mono"), "no empty line where its address would be").toBeNull();
+    const studio = screen.getByText("Mac Studio").closest("li")!;
+    expect(within(studio).getByRole("alert").textContent).toContain("Mac Studio didn't answer (ConnectionError)");
     await screen.findByText("Only admins can change these.");
     expect(screen.queryByRole("button", { name: "Add machine" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit Gaming PC" })).toBeNull();

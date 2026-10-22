@@ -56,7 +56,7 @@ Editors and admins can:
 - click **Merge into...** and pick who this person really is: all their faces move there, and this person goes;
 - click **Delete person**: the name goes, and their faces go back to unnamed groups.
 
-Merging and deleting take every face the person has, in every library. If some of their faces are in libraries you can see but don't edit, the page says how many, and only an account admin can merge or delete them. The same goes for restoring someone dismissed.
+Renaming, merging and deleting take every face the person has, in every library: a name is what they're called wherever they're seen. If some of their faces are in libraries you can see but don't edit, the page says how many, and only an account admin can rename, merge or delete them. The same goes for restoring someone dismissed.
 
 ## Dismissed faces
 
