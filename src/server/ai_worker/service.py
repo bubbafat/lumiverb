@@ -25,13 +25,16 @@ def agent_path(home: Path | None = None) -> Path:
     return (home or Path.home()) / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 
 
-def agent(command: Path, env_file: Path, data: Path, *, host: str, port: int, at_once: int) -> dict:
-    """The launchd agent: the worker as `command` runs it (the opt link's, so an upgrade's is the one run)."""
+def agent(command: Path, env_file: Path, data: Path, *, host: str, port: int, at_once: int, https: bool = False,
+          plain_http: bool = False) -> dict:
+    """The launchd agent: the worker as `command` runs it (the opt link's, so an upgrade's is the one run), with
+    --https or --plain-http when it was installed with one."""
     log = str(data / "ai-worker" / "worker.log")
+    serving = ["--https"] if https else ["--plain-http"] if plain_http else []
     return {
         "Label": LABEL,
         "ProgramArguments": [str(command), "ai-worker", "--env", str(env_file.absolute()), "--host", host,
-                             "--port", str(port), "--at-once", str(at_once)],
+                             "--port", str(port), "--at-once", str(at_once), *serving],
         "RunAtLoad": True,
         "KeepAlive": True,
         # A worker that can't start (no key folder, a port taken) isn't started again at once, every second.
@@ -44,8 +47,8 @@ def agent(command: Path, env_file: Path, data: Path, *, host: str, port: int, at
 Run = Callable[..., subprocess.CompletedProcess]
 
 
-def install(command: Path, env_file: Path, data: Path, *, host: str, port: int, at_once: int,
-            home: Path | None = None, run: Run = subprocess.run) -> Path:
+def install(command: Path, env_file: Path, data: Path, *, host: str, port: int, at_once: int, https: bool = False,
+            plain_http: bool = False, home: Path | None = None, run: Run = subprocess.run) -> Path:
     """Write the agent (replacing one there) and start it. Returns its file. Raises RuntimeError off a Mac,
     or when launchctl refuses it."""
     if sys.platform != "darwin":
@@ -56,7 +59,8 @@ def install(command: Path, env_file: Path, data: Path, *, host: str, port: int, 
     if path.exists():
         run(["launchctl", "bootout", f"{domain}/{LABEL}"], capture_output=True, text=True)  # the one before
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(plistlib.dumps(agent(command, env_file, data, host=host, port=port, at_once=at_once)))
+    path.write_bytes(plistlib.dumps(agent(command, env_file, data, host=host, port=port, at_once=at_once,
+                                          https=https, plain_http=plain_http)))
     started = run(["launchctl", "bootstrap", domain, str(path)], capture_output=True, text=True)
     if started.returncode != 0:
         raise RuntimeError(f"launchctl wouldn't start it: {(started.stderr or started.stdout).strip()}")

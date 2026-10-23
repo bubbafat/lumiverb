@@ -25,6 +25,10 @@ TIMEOUT_SEC = 10.0
 # network; the detail goes to the log, and to whoever reads it (the error's
 # detail: the server admin's, src/server/api/routers/ai.py).
 UNREACHABLE = "Couldn't reach the AI machine."
+# Said plainly: nothing was sent to it (src/shared/ai_requests.py).
+NOT_ITS_CERTIFICATE = "Its certificate isn't the one it was added with."
+UNTRUSTED = ("Its certificate isn't signed by an authority this server trusts. If it's Lumiverb's AI worker, give "
+             "the certificate fingerprint it prints when it starts.")
 
 class VisionEndpointError(Exception):
     """The endpoint couldn't say which models it has; the message says why, plainly. detail: what went wrong
@@ -118,20 +122,44 @@ def allowed(api_url: str) -> str:
     return url
 
 
-def list_models(api_url: str, api_key: str | None = None, *, timeout: float = TIMEOUT_SEC) -> list[str]:
-    """The model ids GET {api_url}/models lists, sorted. Raises VisionEndpointError."""
+def untrusted(e: requests.RequestException) -> bool:
+    """Whether an https request failed on a certificate no authority this server trusts signed."""
+    import ssl
+
+    seen: list[BaseException] = []
+    at: object = e
+    while isinstance(at, BaseException) and at not in seen:
+        if isinstance(at, ssl.SSLCertVerificationError):
+            return True
+        seen.append(at)
+        at = getattr(at, "reason", None) or (at.args[0] if at.args else None) or at.__context__
+    return False
+
+
+def list_models(api_url: str, api_key: str | None = None, *, fingerprint: str = "",
+                timeout: float = TIMEOUT_SEC) -> list[str]:
+    """The model ids GET {api_url}/models lists, sorted. fingerprint: the certificate the machine was added with
+    (ai_requests). Raises VisionEndpointError."""
     url = allowed(api_url)
     parts = urlsplit(url)
     headers, params = _asked_with(parts.hostname, api_key)
     try:
         # No redirects: the answer is the URL's own (and the key goes nowhere else).
-        resp = ai_requests.get(f"{url}/models", headers=headers, params=params, timeout=timeout)
+        resp = ai_requests.get(f"{url}/models", headers=headers, params=params, timeout=timeout,
+                               fingerprint=fingerprint)
     except ai_requests.AddressRefused:
         raise VisionEndpointError("That address isn't allowed.") from None
+    except ai_requests.NotItsCertificate:
+        raise VisionEndpointError(NOT_ITS_CERTIFICATE) from None
     except ai_requests.Redirected:
         raise _unreachable(url, "/models answered with a redirect, which Lumiverb doesn't follow") from None
     except requests.Timeout:
         raise _unreachable(url, f"no answer within {timeout:.0f} seconds") from None
+    except requests.exceptions.SSLError as e:
+        if untrusted(e):
+            logger.warning("AI machine %s: %s", url, failed(e))
+            raise VisionEndpointError(UNTRUSTED, f"{url}: {failed(e)}") from None
+        raise _unreachable(url, failed(e)) from None
     except requests.RequestException as e:
         raise _unreachable(url, failed(e)) from None
     if resp.status_code != 200:

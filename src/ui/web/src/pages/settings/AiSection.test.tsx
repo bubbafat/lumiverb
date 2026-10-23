@@ -326,6 +326,82 @@ describe("AiSection", () => {
     expect((lastSent("POST", "/ai/machines")!.body as { shares_gpu: boolean }).shares_gpu).toBe(true);
   });
 
+  it("marks a machine reached over plain HTTP across the network, and says how an AI worker switches to HTTPS", async () => {
+    const worker = "http://10.10.10.3:6366/v1";
+    const pinned = Array(32).fill("7F").join(":");
+    machines = [
+      machine({ name: "Gaming PC" }),
+      machine({ name: "Ollama here", api_url: "http://localhost:11434/v1" }),
+      machine({ name: "Old worker", api_url: worker, jobs: ["clip", "faces"] }),
+      machine({ name: "New worker", api_url: "https://10.10.10.4:6366/v1", jobs: ["clip", "faces"], fingerprint: pinned }),
+      builtIn(),
+    ];
+    renderSection();
+    const row = async (name: string) => (await screen.findByText(name)).closest("li")!;
+    const ollama = await row("Gaming PC");
+    expect(within(ollama).getByText(/Unencrypted \(http:\/\/\)/)).toBeTruthy();
+    expect(ollama.textContent).not.toContain("--https"); // Ollama can't serve HTTPS itself
+    expect((await row("Ollama here")).textContent).not.toContain("Unencrypted"); // it crosses no network
+    const old = await row("Old worker");
+    expect(old.textContent).toContain("Unencrypted");
+    expect(old.textContent).toContain("start it with --https");
+    expect(within(old).getByRole("link", { name: "How to" }).getAttribute("href")).toBe(
+      "https://github.com/bubbafat/lumiverb#a-second-machine-for-search-and-faces");
+    const pinnedRow = await row("New worker");
+    expect(pinnedRow.textContent).toContain(`Its certificate: ${pinned}`);
+    expect(pinnedRow.textContent).not.toContain("Unencrypted");
+    expect((await row("Built in")).textContent).not.toContain("Unencrypted");
+  });
+
+  it("asks an https machine for its certificate's fingerprint, and Connects and adds by it", async () => {
+    const worker = "https://10.10.10.3:6366/v1";
+    const pinned = Array(32).fill("7F").join(":");
+    offers = { [worker]: ["ViT-B-32", "buffalo_l"] };
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
+    const form = screen.getByRole("form", { name: "Add a machine" });
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Worker" } });
+    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: "http://10.10.10.3:6366/v1" } });
+    expect(within(form).queryByLabelText("Certificate fingerprint")).toBeNull(); // http: nothing to compare
+    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: worker } });
+    fireEvent.change(within(form).getByLabelText("Certificate fingerprint"), { target: { value: pinned } });
+    fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
+    await within(form).findByText(/Connected: offers/);
+    expect(lastSent("POST", "/ai/connect")!.body).toEqual({ api_url: worker, api_key: "", fingerprint: pinned });
+    const add = within(form).getByRole("button", { name: "Add" }) as HTMLButtonElement;
+    await waitFor(() => expect(add.disabled).toBe(false));
+    fireEvent.click(add);
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Add a machine" })).toBeNull());
+    expect((lastSent("POST", "/ai/machines")!.body as { fingerprint: string }).fingerprint).toBe(pinned);
+  });
+
+  it("switches an AI worker to https: its saved key goes along, and a new certificate is asked again", async () => {
+    const before = "http://10.10.10.3:6366/v1";
+    const after = "https://10.10.10.3:6366/v1";
+    const pinned = Array(32).fill("7F").join(":");
+    machines = [machine({ name: "Worker", api_url: before, jobs: ["clip", "faces"], has_key: true })];
+    offers = { [after]: ["ViT-B-32", "buffalo_l"] };
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Worker" }));
+    const form = screen.getByRole("form", { name: "Edit Worker" });
+    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: after } });
+    expect((within(form).getByLabelText("API key") as HTMLInputElement).placeholder).toContain("Saved");
+    fireEvent.change(within(form).getByLabelText("Certificate fingerprint"), { target: { value: pinned } });
+    const save = within(form).getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true); // asked again first
+    fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
+    await within(form).findByText(/Connected: offers/);
+    // Its saved key, by the machine: never typed again.
+    expect(lastSent("POST", "/ai/connect")!.body).toEqual({ api_url: after, machine_id: "aim_Worker", fingerprint: pinned });
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Edit Worker" })).toBeNull());
+    const body = lastSent("PATCH", "/ai/machines/aim_Worker")!.body as Record<string, unknown>;
+    expect(body.api_url).toBe(after);
+    expect(body.fingerprint).toBe(pinned);
+    expect("api_key" in body).toBe(false);
+  });
+
   it("says why Connect couldn't, and won't give a machine a job whose model it lacks", async () => {
     offers = { [STUDIO]: ["llava:13b"] };
     renderSection();

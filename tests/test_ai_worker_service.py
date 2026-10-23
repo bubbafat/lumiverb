@@ -1,8 +1,11 @@
 """The AI worker as a Mac's service (ADR-022 phase 4): its own launchd agent
 (Homebrew's one service is the whole server), written and started by
-`lumiverb-server ai-worker --install`, taken away by --uninstall, refused
-off a Mac; and the worker restarting into the new install after `brew
-upgrade`, as the server does. launchctl is never really run here."""
+`lumiverb-server ai-worker --install`, which prints what to add in the other
+Lumiverb (its https:// address and certificate's fingerprint, or, for a
+worker from before HTTPS, loudly, its http:// one and how to switch), taken
+away by --uninstall, refused off a Mac; and the worker restarting into the
+new install after `brew upgrade`, as the server does. launchctl is never
+really run here."""
 
 from __future__ import annotations
 
@@ -14,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.server.ai_worker import service
+from src.server.ai_worker import fingerprint, key_file, service
 from src.server.lifecycle import cli
 
 pytestmark = pytest.mark.fast
@@ -84,12 +87,53 @@ def test_the_command_installs_with_the_env_file_it_was_given(tmp_path, monkeypat
     with patch("src.server.ai_worker.service.install", install), patch.object(cli, "_launched_as", lambda: LUMIVERB):
         assert cli.main(["ai-worker", "--env", str(env), "--install", "--port", "6399"]) == 0
     assert seen == {"command": LUMIVERB, "env_file": env, "data": tmp_path, "host": "0.0.0.0", "port": 6399,
-                    "at_once": 2}
+                    "at_once": 2, "https": False, "plain_http": False}
     out = capsys.readouterr().out
-    assert "runs as a service" in out and ":6399/v1" in out and "--show-key" in out
+    # What to add in the other Lumiverb: its https:// address, its certificate's fingerprint, where its key is.
+    assert "runs as a service" in out and "over HTTPS" in out and "--show-key" in out
+    assert "https://" in out and ":6399/v1" in out and "http://" not in out
+    assert fingerprint(tmp_path) is not None and f"certificate fingerprint {fingerprint(tmp_path)}" in out
     with patch("src.server.ai_worker.service.uninstall", lambda: True):
         assert cli.main(["ai-worker", "--env", str(env), "--uninstall"]) == 0
     assert "stopped and gone" in capsys.readouterr().out
+
+
+def test_the_agent_keeps_the_way_it_was_installed_to_serve(tmp_path) -> None:
+    """--https (a worker from before switching) and --plain-http go into the agent, so every start serves the same."""
+    env = Path("/opt/homebrew/etc/lumiverb/env")
+    args = service.agent(LUMIVERB, env, tmp_path, host="0.0.0.0", port=6366, at_once=2)["ProgramArguments"]
+    assert "--https" not in args and "--plain-http" not in args
+    assert service.agent(LUMIVERB, env, tmp_path, host="0.0.0.0", port=6366, at_once=2,
+                         https=True)["ProgramArguments"][-1] == "--https"
+    assert service.agent(LUMIVERB, env, tmp_path, host="0.0.0.0", port=6366, at_once=2,
+                         plain_http=True)["ProgramArguments"][-1] == "--plain-http"
+
+
+def test_installing_a_worker_from_before_says_loudly_it_serves_plain_http_and_how_to_switch(tmp_path, capsys, monkeypatch):
+    """A worker set up before it served HTTPS (a key, no certificate) keeps plain HTTP, as the Lumiverb using it
+    expects, until it's installed with --https: then it's what to add, with its fingerprint."""
+    env = tmp_path / "env"
+    env.write_text(f"DATA_DIR={tmp_path}\nCONTROL_PLANE_DATABASE_URL=postgresql://x@127.0.0.1/none\n")
+    monkeypatch.delenv("DATA_DIR")  # the test process's own (tests/conftest.py) would win over the file's
+    key_file(tmp_path).parent.mkdir(parents=True)
+    key_file(tmp_path).write_text("a-key-from-before\n")
+    seen: list[dict] = []
+
+    def install(command, env_file, data, **kw):
+        seen.append(kw)
+        return tmp_path / "agent.plist"
+
+    with patch("src.server.ai_worker.service.install", install), patch.object(cli, "_launched_as", lambda: LUMIVERB):
+        assert cli.main(["ai-worker", "--env", str(env), "--install"]) == 0
+        out = capsys.readouterr().out
+        assert "⚠ PLAIN HTTP" in out and "set up before the AI worker served HTTPS" in out and "--install --https" in out
+        assert "a machine at http://" in out and "with the certificate fingerprint" not in out
+        assert fingerprint(tmp_path) is None, "no certificate made: it isn't served"
+        assert cli.main(["ai-worker", "--env", str(env), "--install", "--https"]) == 0
+        out = capsys.readouterr().out
+    assert [(s["https"], s["plain_http"]) for s in seen] == [(False, False), (True, False)]
+    assert "over HTTPS" in out and f"certificate fingerprint {fingerprint(tmp_path)}" in out and "PLAIN" not in out
+    assert key_file(tmp_path).read_text() == "a-key-from-before\n", "its key stays: only its address changes"
 
 
 def test_the_worker_restarts_into_an_upgraded_install(tmp_path, monkeypatch):

@@ -7,7 +7,8 @@ models at …/v1/models), so its own routes are …/v1/lumiverb/clip and
 refused, the model not served, out of memory, any 5xx: the work goes to
 another machine) or the image's (one it can't read, which it says per
 image; a request it refuses as too big). Its address is checked at each
-request and no redirect is followed (src/shared/ai_requests.py); what it
+request and no redirect is followed (src/shared/ai_requests.py), and over
+HTTPS its certificate is the one it was added with (its fingerprint); what it
 says when it fails is the log's, the failure in Lumiverb's words.
 """
 
@@ -32,14 +33,16 @@ TIMEOUT_SEC = 120.0
 
 
 class AiWorker:
-    def __init__(self, api_url: str, api_key: str | None, *, timeout: float = TIMEOUT_SEC,
+    def __init__(self, api_url: str, api_key: str | None, *, fingerprint: str = "", timeout: float = TIMEOUT_SEC,
                  error: type[EmbeddingError] | type[FaceError] = EmbeddingError) -> None:
-        """error: what the caller's job says a machine's failure is (CLIP's, faces')."""
+        """fingerprint: the certificate it was added with (an https worker's). error: what the caller's job says a
+        machine's failure is (CLIP's, faces')."""
         try:
             self._url = check_url(api_url)
         except VisionEndpointError as e:
             raise error(str(e), endpoint_fault=True) from None
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._fingerprint = fingerprint
         self._timeout = timeout
 
     def _post(self, route: str, data: dict[str, str], images: list[bytes], error: type[Exception]) -> dict[str, Any]:
@@ -48,8 +51,8 @@ class AiWorker:
             # Its address checked, no redirect followed: the answer is the machine's own (and its key goes
             # nowhere else).
             r = ai_requests.post(f"{self._url}/lumiverb/{route}", headers=self._headers, data=data, files=files,
-                                 timeout=self._timeout)
-        except (ai_requests.AddressRefused, ai_requests.Redirected) as e:
+                                 timeout=self._timeout, fingerprint=self._fingerprint)
+        except (ai_requests.AddressRefused, ai_requests.NotItsCertificate, ai_requests.Redirected) as e:
             raise error(str(e), endpoint_fault=True) from None
         except requests.RequestException as e:
             raise error(f"{self._url} didn't answer ({type(e).__name__})", endpoint_fault=True) from None

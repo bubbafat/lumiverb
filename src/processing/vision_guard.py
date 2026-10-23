@@ -28,4 +28,5 @@ class VisionGuard(JobGuard):
 
         # Each machine is asked for the model by the name it lists it as.
         return PooledCaptionProvider(self.pool, lambda m: get_caption_provider(
-            m.serves or self.pool.model, m.api_url, m.api_key, settings=settings, ocr_settings=ocr_settings))
+            m.serves or self.pool.model, m.api_url, m.api_key, settings=settings, ocr_settings=ocr_settings,
+            fingerprint=m.fingerprint))

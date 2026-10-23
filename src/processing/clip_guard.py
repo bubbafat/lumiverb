@@ -64,7 +64,7 @@ class WorkerClip:
     def __init__(self, machine: Machine, model: str) -> None:
         from src.processing.ai_worker_client import AiWorker
 
-        self._worker = AiWorker(machine.api_url, machine.api_key)
+        self._worker = AiWorker(machine.api_url, machine.api_key, fingerprint=machine.fingerprint)
         self._model = model
 
     def embed(self, image: bytes) -> dict[str, Any]:

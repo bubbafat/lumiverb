@@ -100,6 +100,32 @@ def test_a_machine_is_changed_by_what_is_given_and_its_key_never_goes_to_a_new_u
     assert [m["name"] for m in _ai(env)["machines"] if not m["built_in"]] == []
 
 
+def test_an_https_machine_is_added_and_changed_with_its_certificates_fingerprint(env, none, cli):
+    """--fingerprint: the certificate an https machine (Lumiverb's AI worker) is reached by alone; shown as it's
+    kept; forgotten with ''; and an http machine has none."""
+    worker, pinned = "https://10.10.10.3:6366/v1", ":".join(["7F"] * 32)
+    fake, seen = _machines({worker: (QWEN,), GAMING_PC: (QWEN,)})
+    with fake:
+        added = cli("machines", "add", "Worker", "--url", worker, "--jobs", "vision",
+                    "--fingerprint", pinned.replace(":", "").lower())
+        assert added.exit_code == 0, added.output
+        assert seen[-1]["fingerprint"] == pinned, "asked by it"
+        assert _machine(_ai(env), "Worker")["fingerprint"] == pinned
+        listed = cli("machines", "list")
+        assert listed.exit_code == 0 and "pinned" in listed.output
+        assert f"Worker's certificate: {pinned}" in listed.output
+        assert cli("machines", "models", "worker").exit_code == 0 and seen[-1]["fingerprint"] == pinned
+        wrong = cli("machines", "edit", "Worker", "--fingerprint", "7F:7F")
+        assert wrong.exit_code == 1 and "SHA-256" in wrong.output
+        assert cli("machines", "edit", "Worker", "--fingerprint", "").exit_code == 0
+        assert _machine(_ai(env), "Worker")["fingerprint"] == "" and seen[-1]["fingerprint"] == ""
+        refused = cli("machines", "add", "Ollama", "--url", GAMING_PC, "--jobs", "vision", "--fingerprint", pinned)
+        assert refused.exit_code == 1 and "https://" in refused.output
+        assert cli("machines", "add", "Ollama", "--url", GAMING_PC, "--jobs", "vision").exit_code == 0
+    assert {m["name"]: ai._tls(m) for m in _ai(env)["machines"]} == {"Built in": "", "Worker": "trusted",
+                                                                     "Ollama": "none"}
+
+
 def _described(env) -> str:
     """A photo described with the vision model there is now."""
     import uuid

@@ -41,8 +41,9 @@ def _answering(*, finish: str = "stop", status: int = 200, text: str = ""):
     description and tags), with the tokens it used; or with this status and text."""
     asked: list[dict] = []
 
-    def post(url, json=None, headers=None, timeout=None):
-        asked.append({"url": url, "json": json, "headers": headers or {}, "timeout": timeout})
+    def post(url, json=None, headers=None, timeout=None, fingerprint=""):
+        asked.append({"url": url, "json": json, "headers": headers or {}, "timeout": timeout,
+                      "fingerprint": fingerprint})
         resp = MagicMock(status_code=status, ok=status < 400, text=text)
         if status >= 400:
             resp.json.return_value = {"error": {"message": text}}
@@ -138,6 +139,32 @@ def test_a_machine_that_answers_with_a_redirect_is_said_and_it_isnt_followed(env
             assert {t["problem"] for t in out["tries"]} == {
                 "It answered with a redirect, which Lumiverb doesn't follow."}, out
     assert elsewhere.asked == []
+
+
+def test_a_machine_whose_certificate_isnt_the_one_it_was_added_with_is_said_plainly(env, none, tmp_path):
+    """A real machine on this computer over HTTPS, added with its certificate's fingerprint; then its certificate isn't
+    that one any more (the worker's folder made again, say): each try says so, and nothing reaches it."""
+    from sqlalchemy import update
+
+    from src.server.database import get_control_session
+    from src.server.models.control_plane import AiMachine
+    from tests.ai_machine_server import certificate, local_machine
+
+    client, headers, *_ = env
+    (files, pinned), (_, another) = certificate(tmp_path / "worker"), certificate(tmp_path / "another")
+    with local_machine(tls=files) as machine:
+        assert _add(env, name="Worker", api_url=machine.url, fingerprint=pinned).status_code == 201
+        assert client.put("/v1/ai/jobs/vision", json={"model": QWEN, "redo": False}, headers=headers).status_code == 200
+        machine_id = _machine(_ai(env), "Worker")["machine_id"]
+        with get_control_session() as ctrl:
+            ctrl.execute(update(AiMachine).where(AiMachine.machine_id == machine_id).values(fingerprint=another))
+            ctrl.commit()
+        machine.asked.clear()
+        for who in (headers, _server_admin(env)):
+            out = _try(env, machine_id, headers=who).json()
+            assert {t["problem"] for t in out["tries"]} == {
+                "Its certificate isn't the one it was added with. Nothing was sent to it."}, out
+    assert machine.asked == []
 
 
 def test_another_model_can_be_tried_and_none_is_said(env, none):

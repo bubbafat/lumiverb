@@ -982,6 +982,9 @@ export interface AiMachine {
   /** False for a saved key this install can't read (saved by another install: a backup restored here): enter it
    * again. */
   key_readable?: boolean;
+  /** The certificate an https machine was added with (its SHA-256, AB:CD:…): the only one taken from it. "" or
+   * missing: none (an https one is checked as any https site is). */
+  fingerprint?: string;
   jobs: string[];
   /** Requests it takes at once. */
   at_once: number;
@@ -1020,9 +1023,11 @@ export async function getAiSettings(): Promise<AiSettings> {
 }
 
 /** Ask a machine which models it offers (admins). api_key undefined: a saved
- * machine's key (machine_id), when it's that machine's URL. 502
+ * machine's key (machine_id), when it's that machine's URL (or it over
+ * https://); fingerprint undefined: a saved https machine's certificate. 502
  * machine_unreachable says why when it can't. */
-export async function connectMachine(body: { api_url: string; api_key?: string; machine_id?: string }): Promise<string[]> {
+export async function connectMachine(body: { api_url: string; api_key?: string; machine_id?: string;
+                                             fingerprint?: string }): Promise<string[]> {
   return (await apiFetch<{ models: string[] }>("/ai/connect", { method: "POST", body })).models;
 }
 
@@ -1031,6 +1036,8 @@ export interface MachineFields {
   api_url: string;
   /** undefined keeps the saved key (edits); "" none. */
   api_key?: string;
+  /** An https machine's certificate fingerprint; undefined keeps the saved one (edits), "" none. */
+  fingerprint?: string;
   jobs: string[];
   at_once: number;
   enabled?: boolean;

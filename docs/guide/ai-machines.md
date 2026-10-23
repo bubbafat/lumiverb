@@ -28,11 +28,12 @@ On a Mac, its transcripts run on the processor, not the GPU. To transcribe faste
 1. Open **Settings › AI** and click **Add machine**.
 2. Under **Where**, choose Ollama on this computer, Ollama on another computer, OpenAI, Anthropic (Claude), Google Gemini, or Custom URL (any other OpenAI-compatible server). It fills in the **Endpoint URL** and **Name**, and says whether it needs a key.
 3. Paste the **API key**, if it needs one.
-4. Click **Connect**. It lists the models the machine offers.
-5. Under **Does**, tick its jobs. Those whose model it offers are ticked already.
-6. Set **Requests at once**: how many it works on together. More needs more memory there.
-7. If it shares a GPU with Lumiverb on the same computer, tick **Shares the GPU with video work here**: it gets fewer requests while videos are decoded.
-8. Click **Add**.
+4. For an `https://` URL whose certificate no public authority signed, such as Lumiverb's own [AI worker](ai-worker.md), paste its **Certificate fingerprint**: Lumiverb then takes that certificate from it and no other. Leave it empty for a cloud service: its certificate is checked as any https site's is.
+5. Click **Connect**. It lists the models the machine offers.
+6. Under **Does**, tick its jobs. Those whose model it offers are ticked already.
+7. Set **Requests at once**: how many it works on together. More needs more memory there.
+8. If it shares a GPU with Lumiverb on the same computer, tick **Shares the GPU with video work here**: it gets fewer requests while videos are decoded.
+9. Click **Add**.
 
 Then choose the job's model under **Models** (below). Work is spread across every machine online and doing the job.
 
@@ -115,6 +116,12 @@ The reason is in Lumiverb's words, such as "refused the key" or "answered 500", 
 
 Lumiverb sends a machine's work, and its key, only to the address you gave it. A machine that answers with a redirect to somewhere else is offline: Lumiverb doesn't follow it. The address is checked again at every request, as when the machine was added: this computer and your network are fine; link-local and cloud metadata addresses never are.
 
+A machine added with a certificate fingerprint whose certificate isn't that one any more is offline too, saying "Its certificate isn't the one it was added with": nothing is sent to it. If its certificate really changed, **Edit** it and give the new fingerprint.
+
+## Unencrypted machines
+
+A machine at an `http://` address on another computer is marked **Unencrypted**: its key and the photos it's sent cross your network as they are. Ollama serves only plain HTTP, so use one on another computer only on a network you trust. Lumiverb's own AI worker serves HTTPS: one set up before it did is marked with how to switch it (see [A second machine for search and faces](ai-worker.md#a-worker-from-before-https)). A machine on this computer (`localhost`) crosses no network and isn't marked.
+
 ## Keys stay sealed
 
 A machine's key is never shown again once saved, to anyone. Editing a machine, leave the key blank to keep it, or tick **Remove the saved key**. Keys are sealed in the database with a key from the install's env file, so a backup alone can't read them: keep a copy of the env file with your backups (see [Backups and restore](backups.md#keep-a-copy-of-the-env-file)). Restored without it, a machine says its saved key can't be read here: enter it again.
@@ -145,4 +152,4 @@ lumiverb ai model vision qwen3-vl:8b-instruct
 lumiverb ai machines test Ollama
 ```
 
-The jobs are called `vision` (descriptions & text), `transcripts`, `clip` and `faces`. `--key` asks for a machine's key at a prompt, so it never appears on the command line. More in [The command line](command-line.md).
+The jobs are called `vision` (descriptions & text), `transcripts`, `clip` and `faces`. `--key` asks for a machine's key at a prompt, so it never appears on the command line. `--fingerprint` gives an https machine's certificate fingerprint (on `add`, `edit` and `models`; `--fingerprint ''` on `edit` forgets it). More in [The command line](command-line.md).

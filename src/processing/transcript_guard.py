@@ -48,4 +48,4 @@ def _transcriber_for(machine: Machine) -> Transcriber:
 
     if machine.built_in:
         return BuiltInWhisper(machine.serves)
-    return OpenAITranscriber(machine.api_url, machine.api_key, machine.serves)
+    return OpenAITranscriber(machine.api_url, machine.api_key, machine.serves, fingerprint=machine.fingerprint)

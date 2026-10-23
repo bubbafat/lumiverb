@@ -8,7 +8,8 @@
     lumiverb-server reset-password --env FILE [--email EMAIL]
     lumiverb-server backup --env FILE [--before-upgrade]
     lumiverb-server restore --env FILE BACKUP [--yes]
-    lumiverb-server ai-worker --env FILE [--host HOST] [--port PORT] [--at-once N] [--show-key | --install | --uninstall]
+    lumiverb-server ai-worker --env FILE [--host HOST] [--port PORT] [--at-once N] [--https | --plain-http]
+                              [--show-key | --show-fingerprint | --install | --uninstall]
 
 init: the install's env file and nginx's config, each written only if it
 isn't there (init.py), for Homebrew's post_install.
@@ -55,8 +56,13 @@ the while if the service is stopped.
 ai-worker: CLIP and face detection for another machine's scheduler, as an
 AI machine in its Settings › AI (ADR-022, src/server/ai_worker/): the
 install's models, no account, database or files; on every interface, port
-6366, by default. Its key is made on first start, kept in the data folder
-(owner-only), and printed by --show-key, to paste into Settings › AI.
+6366, by default, over HTTPS with a certificate of its own. Its key and its
+certificate are made on first start, kept in the data folder (owner-only),
+and printed by --show-key and --show-fingerprint; what to add in Settings ›
+AI (its https:// address, the certificate's fingerprint, where its key is)
+is printed at every start and by --install. A worker set up before it
+served HTTPS has no certificate: it goes on serving plain HTTP, saying so
+loudly, until it's started with --https; --plain-http chooses plain HTTP.
 --install runs it as a Mac's service (a launchd agent of its own:
 src/server/ai_worker/service.py), --uninstall takes that away; after `brew
 upgrade` it restarts into the new install, as run does.
@@ -938,8 +944,39 @@ def _has_database(url: str) -> bool:
         engine.dispose()
 
 
+def _worker_addresses(host: str, port: int, scheme: str) -> list[str]:
+    """Where the other Lumiverb reaches the worker: the address it listens on, or (on every interface) this
+    machine's name and its address on the network."""
+    if host not in ("0.0.0.0", "::", ""):
+        return [f"{scheme}://{f'[{host}]' if ':' in host else host}:{port}/v1"]
+    return [f"{url}/v1" for url in network.addresses(port, scheme)]
+
+
+def _what_to_add(args: argparse.Namespace, pinned: str | None, env_file: Path | None) -> list[tuple[bool, str]]:
+    """What to add in the other Lumiverb's Settings › AI, as lines (loud: said as a warning): its address, its
+    certificate's fingerprint over HTTPS, and where its key is; over plain HTTP, said loudly, and how to switch."""
+    show_key = f"lumiverb-server ai-worker{f' --env {env_file}' if env_file else ''} --show-key"
+    urls = _worker_addresses(args.host, args.port, "https" if pinned else "http")
+    at = urls[0] + (f" (or {', '.join(urls[1:])})" if urls[1:] else "")
+    if pinned:
+        return [(False, f"In the other Lumiverb's Settings › AI, add a machine at {at}"),
+                (False, f"with the certificate fingerprint {pinned}"),
+                (False, f"and its key ({show_key}), doing CLIP and faces.")]
+    lines = [(True, "PLAIN HTTP: its key and the photos it's sent cross the network unencrypted.")]
+    if args.plain_http:
+        lines.append((True, "It was started with --plain-http; without it, it serves HTTPS."))
+    else:
+        lines += [(True, "It was set up before the AI worker served HTTPS, and the Lumiverb using it has its http://"
+                         " address, so it still serves plain HTTP."),
+                  (True, "To switch: start it with --https (a Mac's service: --install --https), then in that"
+                         " Lumiverb's Settings › AI change its address to https:// and give it the certificate"
+                         " fingerprint this prints.")]
+    return lines + [(False, f"In the other Lumiverb's Settings › AI, it's a machine at {at}"),
+                    (False, f"with its key ({show_key}), doing CLIP and faces.")]
+
+
 def _ai_worker(args: argparse.Namespace) -> int:
-    from src.server.ai_worker import ensure_key
+    from src.server.ai_worker import ensure_certificate, ensure_key, fingerprint, serves_https
 
     env = install_env(args.env)
     data = data_dir(env)
@@ -947,11 +984,19 @@ def _ai_worker(args: argparse.Namespace) -> int:
     if args.show_key:
         print(key)
         return 0
+    if args.show_fingerprint:
+        if (made := fingerprint(data)) is None:
+            raise InstallError("This worker has no certificate: it serves plain HTTP, as it was set up before the AI"
+                               " worker served HTTPS. Start it with --https to make one.")
+        print(made)
+        return 0
     if args.uninstall:
         from src.server.ai_worker.service import uninstall
 
         print("✓ The AI worker's service is stopped and gone" if uninstall() else "No AI worker service here")
         return 0
+    # Its certificate, made now if it's asked for HTTPS and has none, so what to add says its fingerprint.
+    pinned = ensure_certificate(data) if serves_https(data, https=args.https, plain_http=args.plain_http) else None
     if args.install:
         from src.server.ai_worker.service import install
 
@@ -959,12 +1004,14 @@ def _ai_worker(args: argparse.Namespace) -> int:
         if env_file is None:
             raise InstallError("--install needs the install's env file (--env FILE): the service names it")
         try:
-            path = install(_launched_as(), env_file, data, host=args.host, port=args.port, at_once=args.at_once)
+            path = install(_launched_as(), env_file, data, host=args.host, port=args.port, at_once=args.at_once,
+                           https=args.https, plain_http=args.plain_http)
         except RuntimeError as exc:
             raise InstallError(str(exc)) from None
-        print(f"✓ The AI worker runs as a service ({path}), on port {args.port}, and again at login.\n"
-              f"  In the other Lumiverb's Settings › AI, add a machine at http://<this Mac's name>:{args.port}/v1\n"
-              f"  with its key (lumiverb-server ai-worker --env {env_file} --show-key) doing CLIP and faces.")
+        print(f"✓ The AI worker runs as a service ({path}), on port {args.port}"
+              f"{' over HTTPS' if pinned else ''}, and again at login.")
+        for loud, line in _what_to_add(args, pinned, env_file):
+            print(f"  {'⚠ ' if loud else ''}{line}")
         return 0
     os.environ.update(env)  # DATA_DIR: the models folder (src/processing/models_dir.py)
     import uvicorn
@@ -986,16 +1033,23 @@ def _ai_worker(args: argparse.Namespace) -> int:
     launched, upgraded = _launched_as(), threading.Event()
     threading.Thread(target=watch_for_upgrade, args=(launched, stop, upgraded), name="upgrade-watch",
                      daemon=True).start()
+    from src.server.ai_worker import certificate_files
+
+    certificate, certificate_key = certificate_files(data)
+    tls = {"ssl_certfile": str(certificate), "ssl_keyfile": str(certificate_key)} if pinned else {}
     server = uvicorn.Server(uvicorn.Config(make_app(models, key, at_once=args.at_once), host=args.host,
-                                           port=args.port, access_log=False, log_config=None))
+                                           port=args.port, access_log=False, log_config=None, **tls))
 
     def stop_serving() -> None:
         stop.wait()
         server.should_exit = True
 
     threading.Thread(target=stop_serving, name="ai-worker-stop", daemon=True).start()
-    logger.info("Lumiverb AI worker on %s:%d, %d at once: CLIP %s, faces %s. Its key: lumiverb-server ai-worker "
-                "--show-key", args.host, args.port, args.at_once, ", ".join(CLIP_MODELS), ", ".join(sorted(FACE_MODELS)))
+    logger.info("Lumiverb AI worker on %s:%d over %s, %d at once: CLIP %s, faces %s.", args.host, args.port,
+                "HTTPS" if pinned else "plain HTTP", args.at_once, ", ".join(CLIP_MODELS),
+                ", ".join(sorted(FACE_MODELS)))
+    for loud, line in _what_to_add(args, pinned, _named_env_file(args.env)):
+        (logger.warning if loud else logger.info)("%s", line)
     try:
         server.run()
     finally:
@@ -1072,6 +1126,14 @@ def main(argv: list[str] | None = None) -> int:
     worker_command.add_argument("--port", type=int, default=DEFAULT_AI_WORKER_PORT, help="its port (6366)")
     worker_command.add_argument("--at-once", type=int, default=2, help="requests it works on at once (2)")
     worker_command.add_argument("--show-key", action="store_true", help="print its key (made if there's none) and stop")
+    worker_command.add_argument("--show-fingerprint", action="store_true",
+                                help="print its certificate's fingerprint, to give the other Lumiverb, and stop")
+    serving = worker_command.add_mutually_exclusive_group()
+    serving.add_argument("--https", action="store_true",
+                         help="serve HTTPS (its own certificate, made if there's none): a worker set up before it "
+                              "served HTTPS switches to it")
+    serving.add_argument("--plain-http", action="store_true",
+                         help="serve plain HTTP: its key and the photos it's sent cross the network unencrypted")
     worker_command.add_argument("--install", action="store_true",
                                 help="run it as this Mac's service (a launchd agent: at login, after upgrades)")
     worker_command.add_argument("--uninstall", action="store_true", help="stop the service and take it away")

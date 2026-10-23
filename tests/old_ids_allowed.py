@@ -242,13 +242,16 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         'clip': (
             'docs/cursor-api.md', 'src/processing/ai_worker_client.py', 'src/processing/clip_guard.py',
             'src/producers/clip/work.py', 'src/producers/pools.py', 'src/server/scheduler/models.py',
-            'src/ui/web/src/pages/settings/AiSection.test.tsx', 'tests/test_ai_machines.py', 'tests/test_ai_worker.py',
+            'src/ui/web/src/pages/settings/AiSection.test.tsx', 'src/ui/web/src/pages/settings/AiSection.tsx',
+            'tests/test_ai_machines.py', 'tests/test_ai_worker.py',
             'tests/test_clip_guard.py', 'tests/test_producers_registry.py', 'tests/test_scheduler_e2e.py',
             'tests/test_scheduler_runners.py', 'tests/test_scheduler_service.py',
         ),
         'faces': (
             'docs/cursor-api.md', 'src/processing/faces_guard.py', 'src/producers/faces/work.py',
-            'src/producers/pools.py', 'src/server/scheduler/models.py', 'tests/test_ai_machines.py',
+            'src/producers/pools.py', 'src/server/scheduler/models.py',
+            'src/ui/web/src/pages/settings/AiSection.test.tsx', 'src/ui/web/src/pages/settings/AiSection.tsx',
+            'tests/test_ai_machines.py',
             'tests/test_preserve_human_data_slow.py', 'tests/test_producers_registry.py', 'tests/test_scheduler_e2e.py',
             'tests/test_scheduler_service.py',
         ),

@@ -4,17 +4,24 @@ kind of request (descriptions, text, a video's description, transcripts,
 Lumiverb's AI worker, a models list, the CLI's); the machine's name is
 checked again at each request, and the address each connection reached
 before anything is sent on it, by the rule a machine is added by
-(vision_endpoint.allowed). What a machine says when it fails is the log's:
-the error, which every signed-in person sees as the machine's status, why
-work waits or a clip's failure, says what went wrong in Lumiverb's words.
+(vision_endpoint.allowed). An https machine added with its certificate's
+fingerprint is reached with that certificate and no other, whoever signed
+it: a connection with another is closed after its handshake, before
+anything is sent on it, and it's the machine's fault, said plainly. What a
+machine says when it fails is the log's: the error, which every signed-in
+person sees as the machine's status, why work waits or a clip's failure,
+says what went wrong in Lumiverb's words.
 
-The machines are real HTTP servers on this computer (tests/ai_machine_server.py).
+The machines are real HTTP and HTTPS servers on this computer
+(tests/ai_machine_server.py), with certificates made as Lumiverb's AI worker
+makes its own.
 """
 
 from __future__ import annotations
 
 import io
 import ipaddress
+import json
 import logging
 import socket
 import threading
@@ -33,8 +40,15 @@ from src.processing.workers.faces import FaceError
 from src.processing.workers.transcripts.base import TranscriptError
 from src.processing.workers.transcripts.openai_compatible import OpenAITranscriber
 from src.shared import ai_requests
-from src.shared.vision_endpoint import UNREACHABLE, VisionEndpointError, allowed, list_models
-from tests.ai_machine_server import MODEL, WORKS, local_machine, redirecting
+from src.shared.vision_endpoint import (
+    NOT_ITS_CERTIFICATE,
+    UNREACHABLE,
+    UNTRUSTED,
+    VisionEndpointError,
+    allowed,
+    list_models,
+)
+from tests.ai_machine_server import MODEL, WORKS, certificate, local_machine, redirecting
 
 pytestmark = pytest.mark.fast
 
@@ -73,29 +87,32 @@ def _wav(tmp_path: Path) -> Path:
     return path
 
 
-# What each kind of request raises, and whether it was the machine's fault.
-def _describe(url, tmp_path):
-    return OpenAICompatibleCaptionProvider(url, MODEL, "sk-1").describe(_picture(tmp_path))
+# What each kind of request raises, and whether it was the machine's fault. fingerprint: the certificate an https
+# machine was added with.
+def _describe(url, tmp_path, fingerprint=""):
+    return OpenAICompatibleCaptionProvider(url, MODEL, "sk-1", fingerprint=fingerprint).describe(_picture(tmp_path))
 
 
-def _describe_text(url, tmp_path):
-    return OpenAICompatibleCaptionProvider(url, MODEL, "sk-1").describe_text("1. (0:00) Waves.")
+def _describe_text(url, tmp_path, fingerprint=""):
+    return OpenAICompatibleCaptionProvider(url, MODEL, "sk-1", fingerprint=fingerprint).describe_text(
+        "1. (0:00) Waves.")
 
 
-def _read_text(url, tmp_path):
-    return OpenAICompatibleCaptionProvider(url, MODEL, "sk-1").extract_text(_picture(tmp_path))
+def _read_text(url, tmp_path, fingerprint=""):
+    return OpenAICompatibleCaptionProvider(url, MODEL, "sk-1", fingerprint=fingerprint).extract_text(
+        _picture(tmp_path))
 
 
-def _transcribe(url, tmp_path):
-    return OpenAITranscriber(url, "sk-1", "small").transcribe(_wav(tmp_path))
+def _transcribe(url, tmp_path, fingerprint=""):
+    return OpenAITranscriber(url, "sk-1", "small", fingerprint=fingerprint).transcribe(_wav(tmp_path))
 
 
-def _clip(url, tmp_path):
-    return AiWorker(url, "sk-1").clip(_png(), "ViT-B-32")
+def _clip(url, tmp_path, fingerprint=""):
+    return AiWorker(url, "sk-1", fingerprint=fingerprint).clip(_png(), "ViT-B-32")
 
 
-def _faces(url, tmp_path):
-    return AiWorker(url, "sk-1", error=FaceError).faces(_png(), {"level": "normal"})
+def _faces(url, tmp_path, fingerprint=""):
+    return AiWorker(url, "sk-1", fingerprint=fingerprint, error=FaceError).faces(_png(), {"level": "normal"})
 
 
 WORK = {"describe": (_describe, CaptionError), "describe_text": (_describe_text, CaptionError),
@@ -302,3 +319,166 @@ def test_what_an_ai_worker_says_with_a_failure_is_the_logs(caplog, answer, error
         work(machine.url, None)
     assert raised.value.endpoint_fault is fault
     assert str(raised.value) == f"{machine.url} {says}" and SECRET in caplog.text
+
+
+NOT_ITS = "has a certificate that isn't the one it was added with."
+
+
+@pytest.fixture
+def certificates(tmp_path):
+    """The machine's certificate (as Lumiverb's AI worker makes its own: signed by nobody), and another's."""
+    return certificate(tmp_path / "machine"), certificate(tmp_path / "another")
+
+
+@pytest.mark.parametrize("kind", list(WORK))
+def test_every_kind_of_work_reaches_a_machine_over_https_by_the_certificate_it_was_added_with(
+        tmp_path, no_waiting, certificates, kind):
+    """Its own certificate, which no authority signed and which names nobody here: taken, as it's the one it was
+    added with. Another one, as good, isn't: nothing is asked of it, and it's the machine's fault, said plainly."""
+    work, error = WORK[kind]
+    (files, pinned), (_, another) = certificates
+    with local_machine(tls=files) as machine:
+        assert machine.url.startswith("https://")
+        work(machine.url, tmp_path, pinned)
+        assert machine.asked and all(method == "POST" for method, _ in machine.asked)
+        machine.asked.clear()
+        with pytest.raises(error) as raised:
+            work(machine.url, tmp_path, another)
+    assert machine.asked == [], "nothing reached it"
+    assert raised.value.endpoint_fault is True and str(raised.value).endswith(NOT_ITS), str(raised.value)
+    assert str(raised.value).startswith(machine.url)
+
+
+def test_a_models_list_is_asked_by_the_certificate_and_one_without_it_is_checked_as_any_https_sites(
+        certificates, caplog):
+    """Connect, adding a machine and the scheduler's check: its fingerprint, and it lists its models; another's,
+    said plainly; none, and its certificate is checked as any https site's is, which one signed by nobody isn't."""
+    (files, pinned), (_, another) = certificates
+    with local_machine(tls=files) as machine, caplog.at_level(logging.WARNING):
+        assert list_models(machine.url, "sk-1", fingerprint=pinned) == [MODEL]
+        with pytest.raises(VisionEndpointError) as raised:
+            list_models(machine.url, "sk-1", fingerprint=another)
+        assert str(raised.value) == NOT_ITS_CERTIFICATE == "Its certificate isn't the one it was added with."
+        with pytest.raises(VisionEndpointError) as raised:
+            list_models(machine.url, "sk-1")
+        assert str(raised.value) == UNTRUSTED
+    assert machine.asked == [("GET", "/v1/models")]
+    assert pinned in caplog.text or another in caplog.text, "which certificate it had is the log's"
+
+
+class _TLSListener:
+    """A TLS port on this computer with the machine's certificate, that keeps what each connection sent it once its
+    handshake was done, and answers a request it's sent whole."""
+
+    def __init__(self, files) -> None:
+        import ssl
+
+        self.handshakes = 0
+        self.received: list[bytes] = []
+        self._context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self._context.load_cert_chain(*map(str, files))
+        self._sock = socket.socket()
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen()
+        self.port = self._sock.getsockname()[1]
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:
+        import ssl
+
+        while True:
+            try:
+                conn, _ = self._sock.accept()
+            except OSError:
+                return
+            with conn:
+                conn.settimeout(5)
+                try:
+                    tls = self._context.wrap_socket(conn, server_side=True)
+                except (OSError, ssl.SSLError):
+                    continue
+                self.handshakes += 1
+                got = b""
+                try:
+                    while chunk := tls.recv(65536):
+                        got += chunk
+                        head, ended, body = got.partition(b"\r\n\r\n")
+                        length = int(next((line.split(b":", 1)[1] for line in head.split(b"\r\n")
+                                           if line.lower().startswith(b"content-length:")), b"0"))
+                        if ended and len(body) >= length:
+                            answer = json.dumps(WORKS).encode()
+                            tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                                        + str(len(answer)).encode() + b"\r\nConnection: close\r\n\r\n" + answer)
+                            break
+                except (OSError, ssl.SSLError):
+                    pass
+                self.received.append(got)
+
+    def close(self) -> None:
+        self._sock.close()
+
+
+def _settled(listener, connections: int) -> None:
+    deadline = __import__("time").monotonic() + 5
+    while len(listener.received) < connections and __import__("time").monotonic() < deadline:
+        __import__("time").sleep(0.01)
+
+
+def test_a_certificate_that_isnt_the_one_it_was_added_with_gets_nothing_sent_to_it(certificates, caplog):
+    """The connection reaches its handshake (where its certificate is seen) and is closed there: neither the request,
+    its key nor the work goes on it. With the right one, the same request arrives whole."""
+    (files, pinned), (_, another) = certificates
+    listener = _TLSListener(files)
+    url = f"https://127.0.0.1:{listener.port}/v1/lumiverb/clip"
+    try:
+        with caplog.at_level(logging.WARNING), pytest.raises(ai_requests.NotItsCertificate) as raised:
+            ai_requests.post(url, headers={"Authorization": "Bearer sk-1"}, data={"model": "ViT-B-32"},
+                             files=[("images", ("0.img", _png(), "application/octet-stream"))], timeout=5,
+                             fingerprint=another)
+        _settled(listener, 1)
+        assert listener.handshakes == 1, "it got as far as the certificate"
+        assert listener.received == [b""], "and not a byte after it"
+        assert str(raised.value) == f"{url} {NOT_ITS}"
+        assert isinstance(raised.value, requests.ConnectionError), "unreachable, as far as the work goes"
+        assert pinned in caplog.text and another in caplog.text, "which it had, and which it was added with: the log's"
+
+        r = ai_requests.post(url, headers={"Authorization": "Bearer sk-1"}, data={"model": "ViT-B-32"},
+                             files=[("images", ("0.img", _png(), "application/octet-stream"))], timeout=5,
+                             fingerprint=pinned)
+        assert r.status_code == 200 and r.json() == WORKS
+        _settled(listener, 2)
+        assert listener.handshakes == 2
+        sent = listener.received[1]
+        assert sent.startswith(b"POST /v1/lumiverb/clip ") and b"Bearer sk-1" in sent and _png() in sent
+    finally:
+        listener.close()
+
+
+def test_a_fingerprint_is_taken_typed_any_way_and_kept_one_way():
+    kept = "AB:" * 31 + "CD"
+    for typed in (kept, kept.lower(), kept.replace(":", ""), kept.replace(":", " "), f"  {kept.lower()}\n"):
+        assert ai_requests.fingerprint_typed(typed) == kept and ai_requests.FINGERPRINT.fullmatch(kept)
+    for wrong in ("", "AB:CD", kept + ":EF", kept[:-1] + "G", "sha256:" + kept.replace(":", "")):
+        with pytest.raises(ValueError, match="SHA-256"):
+            ai_requests.fingerprint_typed(wrong)
+    assert ai_requests.fingerprint_of(b"certificate") == ai_requests.fingerprint_typed(
+        __import__("hashlib").sha256(b"certificate").hexdigest())
+
+
+def test_a_fingerprint_is_an_https_machines_alone(listener):
+    """Never sent to an http address, where it would check nothing."""
+    with pytest.raises(ValueError, match="https"):
+        ai_requests.get(f"http://127.0.0.1:{listener.port}/v1/models", timeout=5, fingerprint="AB:" * 31 + "CD")
+    assert listener.received == []
+
+
+def test_a_pinned_certificate_never_goes_through_a_socks_proxy(monkeypatch, certificates):
+    """A SOCKS proxy's connections aren't Lumiverb's to check: a request whose certificate must be compared doesn't
+    take one (an http proxy's tunnel is: the certificate is compared through it)."""
+    (files, pinned), _ = certificates
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "socks5://127.0.0.1:9")
+    with local_machine(tls=files) as machine, pytest.raises(requests.ConnectionError) as raised:
+        ai_requests.get(machine.url + "/models", timeout=5, fingerprint=pinned)
+    assert "SOCKS" in str(raised.value) and machine.asked == []

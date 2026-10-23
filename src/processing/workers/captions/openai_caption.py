@@ -45,6 +45,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         *,
         settings: dict | None = None,
         ocr_settings: dict | None = None,
+        fingerprint: str = "",
     ) -> None:
         from src.producers.names import DESCRIPTION, TEXT
         from src.shared.producers import effective_settings
@@ -52,6 +53,8 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
+        # The certificate an https machine was added with (src/shared/ai_requests.py).
+        self._fingerprint = fingerprint
         # Output-affecting settings (prompt, image size, sampling): the server's,
         # so what's recorded in lineage is what was sent. Defaults otherwise.
         self._vision = settings or effective_settings(DESCRIPTION)
@@ -512,7 +515,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             headers["Authorization"] = f"Bearer {self._api_key}"
         url = f"{self._base_url}/chat/completions"
         # Its address checked, no redirect followed (Redirected: the machine's fault, as is_endpoint_fault says).
-        resp = ai_requests.post(url, json=payload, headers=headers, timeout=timeout)
+        resp = ai_requests.post(url, json=payload, headers=headers, timeout=timeout, fingerprint=self._fingerprint)
         if resp.status_code == 400 and "temperature" in payload and "temperature" in resp.text.lower():
             logger.warning("%s won't take a temperature (%s): asking it without one from now on",
                            self._base_url, resp.text[:200])
