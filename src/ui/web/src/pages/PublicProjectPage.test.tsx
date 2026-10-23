@@ -72,8 +72,7 @@ const thumbs = (root: HTMLElement) => root.querySelectorAll('img[src="blob:thumb
 describe("PublicProjectPage", () => {
   it("asks for each clip's media through the project, not as a library", async () => {
     imageCalls.length = 0;
-    const { findAllByRole } = renderPage();
-    await findAllByRole("img").catch(() => []);
+    renderPage();
     await waitFor(() => expect(imageCalls.length).toBeGreaterThan(0));
     for (const opts of imageCalls) {
       expect(opts).toMatchObject({ isPublic: true, publicProjectId: "prj_1" });
