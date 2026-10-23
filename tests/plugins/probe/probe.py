@@ -102,9 +102,16 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         return request, ("lumiverb", 0)
 
 
+def write_whole(path: str, text: str) -> None:
+    """The file whole or not yet there: written beside it, then renamed in (a test reads it while it's written)."""
+    part = path + ".part"
+    with open(part, "w") as f:
+        f.write(text)
+    os.replace(part, path)
+
+
 if __name__ == "__main__":
-    with open(os.path.join(DATA, "started.json"), "w") as f:
-        json.dump(STARTED, f)
+    write_whole(os.path.join(DATA, "started.json"), json.dumps(STARTED))
     path = os.environ["LUMIVERB_PLUGIN_SOCKET"]
     if os.path.exists(path):
         os.unlink(path)

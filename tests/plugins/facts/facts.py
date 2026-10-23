@@ -83,6 +83,14 @@ def work(sent: dict) -> dict:
     return {"clips": out}
 
 
+def write_whole(path: str, text: str) -> None:
+    """The file whole or not yet there: written beside it, then renamed in (a test reads it while it's written)."""
+    part = path + ".part"
+    with open(part, "w") as f:
+        f.write(text)
+    os.replace(part, path)
+
+
 class Handler(BaseHTTPRequestHandler):
     def address_string(self) -> str:  # a Unix socket's peer has no host
         return "lumiverb"
@@ -96,15 +104,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 — http.server's name
         sent = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         if self.path == "/v1/lookups/places":
-            with open(os.path.join(DATA, "last-lookup.json"), "w") as f:
-                json.dump(sent, f)
+            write_whole(os.path.join(DATA, "last-lookup.json"), json.dumps(sent))
             self._answer(200, lookup(sent))
             return
         if self.path != "/v1/work":
             self._answer(404, {"error": "not found"})
             return
-        with open(os.path.join(DATA, "last-work.json"), "w") as f:
-            json.dump(sent, f)
+        write_whole(os.path.join(DATA, "last-work.json"), json.dumps(sent))
         self._answer(200, work(sent))
 
     def _answer(self, status: int, body: dict) -> None:

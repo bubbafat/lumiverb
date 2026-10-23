@@ -97,15 +97,22 @@ def _fill() -> None:
         time.sleep(0.5)
 
 
+def write_whole(path: str, text: str) -> None:
+    """The file whole or not yet there: written beside it, then renamed in (a test reads it while it's written)."""
+    part = path + ".part"
+    with open(part, "w") as f:
+        f.write(text)
+    os.replace(part, path)
+
+
 def main() -> int:
     if MODE == "crash":
         print("crashing on purpose", flush=True)
         return 3
     if MODE == "env":
-        with open(os.path.join(DATA, "env.json"), "w") as f:
-            json.dump(dict(os.environ), f)
-        with open(os.environ["LUMIVERB_PLUGIN_SETTINGS"]) as given, open(os.path.join(DATA, "settings.json"), "w") as f:
-            f.write(given.read())
+        write_whole(os.path.join(DATA, "env.json"), json.dumps(dict(os.environ)))
+        with open(os.environ["LUMIVERB_PLUGIN_SETTINGS"]) as given:
+            write_whole(os.path.join(DATA, "settings.json"), given.read())
     if MODE == "memory":
         held = bytearray(300 * 1024 * 1024)
         for i in range(0, len(held), 4096):
