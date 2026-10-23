@@ -11,7 +11,9 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { NavigateFunction } from "react-router-dom";
 import { ScrollContainerContext } from "../context/ScrollContainerContext";
 import BrowsePage from "./BrowsePage";
-import { clipsWith, firstOnScreen, gridHeight, placeOf, reportScroll, scrollTo, stubLayout, stubScrollTo } from "./scrolledGrid.testutil";
+import {
+  ABOVE_GRID, clipsWith, firstOnScreen, gridHeight, placeOf, reportScroll, scrollTo, stubLayout, stubScrollTo,
+} from "./scrolledGrid.testutil";
 
 const api = vi.hoisted(() => ({
   getApiKey: vi.fn(),
@@ -478,12 +480,19 @@ describe("BrowsePage new clips pill", () => {
 
   it("counts down as the new clips are scrolled onto the screen", async () => {
     const { scroller } = await scrolledThenRefreshed();
-    // The new clips are the grid's first rows: scroll up to just past them.
+    // The new clips are the grid's first rows, and the refresh moved what's on screen down by their height (it was
+    // at 1500): scroll up from just below them to just past them. Stepping from where it is re-rendered the grid
+    // some 40 times, a second or more of the test's five while the machine was busy.
+    const newRows = scroller.scrollTop - 1500;
+    expect(newRows).toBeGreaterThan(0);
     let n = 7;
-    for (let top = scroller.scrollTop; top > 0 && n === 7; top -= 50) {
+    let steps = 0;
+    for (let top = ABOVE_GRID + newRows + 100; top > 0 && n === 7; top -= 50) {
       scrollTo(scroller, top);
       n = Number(pill()?.textContent?.split(" ")[0] ?? 0);
+      steps += 1;
     }
+    expect(steps).toBeLessThan(10);
     expect(n).toBeLessThan(7);
     scrollTo(scroller, 1500);
     expect(Number(pill()?.textContent?.split(" ")[0] ?? 0)).toBe(n);
