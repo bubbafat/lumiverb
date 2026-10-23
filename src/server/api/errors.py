@@ -164,6 +164,71 @@ async def storage_unavailable_handler(request: Request, exc: Exception) -> JSONR
     return envelope(503, "storage_unavailable", STORAGE_UNAVAILABLE, headers={"Retry-After": "30"})
 
 
+# Text that isn't text in what a request sent (src/server/api/no_nul.py): PostgreSQL keeps none of it. What was
+# found, details.found, says which.
+NOT_TEXT = "not_text"
+NOT_TEXT_SAYS = {
+    "nul": "Nothing sent to Lumiverb can hold a NUL character (\\0): send it without one.",
+    "surrogate": ("Nothing sent to Lumiverb can hold half a character (a lone surrogate, U+D800 to U+DFFF): "
+                  "send the whole character, or none."),
+    "not_utf8": "A URL's text is UTF-8, its other bytes percent-encoded: this one has bytes that aren't UTF-8.",
+}
+# psycopg2's refusal of text holding a NUL, a ValueError: "A string literal cannot contain NUL (0x00) characters."
+_DATABASE_NUL = "NUL (0x00)"
+
+
+def not_text(found: str, where: str | None = None) -> ApiError:
+    """400 not_text: details.found says what (nul, surrogate or not_utf8), details.in where (path, query, body or
+    form) when it's known."""
+    return ApiError(400, NOT_TEXT, NOT_TEXT_SAYS[found], {"found": found, **({"in": where} if where else {})})
+
+
+def not_text_response(found: str, where: str | None = None, headers: dict[str, str] | None = None) -> JSONResponse:
+    error = not_text(found, where)
+    return envelope(error.status_code, error.code, error.message, error.details, headers)
+
+
+def refused_by_the_database(exc: Exception) -> str | None:
+    """What the database refused of a request's text, or None: "nul" (psycopg2's
+    ValueError; jsonb's 22P05 for one written \\u0000) or "surrogate" (psycopg2
+    encoding one, a UnicodeEncodeError raised in its or SQLAlchemy's code, never
+    a response's own; jsonb's 22P02 for one written \\ud800)."""
+    if type(exc) is ValueError:
+        return "nul" if _DATABASE_NUL in str(exc) else None
+    if isinstance(exc, UnicodeEncodeError):
+        return "surrogate" if exc.reason == "surrogates not allowed" and _raised_sending_a_query(exc) else None
+    orig = getattr(exc, "orig", None)
+    code = getattr(orig, "pgcode", None)
+    if code == "22P05":  # untranslatable_character: "\u0000 cannot be converted to text."
+        return "nul"
+    if code == "22P02" and "surrogate" in str(orig):  # "Unicode low surrogate must follow a high surrogate."
+        return "surrogate"
+    return None
+
+
+def _raised_sending_a_query(exc: BaseException) -> bool:
+    """Whether the innermost Python code the exception passed was the database layer's (SQLAlchemy's execute,
+    calling psycopg2's C code, or psycopg2's own)."""
+    module, tb = "", exc.__traceback__
+    while tb is not None:
+        module, tb = tb.tb_frame.f_globals.get("__name__", ""), tb.tb_next
+    return module.split(".", 1)[0] in ("sqlalchemy", "psycopg2")
+
+
+async def not_text_handler(request: Request, exc: Exception) -> JSONResponse:
+    """A NUL or a lone surrogate that reached a query past no_nul.py's gates:
+    the same 400, never a 500, logged so the gate that missed it can be found.
+    Any other ValueError or DataError is raised on, a 500 as ever."""
+    import logging
+
+    found = refused_by_the_database(exc)
+    if found is None:
+        raise exc
+    logging.getLogger(__name__).warning("%s %s: the database refused a request's text (%s)",
+                                        request.method, request.url.path, found)
+    return not_text_response(found)
+
+
 async def bad_cursor_handler(request: Request, exc: Exception) -> JSONResponse:
     """A cursor that isn't one the list gave (src/server/cursors.py): 400 bad_cursor, whichever list read it."""
     return envelope(400, "bad_cursor", str(exc))

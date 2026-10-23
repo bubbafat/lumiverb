@@ -12,6 +12,7 @@ search sync) or their scenes' descriptions.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -185,7 +186,9 @@ def test_a_search_it_cant_read_is_refused(env, search) -> None:
     client, headers, *_ = env
     _ingest(env, "wide/a.jpg", media_type="image")
     r = client.post("/v1/projects", json={"name": "Unreadable", "from_search": search}, headers=headers)
-    assert r.status_code == 422 and r.json()["error"]["code"] == "bad_search", r.text
+    # A NUL is refused before the route reads the search, as in anything a request sends (src/server/api/no_nul.py).
+    refused = (400, "not_text") if "\\u0000" in json.dumps(search) else (422, "bad_search")
+    assert (r.status_code, r.json()["error"]["code"]) == refused, r.text
     assert _projects_named(client, headers, "Unreadable") == 0
 
 

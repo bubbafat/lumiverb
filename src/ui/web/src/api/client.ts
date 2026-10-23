@@ -655,10 +655,11 @@ export async function queryAssets(
 }
 
 /** What GET /v1/query refused about the search itself, in the server's words, to say under the search
- * box (FilterBar's searchError): too long (search_too_long: more words than a search takes) or a filter no
- * search can run (bad_filter). null for any other error, or none. */
+ * box (FilterBar's searchError): too long (search_too_long: more words than a search takes) or holding what
+ * isn't text (not_text: a NUL character, say, which nothing sent to the server can hold). null for any other
+ * error, or none. */
 export function searchRefusal(error: unknown): string | null {
-  return error instanceof ApiError && (error.code === "search_too_long" || error.code === "bad_filter")
+  return error instanceof ApiError && (error.code === "search_too_long" || error.code === "not_text")
     ? error.message
     : null;
 }

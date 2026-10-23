@@ -23,7 +23,7 @@ from src.server.api.limits import MAX_PAGE
 from src.server.api.rate_limit import anonymous_search_limited
 from src.server.api.errors import ApiError
 from src.server.api.routers.projects import guard_project_filters
-from src.server.models.filter_registry import BadFilterError, parse_f_params
+from src.server.models.filter_registry import parse_f_params
 from src.server.models.query_filter import (
     LOCATION_FILTERS,
     ApertureRange,
@@ -122,11 +122,8 @@ def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
 
 
 def parsed_filters(f: list[str], *, sort: str = "taken_at", direction: str = "desc") -> QuerySpec:
-    """The ?f= params as a QuerySpec (GET /v1/query, facets); 400 bad_filter for one no search can run."""
-    try:
-        return parse_f_params(f, sort=sort, direction=direction)
-    except BadFilterError as exc:
-        raise ApiError(400, "bad_filter", str(exc)) from None
+    """The ?f= params as a QuerySpec (GET /v1/query, facets)."""
+    return parse_f_params(f, sort=sort, direction=direction)
 
 
 def _run_text_search(

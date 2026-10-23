@@ -66,12 +66,6 @@ def _extract_library_from_f_params(query_params) -> str | None:
     return None
 
 
-def _an_id(value: str | None) -> str | None:
-    """An id a public page could be looked up by: None for one with a NUL, which none has (and the database
-    won't take one to look for)."""
-    return value if value and "\x00" not in value else None
-
-
 def _routed(session, pub) -> str | None:
     """A public link's account database: its routing row, as for every other
     request (src/server/database.py tenant_database_url). None when there's
@@ -201,9 +195,10 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # --- Unauthenticated path: attempt public library resolution ---
-        # Only GET requests on eligible routes may reach public libraries/projects.
+        # Only GET requests on eligible routes may reach public libraries/projects. An id taken from the URL
+        # holds no NUL, which the database won't take to look for: a URL holding one never reaches here (no_nul.py).
         if request.method == "GET" and _PUBLIC_ELIGIBLE_PATH.match(request.url.path):
-            library_id = _an_id(
+            library_id = (
                 _extract_library_id_from_path(request.url.path)
                 or request.query_params.get("library_id")        # /similar, /assets/by-path (/assets/page: 410)
                 or request.query_params.get("public_library_id") # /assets/{id}/...
@@ -222,7 +217,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     return await call_next(request)
 
             # Also try public_project_id for asset proxy/thumbnail
-            project_id = _an_id(request.query_params.get("public_project_id"))
+            project_id = request.query_params.get("public_project_id")
             if project_id:
                 with get_control_session() as session:
                     pub = PublicProjectRepository(session).get(project_id)
@@ -240,7 +235,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
         if request.method == "GET" and request.url.path.startswith("/v1/public/projects/"):
             parts = request.url.path.split("/")
             # /v1/public/projects/{project_id}[/assets]
-            project_id = _an_id(parts[4] if len(parts) > 4 else None)
+            project_id = parts[4] if len(parts) > 4 else None
             if project_id:
                 with get_control_session() as session:
                     pub = PublicProjectRepository(session).get(project_id)

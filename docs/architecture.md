@@ -155,6 +155,7 @@ Python + FastAPI + SQLModel. Stateless. Runs on the install's machine behind ngi
 Responsibilities:
 - Authenticate requests via API key or JWT → route to tenant DB
 - Security headers middleware (CSP, X-Frame-Options, X-Content-Type-Options)
+- Text that isn't text anywhere a request sends it (a NUL character, a lone surrogate, a URL's bytes that aren't UTF-8) is a 400 `not_text`, never the database's 500: the URL before sign-in, a JSON or form body after it, a file's bytes never (`src/server/api/no_nul.py`)
 - Rate limiting on auth endpoints (in-memory sliding window per IP)
 - JWT token lifecycle: 1-hour access tokens with 7-day refresh window, server-side revocation via `revoked_tokens` table
 - Library and asset CRUD

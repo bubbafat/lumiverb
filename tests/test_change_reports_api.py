@@ -186,6 +186,9 @@ def test_paths_in_a_trashed_library_are_not_kept(env) -> None:
                                  f"{ROOT}/new\nline.mov", f"{ROOT}/Day\t1/a.mov"])
 def test_bad_paths_are_rejected(env, bad: str) -> None:
     r = _report(env, [bad])
+    if "\x00" in bad:  # before the route reads it, as in anything a request sends (src/server/api/no_nul.py)
+        assert (r.status_code, r.json()["error"]["code"]) == (400, "not_text"), r.text
+        return
     assert r.status_code == 422, r.text
 
 

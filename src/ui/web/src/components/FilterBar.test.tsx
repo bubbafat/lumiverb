@@ -145,6 +145,15 @@ describe("A search the server refuses", () => {
     expect(screen.getByRole("alert").textContent).toBe(said);
   });
 
+  it("says a NUL character the server refused there too", async () => {
+    const said = "Nothing sent to Lumiverb can hold a NUL character (\\0): send it without one.";
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      error: { code: "not_text", message: said, details: { found: "nul", in: "query" } },
+    }), { status: 400 }));
+    const refused = await queryAssets([{ type: "query", value: "a\u0000b" }]).catch((e: unknown) => e);
+    expect(searchRefusal(refused)).toBe(said);
+  });
+
   it("says nothing when nothing was refused", () => {
     renderBar(false);
     expect(screen.queryByRole("alert")).toBeNull();

@@ -87,10 +87,6 @@ TYPE_MAP: dict[str, type[LeafFilter]] = {cls.type_name(): cls for cls in _ALL_FI
 # Parsing: URL ?f= params → QuerySpec
 # ---------------------------------------------------------------------------
 
-class BadFilterError(ValueError):
-    """A ?f= filter no search can be run with: GET /v1/query and facets answer 400 bad_filter."""
-
-
 def parse_f_params(
     f_params: list[str],
     sort: str = "taken_at",
@@ -99,12 +95,10 @@ def parse_f_params(
     """Parse repeated ?f=prefix:value URL params into a QuerySpec.
 
     Unknown prefixes are silently ignored (forward compatibility). A NUL in
-    one raises BadFilterError (a 400: no value of any filter holds one), as
-    from_json refuses it.
+    one never reaches here: a URL holding one is a 400 before any route
+    (src/server/api/no_nul.py).
     """
     leaves: list[LeafFilter] = []
-    if any("\x00" in raw for raw in f_params):
-        raise BadFilterError("A filter can't hold a NUL character.")
     for raw in f_params:
         colon = raw.find(":")
         if colon <= 0:

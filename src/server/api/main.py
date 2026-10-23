@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import DataError, InterfaceError, OperationalError
 
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -20,6 +20,7 @@ from src.server.api.errors import (
     bad_cursor_handler,
     envelope,
     http_exception_handler,
+    not_text_handler,
     secrets_key_missing_handler,
     storage_unavailable_handler,
     unhandled_error_handler,
@@ -28,10 +29,11 @@ from src.server.api.errors import (
 from src.server.cursors import BadCursorError
 from src.server.sealing import SecretsKeyMissingError
 from src.server.storage.store import Unavailable
-from src.server.api import devices, library_access
+from src.server.api import devices, library_access, no_nul
 from src.server.api.exposure import ExposureGate
 from src.server.api.https_seen import NoteHttps
 from src.server.api.middleware import TenantResolutionMiddleware
+from src.server.api.no_nul import NoNul
 from src.shared import secrets_env
 from src.shared.logging_config import configure_api_logging, escape_log_lines, hide_stream_links
 
@@ -135,13 +137,14 @@ async def lifespan(app: FastAPI):
 
 
 set_application_name("lumiverb-api")  # its connections, as PostgreSQL shows them
-# A device's key goes no further than the routes a scan calls (src/server/api/devices.py); a person
-# no further than the libraries they can see, editing where they're an editor (library_access.py).
+# A body holding a NUL or a lone surrogate is a 400 before the gates or the route look at it (no_nul.py). A
+# device's key goes no further than the routes a scan calls (src/server/api/devices.py); a person no further
+# than the libraries they can see, editing where they're an editor (library_access.py).
 # No docs pages or schema served (/docs, /redoc, /openapi.json), as the AI worker serves none: the API's
 # contract is docs/cursor-api.md, and a map of every route is no one's to read anonymously.
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan, telemetry=NO_TELEMETRY,
               docs_url=None, redoc_url=None, openapi_url=None,
-              dependencies=[Depends(devices.gate), Depends(library_access.gate)])
+              dependencies=[Depends(no_nul.gate), Depends(devices.gate), Depends(library_access.gate)])
 
 
 # Every error in one envelope: {"error": {"code", "message", "details"}} (errors.py).
@@ -151,6 +154,10 @@ app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(Unavailable, storage_unavailable_handler)
 app.add_exception_handler(SecretsKeyMissingError, secrets_key_missing_handler)
 app.add_exception_handler(BadCursorError, bad_cursor_handler)
+# A NUL or a lone surrogate the database refused, past no_nul.py's gates: the same 400 (any other is raised on;
+# a UnicodeEncodeError is a ValueError).
+app.add_exception_handler(ValueError, not_text_handler)
+app.add_exception_handler(DataError, not_text_handler)
 
 
 async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
@@ -188,6 +195,9 @@ async def _database_unavailable(request: Request, exc: Exception) -> JSONRespons
     return envelope(503, "database_unavailable", "The database is unavailable; try again shortly.")
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(TenantResolutionMiddleware)
+# Before sign-in and the public pages' lookups: text that isn't text (a NUL, a lone surrogate, bytes that aren't
+# UTF-8) in the path or a query parameter is a 400 (no_nul.py).
+app.add_middleware(NoNul, headers=SECURITY_HEADERS)
 app.add_middleware(NoteHttps)  # whether a device has used HTTPS yet (Settings › Network)
 # Outermost: what isn't exposed from elsewhere (LUMIVERB_EXPOSURE) reaches nothing else.
 app.add_middleware(ExposureGate, headers=SECURITY_HEADERS)
