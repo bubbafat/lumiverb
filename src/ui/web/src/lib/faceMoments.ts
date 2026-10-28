@@ -1,5 +1,6 @@
 import type { PersonFaceItem } from "../api/client";
 import type { AssetPageItem } from "../api/types";
+import { clipToOpen } from "./clipToOpen";
 
 /** A face in a video is a person seen there: when, as spans to show and jump to. */
 export interface Moment {
@@ -42,29 +43,9 @@ export function isVideoFace(face: Pick<PersonFaceItem, "media_type" | "frame_ms"
 /** The clip a face is in, as the lightbox takes it (what the face lists say of it). */
 export function clipOfFace(face: PersonFaceItem): AssetPageItem {
   return {
-    asset_id: face.asset_id,
-    rel_path: face.rel_path ?? "",
-    file_size: 0,
-    file_mtime: null,
-    content_hash: null,
-    media_type: isVideoFace(face) ? "video" : "image",
-    width: null,
-    height: null,
-    taken_at: face.taken_at ?? null,
-    status: "active",
-    duration_sec: null,
-    camera_make: null,
-    camera_model: null,
-    iso: null,
-    aperture: null,
-    focal_length: null,
-    focal_length_35mm: null,
-    lens_model: null,
-    flash_fired: null,
-    gps_lat: null,
-    gps_lon: null,
+    ...clipToOpen({ asset_id: face.asset_id, rel_path: face.rel_path ?? "",
+                    media_type: isVideoFace(face) ? "video" : "image", taken_at: face.taken_at }),
     face_count: 1,
-    created_at: null,
   };
 }
 
