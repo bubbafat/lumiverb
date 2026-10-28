@@ -3,21 +3,62 @@ with when each starts, sent as text (no picture), and the answer saved as its de
 
 from __future__ import annotations
 
+import re
+
 from src.producers.names import VIDEO_DESCRIPTION
 from src.producers.runner import Waits, Work
 
+# The scenes sent at most: about 2,000 tokens, so they, the prompt and the 900-token answer fit in the 4,096
+# tokens Ollama gives a model unless told otherwise. A request longer than a machine's context is cut from its
+# start, unseen: the model then answers the scenes alone (a summary of "your 55 prompts"), never the JSON asked.
+MOST_CHARS = 8000
+# A first sentence kept at most (one with no full stop in a long description).
+MOST_SENTENCE = 300
 
-def scenes_text(scenes: list[dict]) -> str:
-    """The scenes as the model reads them: one line each, in order, with when it starts."""
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def _first_sentence(description: str) -> str:
+    sentence = _SENTENCE_END.split(description, maxsplit=1)[0]
+    if len(sentence) <= MOST_SENTENCE:
+        return sentence
+    return sentence[:MOST_SENTENCE].rsplit(" ", 1)[0] + "…"
+
+
+def _lines(scenes: list[dict], *, tags: bool, first_sentence: bool) -> list[str]:
     lines = []
     for n, scene in enumerate(scenes, 1):
         seconds = int(scene["start_ms"]) // 1000
-        line = f"{n}. ({seconds // 60}:{seconds % 60:02d}) {scene['description'].strip()}"
-        tags = [t for t in scene.get("tags") or [] if isinstance(t, str) and t.strip()]
-        if tags:
-            line += f" [tags: {', '.join(tags)}]"
+        description = scene["description"].strip()
+        line = f"{n}. ({seconds // 60}:{seconds % 60:02d}) "
+        line += _first_sentence(description) if first_sentence else description
+        its_tags = [t for t in scene.get("tags") or [] if isinstance(t, str) and t.strip()]
+        if tags and its_tags:
+            line += f" [tags: {', '.join(its_tags)}]"
         lines.append(line)
-    return "\n".join(lines)
+    return lines
+
+
+def _evenly(scenes: list[dict], k: int) -> list[dict]:
+    """k of the scenes, evenly spaced, the first and the last among them."""
+    if k == 1:
+        return scenes[:1]
+    return [scenes[round(i * (len(scenes) - 1) / (k - 1))] for i in range(k)]
+
+
+def scenes_text(scenes: list[dict]) -> str:
+    """The scenes as the model reads them: one line each, in order, with when it starts; at most MOST_CHARS.
+    A longer list is sent without its tags, then with each scene's first sentence alone, then as evenly spaced
+    scenes, as many as fit (the first and last always)."""
+    for tags, first_sentence in ((True, False), (False, False), (False, True)):
+        text = "\n".join(_lines(scenes, tags=tags, first_sentence=first_sentence))
+        if len(text) <= MOST_CHARS:
+            return text
+    for k in range(len(scenes) - 1, 0, -1):
+        text = "\n".join(_lines(_evenly(scenes, k), tags=False, first_sentence=True))
+        if len(text) <= MOST_CHARS:
+            return text
+    return text
 
 
 class VideoDescription(Work):

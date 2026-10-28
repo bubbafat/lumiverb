@@ -7,7 +7,7 @@ VISION_PROMPT = (
     "tags. Respond only with valid JSON in this exact format:\n"
     '{"description": "...", "tags": ["tag1", "tag2", ...]}'
 )
-# A video's own description, written from its scenes' (they follow it, in order: video_description.work.scenes_text).
+# A video's own description, written from its scenes' (they come before it, in order: video_description.work.scenes_text).
 VIDEO_PROMPT = (
     "These are the scenes of one video, in order, each described from a single frame, with when it starts. "
     "Say plainly what the video shows, as a careful viewer would note it: where it is, who or what is in it, "
