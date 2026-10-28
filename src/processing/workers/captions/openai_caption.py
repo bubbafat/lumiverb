@@ -270,9 +270,15 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                                                  {"type": "text", "text": self._vision["prompt"]}])
 
     def describe_text(self, text: str) -> dict:
-        """{"description", "tags"} from text alone (a video's scenes, in order): the prompt, then the text.
+        """{"description", "tags"} from text alone (a video's scenes, in order): the text, then the prompt.
         Raises CaptionError as describe() does."""
-        return self._described("text", [{"type": "text", "text": f"{self._vision['prompt']}\n\n{text}"}])
+        return self._described("text", self._text_then_prompt(text, self._vision))
+
+    @staticmethod
+    def _text_then_prompt(text: str, settings: dict) -> list[dict]:
+        """The prompt last: a machine cuts a request longer than its context from the start (Ollama), and the
+        model, given the text without it, answers something else."""
+        return [{"type": "text", "text": f"{text}\n\n{settings['prompt']}"}]
 
     def _described(self, what: str, content: list[dict]) -> dict:
         last_error: Exception | None = None
@@ -556,7 +562,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         request raises (requests' errors)."""
         settings = self._ocr if what == "read" else self._vision
         if what == "describe_text":
-            content = [{"type": "text", "text": f"{settings['prompt']}\n\n{text}"}]
+            content = self._text_then_prompt(text, settings)
         else:
             img = Image.open(io.BytesIO(image or b""))
             img.thumbnail((int(settings["max_edge"]),) * 2, Image.LANCZOS)

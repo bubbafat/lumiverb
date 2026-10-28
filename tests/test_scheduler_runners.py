@@ -1039,6 +1039,61 @@ def test_a_videos_description_is_written_from_its_scenes_in_order(acct) -> None:
     assert "No praise, feelings or sales words" in used["prompt"]
 
 
+def _scenes(n: int) -> list[dict]:
+    """n scenes as scene descriptions write them: a few sentences each, with tags, one every 32 seconds."""
+    return [{"start_ms": i * 32_000,
+             "description": (f"Scene {i + 1} shows a woman at a table on a covered porch of a restaurant. Large "
+                             "windows frame lush greenery behind her, and warm pink walls, wooden beams and hanging "
+                             "chandeliers fill the room. A red rose and a martini glass sit on the table."),
+             "tags": ["woman", "restaurant", "porch", "rose", "martini", "greenery", "chandelier"]}
+            for i in range(n)]
+
+
+def test_a_long_videos_scenes_are_sent_as_a_small_context_holds_them(acct) -> None:
+    """A video of 55 scenes failed every try: a machine with Ollama's 4,096 tokens cut the request from its start,
+    the prompt with it, and the model summed up "your 55 prompts" instead. The scenes are sent at most MOST_CHARS
+    of them (without tags, then first sentences, then evenly spaced scenes), so they, the prompt and the answer
+    fit; a short video's are sent whole."""
+    from src.producers.prompts import VIDEO_PROMPT
+    from src.producers.video_description.work import MOST_CHARS, scenes_text
+
+    def lines(n):
+        text = scenes_text(_scenes(n))
+        # At a cautious 3 characters a token, the scenes and the prompt leave the answer's 900 of 4,096.
+        assert len(text) <= MOST_CHARS and len(text) + 2 + len(VIDEO_PROMPT) <= 3 * (4096 - 900)
+        return text.splitlines()
+
+    whole = lines(10)
+    assert len(whole) == 10 and whole[0].endswith("on the table. [tags: woman, restaurant, porch, rose, martini, "
+                                                  "greenery, chandelier]")
+    untagged = lines(30)
+    assert len(untagged) == 30 and untagged[-1] == ("30. (15:28) Scene 30 shows a woman at a table on a covered "
+                                                    "porch of a restaurant. Large windows frame lush greenery "
+                                                    "behind her, and warm pink walls, wooden beams and hanging "
+                                                    "chandeliers fill the room. A red rose and a martini glass sit "
+                                                    "on the table.")
+    first_sentences = lines(55)
+    assert len(first_sentences) == 55
+    assert first_sentences[54] == "55. (28:48) Scene 55 shows a woman at a table on a covered porch of a restaurant."
+    spaced = lines(400)
+    assert 50 < len(spaced) < 400
+    assert spaced[0] == "1. (0:00) Scene 1 shows a woman at a table on a covered porch of a restaurant."
+    assert spaced[-1].endswith("(212:48) Scene 400 shows a woman at a table on a covered porch of a restaurant.")
+    shown = [int(line.split(" Scene ")[1].split()[0]) for line in spaced]
+    assert shown == sorted(set(shown))  # in order, none twice
+    gaps = [b - a for a, b in zip(shown, shown[1:], strict=False)]
+    assert max(gaps) - min(gaps) <= 1  # evenly spaced
+
+    # A first sentence that never ends is cut at a word.
+    endless = scenes_text([{"start_ms": 0, "description": "waves " * 2000}])
+    assert endless.endswith("waves…") and len(endless) <= 320
+
+    # What the producer sends.
+    _video_described(acct, _scenes(55))
+    [text] = acct.vision.provider.return_value.describe_text.call_args.args
+    assert text == "\n".join(first_sentences)
+
+
 def test_a_video_whose_scenes_arent_all_described_waits(acct) -> None:
     for scenes in ([{"start_ms": 0, "description": "Waves."}, {"start_ms": 5000, "description": None}], []):
         result, provider = _video_described(acct, scenes)

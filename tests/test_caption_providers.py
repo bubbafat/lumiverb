@@ -324,8 +324,9 @@ def test_the_reply_and_its_finish_reason_are_logged(caplog):
 
 @pytest.mark.fast
 def test_a_videos_scenes_are_described_as_text_alone_with_its_own_settings() -> None:
-    """describe_text (a video's description): no image, its prompt then the scenes, its own sampling and
-    answer length; the answer read as a photo's is, and a machine refusing it is the machine's fault."""
+    """describe_text (a video's description): no image, the scenes then its prompt (last, so a machine cutting
+    a request too long for it from the start keeps it), its own sampling and answer length; the answer read as
+    a photo's is, and a machine refusing it is the machine's fault."""
     from unittest.mock import MagicMock, patch
 
     from src.processing.workers.captions.base import CaptionError
@@ -343,8 +344,16 @@ def test_a_videos_scenes_are_described_as_text_alone_with_its_own_settings() -> 
     body = post.call_args.kwargs["json"]
     [message] = body["messages"]
     assert message["content"] == [
-        {"type": "text", "text": settings["prompt"] + "\n\n1. (0:00) Waves.\n2. (0:05) A walk at sunset."}]
+        {"type": "text", "text": "1. (0:00) Waves.\n2. (0:05) A walk at sunset.\n\n" + settings["prompt"]}]
     assert (body["max_tokens"], body["temperature"]) == (900, 0.2)
+    # Settings › AI's Test sends what the work sends.
+    answered = MagicMock(ok=True)
+    answered.json.return_value = {"choices": [{"message": {"content": '{"description": "Waves.", "tags": []}'},
+                                               "finish_reason": "stop"}]}
+    with patch("src.shared.ai_requests.post", return_value=answered) as post:
+        assert p.tried("describe_text", text="1. (0:00) Waves.")["result"] == {"description": "Waves.", "tags": []}
+    assert post.call_args.kwargs["json"]["messages"][0]["content"] == [
+        {"type": "text", "text": "1. (0:00) Waves.\n\n" + settings["prompt"]}]
 
     refused = MagicMock(ok=False, status_code=503, text="overloaded")
     refused.raise_for_status.side_effect = __import__("requests").HTTPError(response=refused)
