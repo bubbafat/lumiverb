@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
@@ -28,6 +28,8 @@ import {
 import { WAIT_SENTENCES, waitIsLoud, waitSentence, type WaitContext } from "../../lib/waits";
 import { readerLine } from "../../lib/readers";
 import { FACES, LOCATION_GUESS } from "../../lib/names";
+import { clipToOpen } from "../../lib/clipToOpen";
+import { Lightbox } from "../../components/Lightbox";
 
 const linkClass = "text-sm text-indigo-300 hover:text-indigo-200 disabled:opacity-50";
 const inputClass =
@@ -726,6 +728,10 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
     },
   });
   const items: FailingClip[] = data?.items ?? [];
+  // The clip a path opens, over the page; the lightbox's own path leads to its folder in its library.
+  const [opened, setOpened] = useState<FailingClip | null>(null);
+  const navigate = useNavigate();
+  const openedClip = opened ? clipToOpen(opened) : null;
   return (
     <div className="space-y-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm" aria-label={`Failures: ${producer.title}`}>
       {isLoading && <p className="text-gray-400">Loading…</p>}
@@ -754,7 +760,14 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
           <li key={`${f.asset_id}|${f.artifact}`} className="min-w-0 border-t border-gray-800 pt-2 first:border-0 first:pt-0">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
               <span className="min-w-0 text-gray-200">
-                <span className="wrap-anywhere">{f.rel_path}</span>{" "}
+                <button
+                  type="button"
+                  className="wrap-anywhere text-left text-gray-200 underline decoration-gray-600 underline-offset-2 hover:text-white hover:decoration-gray-300"
+                  aria-label={`Open ${f.rel_path}`}
+                  onClick={() => setOpened(f)}
+                >
+                  {f.rel_path}
+                </button>{" "}
                 <span className="whitespace-nowrap text-gray-500">· {f.library_name}</span>
               </span>
               {canRetry && (
@@ -782,6 +795,19 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
         ))}
       </ul>
       {data?.next_cursor && <p className="text-xs text-gray-500">Showing the 50 most recent.</p>}
+      {opened && openedClip && (
+        <Lightbox
+          asset={openedClip}
+          assets={[openedClip]}
+          onClose={() => setOpened(null)}
+          onNavigate={() => {}}
+          libraryId={opened.library_id}
+          onPathClick={(path) => {
+            setOpened(null);
+            navigate(`/libraries/${encodeURIComponent(opened.library_id)}/browse?${new URLSearchParams({ path })}`);
+          }}
+        />
+      )}
     </div>
   );
 }

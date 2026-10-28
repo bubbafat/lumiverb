@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ProcessingSection, { duration } from "./ProcessingSection";
 import type { Producer } from "../../api/client";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 
 const fetchMock = vi.fn();
 let role = "admin";
@@ -495,6 +495,37 @@ describe("ProcessingSection", () => {
     // Every failing clip of the producer's: named (all: true), never inferred.
     expect(sent.filter((s) => s.url.endsWith("/producers/failures/retry"))[1].body).toEqual({
       artifact: "lumiverb.image.description", all: true });
+  });
+
+  it("opens a failing clip from its path, and its folder from there", async () => {
+    producers = [producer({ counts: { applicable: 10, current: 9, stale: 0, missing: 0, failing: 1, given_up: 0 } })];
+    failures = [{ asset_id: "ast_1", artifact: "lumiverb.image.description", title: "Descriptions and tags",
+                  rel_path: "Day 1/a.jpg", library_id: "lib_1", library_name: "Footage", media_type: "image",
+                  error: "the model said nothing", attempts: 1, failed_at: null, retry_at: "2026-10-09T01:10:00Z",
+                  given_up: false }];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    function Where() {
+      const at = useLocation();
+      return <p data-testid="at">{at.pathname + at.search}</p>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/settings/processing"]}>
+        <QueryClientProvider client={client}>
+          <ProcessingSection />
+          <Where />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    const vision = await row("Descriptions and tags");
+    fireEvent.click(within(vision).getByRole("button", { name: "Show failures: Descriptions and tags" }));
+    fireEvent.click(await within(vision).findByRole("button", { name: "Open Day 1/a.jpg" }));
+    // The clip, in the lightbox over the page.
+    const close = await screen.findByRole("button", { name: "Close" });
+    await waitFor(() => expect(sent.some((s) => s.url.includes("/assets/ast_1"))).toBe(true));
+    // Its folder: the library's browse page there.
+    fireEvent.click(screen.getByRole("button", { name: "Day 1" }));
+    expect(screen.getByTestId("at").textContent).toBe("/libraries/lib_1/browse?path=Day+1");
+    expect(close.isConnected).toBe(false);
   });
 
   it("lets viewers see failures but not try them again", async () => {
