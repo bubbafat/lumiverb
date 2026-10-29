@@ -7,6 +7,7 @@ import { searchPeople, getPerson } from "../api/client";
 import { FaceCropImage } from "./FaceCropImage";
 import { clipCount } from "./ProjectUsageList";
 import type { LeafFilter } from "../lib/queryFilter";
+import { takenLiterally, type UnderstoodPart } from "../lib/understood";
 import {
   getFilterValue,
   filterLabel,
@@ -108,6 +109,9 @@ interface FilterBarProps {
   /** Why the server refused the search itself (too many words, say: client.ts searchRefusal), said under
    * the search box so it can be changed there. */
   searchError?: string | null;
+  /** What the search was understood to ask for (GET /v1/query's understood): a card each, under the search
+   * box; dismissing one searches its words as words (lib/understood.ts takenLiterally). */
+  understood?: UnderstoodPart[] | null;
 }
 
 function PersonChiclet({ personId, onClear }: { personId: string; onClear: () => void }) {
@@ -206,6 +210,7 @@ export function FilterBar({
   folder,
   isPublic = false,
   searchError = null,
+  understood = null,
 }: FilterBarProps) {
   // --- Read individual values from filter array ---
   const q = getFilterValue(filters, "query") ?? null;
@@ -605,6 +610,35 @@ export function FilterBar({
         <p role="alert" className="text-xs text-red-400">
           {searchError}
         </p>
+      )}
+
+      {/* What the search was understood to ask for: a card each, dismissed to search its words as words */}
+      {understood && understood.length > 0 && q && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400" aria-label="Searched for">
+          <span>Searched for</span>
+          {understood.map((part) =>
+            part.kind === "words" ? (
+              <span key={`words:${part.words}`} className="text-gray-300">“{part.label}”</span>
+            ) : (
+              <span
+                key={`${part.kind}:${part.words}`}
+                title={part.kind === "kind" ? `Only ${part.label}` : `${part.label}, or the words “${part.words}”`}
+                className="inline-flex items-center gap-1 rounded-full border border-gray-600 bg-gray-800 px-2 py-0.5 text-gray-200"
+              >
+                {part.label}
+                <button
+                  type="button"
+                  aria-label={`Not ${part.label}: search “${part.words}” as words`}
+                  title={`Search “${part.words}” as words`}
+                  onClick={() => onSetFilter("query", takenLiterally(q, part.words))}
+                  className="text-gray-500 hover:text-gray-200"
+                >
+                  ×
+                </button>
+              </span>
+            ),
+          )}
+        </div>
       )}
 
       {/* Row 2: date presets */}
