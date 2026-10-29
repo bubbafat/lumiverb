@@ -882,6 +882,9 @@ def export_project(
 
     body = provider.render(ExportBin(name=col.name, clips=clips))
     filename = _export_filename(col.name, provider.file_extension)
+    from src.server import visits
+
+    visits.count(session, request, visits.PROJECT, project_id, visits.EXPORT, person=user_id)  # ADR-025
     return Response(
         content=body,
         media_type=provider.content_type,

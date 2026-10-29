@@ -574,13 +574,18 @@ def get_asset(
     session: Annotated[Session, Depends(get_tenant_session)],
     public_library_id: str | None = None,
 ) -> AssetResponse:
-    """Return a single asset by id. 404 if not found or trashed."""
+    """Return a single asset by id. 404 if not found or trashed. A public page's visitor's is the clip opened
+    there, counted (ADR-025)."""
+    from src.server import visits
+
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
     _check_public_request(request, session, asset)
     response = _asset_detail(session, request, asset)
+    if (place := visits.public_place(request)) is not None:
+        visits.count(session, request, *place, visits.OPEN, clip_id=asset_id)
     # A visitor, by a public project or a public library, sees the same trimmed clip.
     return _project_visitor_view(response) if getattr(request.state, "is_public_request", False) else response
 

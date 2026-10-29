@@ -153,6 +153,10 @@ class IdleKeysResult(BaseModel):
     ended: int = 0
 
 
+class VisitsResult(BaseModel):
+    added_up: int = 0  # visitors' rows of days before today, added up into totals and deleted (ADR-025)
+
+
 class UpkeepResult(BaseModel):
     search_sync: SearchSyncResult
     face_propagate: FacePropagateResult = FacePropagateResult()
@@ -163,6 +167,7 @@ class UpkeepResult(BaseModel):
     expired_scans: ExpiredScansResult = ExpiredScansResult()
     expired_uploads: ExpiredUploadsResult = ExpiredUploadsResult()
     idle_keys: IdleKeysResult = IdleKeysResult()
+    visits: VisitsResult = VisitsResult()
     # The admin key with tenants=all: the nightly backup "started", "running" or
     # "not due" (src/server/backups.py); None for one account.
     backup: str | None = None
@@ -433,6 +438,13 @@ def _end_idle_keys(_session, tenant_id: str) -> dict:
     return {"ended": ended}
 
 
+def _add_up_visits(session) -> dict:
+    """Every day before today's visits as totals, its visitors and its salt deleted (ADR-025)."""
+    from src.server import visits
+
+    return visits.add_up(session)
+
+
 def _recluster_if_changed(session) -> dict:
     """Compute the face clusters again when faces changed since they were."""
     from src.server.api.routers.people import cached_clusters, clusters_current, store_clusters
@@ -522,7 +534,8 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     people, computing the face clusters again when faces changed since they
     were, deleting scans expired a day after their last call (a client
     killed mid-scan) and uploads a day after their last chunk, and ending
-    keys unused past the account's key-idle days.
+    keys unused past the account's key-idle days, and adding up the days
+    before today's visits (ADR-025).
 
     An account admin's key: that account. The admin key with tenants=all:
     every account, old revoked tokens are dropped, the nightly backup
@@ -551,6 +564,7 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     expired_uploads = _each_account(scope, "Expired uploads aren't deleted", _delete_expired_uploads,
                                     pausable=False, with_account=True)
     idle_keys = _each_account(scope, "Unused keys aren't ended", _end_idle_keys, pausable=False, with_account=True)
+    visits = _each_account(scope, "Visits aren't added up", _add_up_visits, pausable=False)
     return UpkeepResult(
         search_sync=SearchSyncResult(**sync_result),
         face_propagate=FacePropagateResult(**prop_result),
@@ -561,6 +575,7 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         expired_scans=ExpiredScansResult(**expired),
         expired_uploads=ExpiredUploadsResult(**expired_uploads),
         idle_keys=IdleKeysResult(**idle_keys),
+        visits=VisitsResult(**visits),
         backup=backup,
         previews_move=previews_move,
         plugins_purged=plugins_purged,

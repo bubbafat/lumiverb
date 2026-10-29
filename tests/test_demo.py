@@ -84,6 +84,19 @@ def test_a_demo_session_reads_and_changes_nothing_whatever_its_roles(install, mo
     assert names[library_id] == "Typed"
 
 
+def test_each_demo_started_is_counted_in_its_account(install, monkeypatch):  # noqa: F811
+    """ADR-025: the demo's visits, the account's admins' to see."""
+    client, robert, tenant_id = install
+    someone(client, tenant_id, "viewer")
+    _demo(monkeypatch, "viewer@example.com")
+    _try(client)
+    _try(client)
+    r = client.get("/v1/visits", headers=robert)
+    assert r.status_code == 200, r.text
+    demos = [p for p in r.json()["places"] if p["place"] == "account"]
+    assert [(p["place_id"], p["demo"]["times"]) for p in demos] == [(tenant_id, 2)]
+
+
 def test_a_demo_session_refreshes_as_one_and_ends_with_the_demo(install, monkeypatch):  # noqa: F811
     client, _, tenant_id = install
     someone(client, tenant_id, "viewer")

@@ -357,6 +357,9 @@ class LibraryRepository:
             text("DELETE FROM library_path_filters WHERE library_id = :library_id"), params
         )
         self._session.execute(text("DELETE FROM libraries WHERE library_id = :library_id"), params)
+        from src.server.repository.visits import VisitRepository
+
+        VisitRepository(self._session).forget("library", [library_id])  # its visits (ADR-025)
         self._session.commit()
 
     def resolve_cover(self, library: Library) -> str | None:

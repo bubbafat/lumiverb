@@ -443,8 +443,13 @@ def get_library(
     library_id: str,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    from_: Annotated[str | None, Query(alias="from", description="A public page's: the site it was opened from "
+                                       "(its host), counted with the visit (ADR-025)")] = None,
 ) -> LibraryResponse:
-    """Return a single library by id. Public libraries are accessible without auth."""
+    """Return a single library by id. Public libraries are accessible without auth: a visitor's is a view of
+    it, counted (ADR-025)."""
+    from src.server import visits
+
     repo = LibraryRepository(session)
     library = repo.get_by_id(library_id)
     if library is None:
@@ -453,7 +458,10 @@ def get_library(
     if is_public_request and not library.is_public:
         raise HTTPException(status_code=404, detail="Not found")
     # Where the files are on the server isn't a visitor's business.
-    return _response(request, session, library, root_path="" if is_public_request else None)
+    response = _response(request, session, library, root_path="" if is_public_request else None)
+    if visits.is_public(request):
+        visits.count(session, request, visits.LIBRARY, library_id, visits.VIEW)
+    return response
 
 
 @router.patch("/{library_id}", response_model=LibraryResponse)

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from src.server import visits
 from src.server.api.dependencies import get_tenant_session
 from src.server.api.library_access import sight_of
 from src.server.api.limits import MAX_PAGE
@@ -51,17 +52,23 @@ def _get_public_project(session: Session, project_id: str):
 @router.get("/{project_id}", response_model=PublicProjectDetail)
 def get_public_project(
     project_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    from_: Annotated[str | None, Query(alias="from", description="The site the page was opened from (its host): "
+                                       "counted with the visit (ADR-025)")] = None,
 ) -> PublicProjectDetail:
-    """Get public project metadata. No auth required."""
+    """Get public project metadata. No auth required. A visitor's is a view of it, counted (ADR-025)."""
     col, repo = _get_public_project(session, project_id)
-    return PublicProjectDetail(
+    detail = PublicProjectDetail(
         project_id=col.project_id,
         name=col.name,
         description=col.description,
         cover_asset_id=repo.resolve_cover(col),
         asset_count=repo.asset_count(col.project_id),
     )
+    if visits.is_public(request):
+        visits.count(session, request, visits.PROJECT, project_id, visits.VIEW)
+    return detail
 
 
 @router.get("/{project_id}/assets", response_model=PublicProjectAssetsResponse)

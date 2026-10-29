@@ -204,11 +204,14 @@ class ProjectRepository:
         return col
 
     def delete(self, project_id: str) -> bool:
-        """Delete a project for good, trashed or not. Its clips stay."""
+        """Delete a project for good, trashed or not, its visits with it (ADR-025). Its clips stay."""
+        from src.server.repository.visits import VisitRepository
+
         col = self.get_by_id(project_id, include_trashed=True)
         if col is None:
             return False
         self._session.delete(col)
+        VisitRepository(self._session).forget("project", [project_id])
         self._session.commit()
         return True
 

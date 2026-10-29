@@ -197,7 +197,12 @@ def demo_sign_in(request: Request, session: Annotated[Session, Depends(_get_db)]
     settings = get_settings()
     if not settings.jwt_secret:
         raise HTTPException(status_code=500, detail="JWT_SECRET not configured")
-    return LoginResponse(access_token=_issue_jwt(_demo_viewer(session), settings.jwt_secret, demo=True))
+    viewer = _demo_viewer(session)
+    token = _issue_jwt(viewer, settings.jwt_secret, demo=True)
+    from src.server import visits
+
+    visits.count_in(viewer.tenant_id, request, visits.ACCOUNT, viewer.tenant_id, visits.DEMO)  # ADR-025
+    return LoginResponse(access_token=token)
 
 
 @router.post("/refresh", response_model=RefreshResponse)

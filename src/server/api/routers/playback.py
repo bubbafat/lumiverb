@@ -522,6 +522,11 @@ def get_playback(
         key_id=None if public else getattr(request.state, "key_id", None),
     )
     expires = datetime.fromtimestamp(read_stream_token(token)["e"], tz=UTC)
+    if public and asset.media_type.startswith("video"):  # a video played on a public page (ADR-025)
+        from src.server import visits
+
+        visits.count(session, request, *(("project", public_project_id) if public_project_id
+                                         else ("library", public_library_id)), visits.PLAY, clip_id=asset_id)
     return PlaybackResponse(
         url=f"/v1/stream/{token}",
         expires_at=expires.isoformat(),
