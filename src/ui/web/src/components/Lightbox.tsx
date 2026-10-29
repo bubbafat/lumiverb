@@ -21,6 +21,9 @@ import { HeartButton, StarPicker, ColorPicker } from "./RatingControls";
 import { basename, formatFileSize, formatDate, formatExposure } from "../lib/format";
 import { PREVIEW, THUMBNAIL } from "../lib/names";
 
+/** How long a running slideshow says how to stop it, from its start or the mouse's last move. */
+export const SLIDESHOW_HINT_MS = 5000;
+
 interface LightboxProps {
   asset: AssetPageItem;
   assets: AssetPageItem[];
@@ -289,6 +292,10 @@ export function Lightbox({
   const lightboxRef = useRef<HTMLDivElement>(null);
   const hintTimerRef = useRef<number>();
   const slideshowRef = useRef<number>();
+  // While a slideshow runs, how to stop it (as a browser says how to leave full screen): shown as it starts and
+  // when the mouse moves, gone after a while.
+  const [slideshowHint, setSlideshowHint] = useState(false);
+  const slideshowHintRef = useRef<number>();
 
   const currentIndex = assets.findIndex((a) => a.asset_id === asset.asset_id);
   const hasPrev = currentIndex > 0;
@@ -323,6 +330,23 @@ export function Lightbox({
     }, 3000);
     return () => clearInterval(slideshowRef.current);
   }, [slideshowActive, currentIndex, assets.length, onNavigate]);
+
+  const showSlideshowHint = useCallback(() => {
+    setSlideshowHint(true);
+    clearTimeout(slideshowHintRef.current);
+    slideshowHintRef.current = window.setTimeout(() => setSlideshowHint(false), SLIDESHOW_HINT_MS);
+  }, []);
+
+  useEffect(() => {
+    if (slideshowActive) {
+      showSlideshowHint();
+    } else {
+      clearTimeout(slideshowHintRef.current);
+      setSlideshowHint(false);
+    }
+  }, [slideshowActive, showSlideshowHint]);
+
+  useEffect(() => () => clearTimeout(slideshowHintRef.current), []);
 
   // Stop slideshow at end
   useEffect(() => {
@@ -922,6 +946,7 @@ export function Lightbox({
       ref={lightboxRef}
       data-lightbox="true"
       className={`fixed inset-0 z-50 flex bg-black/90 ${isFullscreen ? "bg-black" : ""}`}
+      onMouseMove={slideshowActive ? showSlideshowHint : undefined}
     >
       {/* Slideshow progress bar */}
       {slideshowActive && (
@@ -930,6 +955,21 @@ export function Lightbox({
             key={`${asset.asset_id}-slideshow`}
             className="h-full bg-indigo-500 animate-lv-progress motion-reduce:hidden"
           />
+        </div>
+      )}
+
+      {/* While a slideshow runs: how to stop it */}
+      {slideshowActive && (
+        <div
+          className={`pointer-events-none absolute inset-x-0 top-6 z-20 flex justify-center px-4 transition-opacity duration-500 motion-reduce:transition-none ${
+            slideshowHint ? "opacity-100" : "opacity-0"
+          }`}
+          role="status"
+          aria-hidden={!slideshowHint}
+        >
+          <div className="rounded-full bg-black/75 px-4 py-2 text-sm text-gray-200 shadow-lg backdrop-blur-xs">
+            Slideshow on · press <kbd className="rounded-sm border border-gray-500 px-1.5 font-mono text-xs">Space</kbd> to stop
+          </div>
         </div>
       )}
 

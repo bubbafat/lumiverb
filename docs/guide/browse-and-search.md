@@ -104,7 +104,7 @@ Keys in the viewer:
 | ← and → | Previous and next clip |
 | Esc | Close, or leave full screen |
 | Shift+F | Full screen |
-| Space | Start or stop a slideshow (3 seconds a clip) |
+| Space | Start or stop a slideshow (3 seconds a clip; while it runs, a note at the top says Space stops it, again whenever you move the mouse) |
 | f | Favorite on or off |
 | 1 to 5 | Stars (the same number again clears them) |
 | 0 | Clear the stars |
