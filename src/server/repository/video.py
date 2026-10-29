@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from sqlalchemy import func, insert, text
+from sqlalchemy.orm import defer
 from sqlmodel import Session, select
 
 from src.producers.names import SCENES, SCENE_DESCRIPTIONS
@@ -38,6 +39,7 @@ class VideoSceneRepository:
                 select(VideoScene)
                 .where(VideoScene.asset_id == asset_id, where)
                 .order_by(VideoScene.start_ms)
+                .options(defer(VideoScene.likeness))  # its vector stays in the database: a list says its model
             ).all()
         )
 
@@ -68,6 +70,21 @@ class VideoSceneRepository:
         scene.lineage = lineage  # searchable once committed: its words are computed with the row
         self._session.add(scene)
         self._session.commit()
+
+    def set_likeness(self, asset_id: str, vectors: list[tuple[str, list[float]]], model: str) -> int:
+        """Scenes' pictures' CLIP vectors, (scene_id, vector) each, and the
+        model they're from (src/producers/scene_likeness), for the clip's
+        scenes but a redo's still being found: a scene gone meanwhile (its
+        video's scenes found again and swapped in, or another run's dropped)
+        or another clip's is passed by. How many were saved (not committed)."""
+        if not vectors:
+            return 0
+        return self._session.execute(text(
+            "UPDATE video_scenes s SET likeness = CAST(v.vector AS vector), likeness_model = :m"
+            " FROM unnest(CAST(:ids AS text[]), CAST(:vectors AS text[])) AS v(scene_id, vector)"
+            " WHERE s.scene_id = v.scene_id AND s.asset_id = :a AND s.staged IS DISTINCT FROM 'finding'"),
+            {"a": asset_id, "m": model, "ids": [scene_id for scene_id, _ in vectors],
+             "vectors": [str([float(x) for x in vector]) for _, vector in vectors]}).rowcount
 
     # -- A redo: scenes found beside the ones the clip shows ---------------------------------
 
@@ -115,14 +132,22 @@ class VideoSceneRepository:
         shows, described, take that scene's description, tags and how it was
         made (its lineage: one made another way than now is described again),
         and its image: a scene is described from its one frame alone, so the
-        same frame would be described the same way. How many took one (not
-        committed)."""
-        return self._session.execute(text(
+        same frame would be described the same way. Each such scene with a
+        CLIP vector, described or not, gives its vector and model too (the
+        same frame makes the same vector: a scene whose model isn't the one in
+        use is embedded again). How many took a description (not committed)."""
+        described = self._session.execute(text(
             "UPDATE video_scenes n SET description = o.description, tags = o.tags, lineage = o.lineage,"
             " rep_frame_sha256 = o.rep_frame_sha256, proxy_key = o.proxy_key, thumbnail_key = o.thumbnail_key"
             " FROM video_scenes o WHERE n.asset_id = :a AND n.staged = 'found'"
             " AND o.asset_id = :a AND o.staged IS NULL AND o.rep_frame_ms = n.rep_frame_ms"
             " AND o.description IS NOT NULL"), {"a": asset_id}).rowcount
+        self._session.execute(text(
+            "UPDATE video_scenes n SET likeness = o.likeness, likeness_model = o.likeness_model"
+            " FROM video_scenes o WHERE n.asset_id = :a AND n.staged = 'found'"
+            " AND o.asset_id = :a AND o.staged IS NULL AND o.rep_frame_ms = n.rep_frame_ms"
+            " AND o.likeness IS NOT NULL"), {"a": asset_id})
+        return described
 
     def undescribed_found(self, asset_id: str, scene_lineage: dict) -> int:
         """How many of a redo's found scenes aren't described as scene_lineage says."""

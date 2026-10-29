@@ -1,16 +1,17 @@
-"""Video API: scene chunks (init, claim next, complete, fail), scenes, and a
-video's faces. All require tenant auth."""
+"""Video API: scene chunks (init, claim next, complete, fail), scenes, their
+pictures' CLIP vectors, and a video's faces. All require tenant auth."""
 
 import logging
 import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, FiniteFloat, TypeAdapter, ValidationError
 from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import Session
 
-from src.producers.names import SCENE_DESCRIPTIONS, SCENES, VIDEO_FACES
+from src.producers.clip import CLIP_MODEL_ID
+from src.producers.names import SCENE_DESCRIPTIONS, SCENE_LIKENESS, SCENES, VIDEO_FACES
 from src.server.after_commit import AfterCommit
 from src.server.api.content_hashes import why_not
 from src.server.api.dependencies import get_tenant_session, require_editor
@@ -343,6 +344,10 @@ class SceneListItem(BaseModel):
     # when it has none, or one made without saying. The worker describes a
     # scene again when this isn't what it would record.
     lineage: dict | None = None
+    # The model its picture's CLIP vector is from ("ViT-B-32-openai"), null
+    # when it has none (the vector itself isn't listed): the worker embeds a
+    # scene whose model isn't the one in use (src/producers/scene_likeness).
+    likeness_model: str | None = None
 
 
 class ScenesResponse(BaseModel):
@@ -374,6 +379,7 @@ def get_scenes_for_asset(
                 keep_reason=s.keep_reason,
                 phash=s.phash,
                 lineage=s.lineage,
+                likeness_model=s.likeness_model,
             )
             for s in scenes
         ]
@@ -453,6 +459,69 @@ def _scene_lineage(made: dict | None) -> dict:
         return {"producer": UNKNOWN, "version": "", "settings_hash": ""}
     return {"producer": made["producer"], "version": str(made.get("version") or ""),
             "settings_hash": str(made.get("settings_hash") or "")}
+
+
+# ---------------------------------------------------------------------------
+# Scenes' CLIP vectors (src/producers/scene_likeness)
+# ---------------------------------------------------------------------------
+
+# Scenes a request (the worker sends 50 at a time), and a vector's numbers (CLIP ViT-B-32's are 512).
+MAX_LIKENESS_SCENES = 500
+MAX_LIKENESS_NUMBERS = 4096
+
+
+class SceneLikenessIn(BaseModel):
+    scene_id: str = Field(max_length=100)
+    vector: list[FiniteFloat] = Field(min_length=1, max_length=MAX_LIKENESS_NUMBERS)
+
+
+class SceneLikenessRequest(BaseModel):
+    scenes: list[SceneLikenessIn] = Field(max_length=MAX_LIKENESS_SCENES)
+    model_id: str = Field(max_length=100)  # "clip": the vectors photos have (asset_embeddings' model_id)
+    model_version: str = Field(min_length=1, max_length=100)  # "ViT-B-32-openai"
+    lineage: Any = None  # how they were made (LineageIn): require_lineage judges it
+
+
+class SceneLikenessResponse(BaseModel):
+    saved: int  # scenes given their vector
+    gone: int  # passed by: not one of the video's scenes now (they were found again meanwhile)
+    made: bool  # every one of its scenes has its vector: the video's lineage is recorded
+
+
+@router.post("/{asset_id}/scene-likeness", response_model=SceneLikenessResponse,
+             dependencies=[Depends(require_editor)])
+def submit_scene_likeness(
+    asset_id: str,
+    body: SceneLikenessRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> SceneLikenessResponse:
+    """Some of a video's scenes' pictures' CLIP vectors, with the model
+    they're from, and how they were made (422 lineage_required, before
+    anything is saved). A scene that's gone (its video's scenes were found
+    again) is passed by, not refused. The video's lineage is recorded once
+    every one of its scenes has its vector (the producer's made: a redo's
+    found scenes while it has them, else the ones shown)."""
+    from src.server.repository import lineage
+
+    made = require_lineage(body.lineage, SCENE_LIKENESS)
+    if body.model_id != CLIP_MODEL_ID:
+        raise ApiError(400, "not_clip", f"A scene's vector is CLIP's (model_id {CLIP_MODEL_ID}), as photos' are.",
+                       {"model_id": body.model_id[:100]})
+    if len({len(i.vector) for i in body.scenes}) > 1:
+        raise ApiError(400, "vectors_differ", "A request's vectors are one model's: each as long as the others.")
+    asset = AssetRepository(session).get_by_id(asset_id)
+    if asset is None or asset.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    if asset.media_type != "video":
+        raise ApiError(400, "not_a_video", "Scenes are a video's; a photo's vector goes to /v1/assets/batch-embeddings.",
+                       {"media_type": asset.media_type})
+    saved = VideoSceneRepository(session).set_likeness(asset_id, [(i.scene_id, i.vector) for i in body.scenes],
+                                                       body.model_version)
+    done = lineage.made_now(session, asset_id, SCENE_LIKENESS)
+    if done:
+        record_lineage(session, asset_id, SCENE_LIKENESS, made, commit=False)
+    session.commit()
+    return SceneLikenessResponse(saved=saved, gone=len({i.scene_id for i in body.scenes}) - saved, made=done)
 
 
 # ---------------------------------------------------------------------------

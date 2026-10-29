@@ -18,6 +18,7 @@ Settings › Processing lists each thing Lumiverb makes, in this order:
 | Descriptions and tags | Photos | A photo described, with tags |
 | Text in images (OCR) | Photos | Signs, screens, documents |
 | Visual search (CLIP) | Photos | What search by content and Find similar compare |
+| Visual search in videos (CLIP) | Videos | The same for each scene's picture |
 | Faces (with Faces in videos) | All | The faces found, for People |
 | Transcripts | Videos | What's said, with times |
 | Location guesses | All | Where a clip probably was, in libraries where Infer location is on |

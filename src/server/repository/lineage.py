@@ -794,6 +794,15 @@ def failing_since(session: Session, since) -> int:
         " WHERE l.error IS NOT NULL AND l.failed_at > :since"), {"since": since}).scalar() or 0
 
 
+def made_now(session: Session, asset_id: str, artifact: str) -> bool:
+    """Whether the clip, in sight, has the artifact now, as its producer says
+    (it applies, and it's made): what a route saving an artifact made in
+    parts (a video's scenes' vectors) asks before recording its lineage."""
+    return bool(session.execute(text(
+        f"SELECT ({APPLIES[artifact]}) AND ({MADE[artifact]}) FROM active_assets a WHERE a.asset_id = :a"),
+        {"a": asset_id}).scalar())
+
+
 def producer_of(session: Session, asset_id: str, artifact: str) -> str | None:
     """Whose the clip's artifact is: its producer's name (a person's: PERSON), or None when it has none."""
     return session.execute(text("SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = :t"),

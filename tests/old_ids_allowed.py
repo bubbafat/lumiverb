@@ -70,8 +70,10 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         'preview': ('docs/data-names.md', 'src/producers/proxy/__init__.py',),
         'scenes': (
-            'docs/cursor-api.md', 'src/producers/scene_vision/work.py', 'src/producers/scenes/work.py',
+            'docs/cursor-api.md', 'src/producers/scene_likeness/work.py', 'src/producers/scene_vision/work.py',
+            'src/producers/scenes/work.py',
             'src/producers/video_description/work.py', 'tests/scenes.py', 'tests/test_lineage_api.py', 'tests/test_scene_detail.py',
+            'tests/test_scene_likeness.py',
             'tests/test_scene_redo_api.py', 'tests/test_scheduler_runners.py', 'tests/test_video_api.py',
             'tests/test_video_faces.py', 'tests/test_video_index.py',
         ),
