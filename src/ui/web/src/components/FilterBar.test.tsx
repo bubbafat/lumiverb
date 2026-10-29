@@ -81,6 +81,30 @@ describe("FilterBar for a public page's visitor", () => {
   });
 });
 
+describe("FilterBar's search box", () => {
+  it("has one clear button, its own, which clears the search", () => {
+    const onSetFilter = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <FilterBar filters={[]} sort="taken_at" dir="desc" onSetFilter={onSetFilter} onSetSort={() => {}}
+                     onClearAll={() => {}} facets={facets} onSaveAsProject={() => {}} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const box = screen.getAllByRole("searchbox")[0] as HTMLInputElement;
+    // Robert, Oct 29: a blue × beside ours. A search box gets the browser's own clear button: hidden.
+    expect(box.className).toContain("[&::-webkit-search-cancel-button]:appearance-none");
+    fireEvent.change(box, { target: { value: "doctor" } });
+    const clear = screen.getAllByRole("button", { name: "Clear search" });
+    expect(clear).toHaveLength(1);
+    fireEvent.click(clear[0]);
+    expect(onSetFilter).toHaveBeenCalledWith("query", null);
+    expect(box.value).toBe("");
+  });
+});
+
 describe("FilterBar's Photos nearby", () => {
   function barNear(near: string) {
     const onSetFilter = vi.fn();
