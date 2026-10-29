@@ -9,9 +9,17 @@ window is one scene unless a real cut (a strong change of picture) splits
 it. Once the whole video is found, neighbouring scenes that look alike are
 merged (``merge_runs``): a talking head is one scene, not one per window.
 
-Thresholds are Hamming distances between 16 × 16 pHashes (256 bits). Two
-unrelated pictures differ in about 128 bits (a coin toss per bit, sd 8);
-the same shot with people moving in it differs in roughly 10 to 50.
+Thresholds are Hamming distances between 8 × 8 wavelet hashes (64 bits,
+16 hex digits): each picture's light and dark at its coarsest, which a hand
+or fork in front, people moving, a nudge of the camera or the light changing
+leave mostly as they were. Measured on 60 of Robert's videos (Oct 28, every
+camera and length; 438 neighbouring scenes, each pair judged the same scene
+or not): the 16 × 16 pHash before this merged 1 of 333 pairs that were the
+same scene, as its fine detail flips with anything that moves (the same
+table, minutes apart: 92 to 152 of 256 bits, as unrelated pictures are);
+this hash merges 46% of them at Normal, and 3% of the pairs that weren't. A
+scene found before (scenes version 4) has a 16 × 16 pHash, 64 hex digits:
+hamming() compares only hashes of one size, so it's never merged with one.
 """
 
 from __future__ import annotations
@@ -31,14 +39,16 @@ class Detail:
     min_sec: float  # a scene is never shorter than this (unless the video is)
     max_sec: float  # nor longer, before merging
     # A scene whose picture is within this many bits of the kept scene before
-    # it is merged into it. Low merges more (looser), High keeps more (stricter).
+    # it is merged into it. Low merges more (looser), High keeps more (stricter):
+    # of the measured pairs that were the same scene, 51% / 46% / 32% merge,
+    # and 6% / 3% / 1% of those that weren't.
     same_within: int
 
 
 LEVELS: dict[str, Detail] = {
-    "low": Detail(target_scenes=4, min_sec=5.0, max_sec=120.0, same_within=56),
-    "normal": Detail(target_scenes=8, min_sec=5.0, max_sec=60.0, same_within=40),
-    "high": Detail(target_scenes=16, min_sec=3.0, max_sec=30.0, same_within=24),
+    "low": Detail(target_scenes=4, min_sec=5.0, max_sec=120.0, same_within=17),
+    "normal": Detail(target_scenes=8, min_sec=5.0, max_sec=60.0, same_within=14),
+    "high": Detail(target_scenes=16, min_sec=3.0, max_sec=30.0, same_within=10),
 }
 assert tuple(LEVELS) == DETAILS
 
@@ -47,19 +57,22 @@ SAMPLES = 5
 # A real cut inside a window: a keyframe this many bits from the keyframe
 # before it and from the start of its piece (above every level's
 # same_within, so a cut is a stronger change than anything merged)...
-CUT_BITS = 76
+CUT_BITS = 24
 # ...whose picture then holds: the keyframe after it within this many bits.
 # Keyframes are 2 s apart (the analysis proxy places them: its KEYFRAME_SEC),
-# and a moving camera changes as much in 2 s as a
-# cut does (measured on handheld and gimbal clips: 110 to 140 bits between
-# neighbouring keyframes, as between unrelated pictures), so a change alone
-# isn't a cut; a moving shot never holds, a shot cut to does.
-STEADY_BITS = 48
+# and a moving camera changes as much in 2 s as a cut does, so a change alone
+# isn't a cut; a moving shot never holds, a shot cut to does. Kept strict: in
+# footage shot in one take (Robert's, all of it measured), a real change
+# within a window is rare (16 among 5,365 keyframes of the 60 videos), a
+# false cut is a scene too many unless it's merged back, and a change
+# missed waits for the window's end; the pHash before cut 93 times there,
+# none of them real.
+STEADY_BITS = 12
 # ...leaving at least this long on each side (no sliver either side of a cut).
 CUT_MIN_SEC = 2.0
 # Videos are handed out about this long at a time, in whole windows.
 CHUNK_TARGET_SEC = 30.0
-HASH_SIZE = 16
+HASH_SIZE = 8  # the wavelet hash's side: 8 × 8 bits
 FRAME_WIDTH = 480  # keyframes are looked at this wide at most
 
 

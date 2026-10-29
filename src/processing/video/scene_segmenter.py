@@ -4,8 +4,10 @@ A chunk is a whole number of scene windows. Each window is one scene unless
 a real cut splits it: a keyframe far from the one before it and from the
 start of its piece (CUT_BITS) whose picture then holds (the next keyframe
 within STEADY_BITS of it), with CUT_MIN_SEC left on both sides. Each scene's picture is the sharpest of
-up to SAMPLES keyframes spread across it, and its pHash is that picture's
-(what the discard pass compares, once the whole video is found).
+up to SAMPLES keyframes spread across it, and its hash is that picture's
+(what the discard pass compares, once the whole video is found): a wavelet
+hash, HASH_SIZE × HASH_SIZE bits (detail.py says why), kept as `phash`, the
+picture's perceptual hash.
 
 Frames are taken in video time (absolute pts); those outside the chunk are
 left out, so an overlapping scan changes nothing.
@@ -42,7 +44,7 @@ CUT = "cut"  # a real cut
 
 @dataclass
 class Scene:
-    """One scene: its span, its picture and that picture's pHash."""
+    """One scene: its span, its picture and that picture's hash."""
 
     start_ms: int
     end_ms: int
@@ -53,10 +55,10 @@ class Scene:
 
 
 def _frame_to_phash(raw: RawFrame, hash_size: int = HASH_SIZE) -> str | None:
-    """Perceptual hash of a raw RGB frame, as hex; None when it can't be made."""
+    """A raw RGB frame's wavelet hash, as hex; None when it can't be made."""
     try:
         arr = np.frombuffer(raw.bytes, dtype=np.uint8).reshape((raw.height, raw.width, 3))
-        return str(imagehash.phash(Image.fromarray(arr, mode="RGB"), hash_size=hash_size))
+        return str(imagehash.whash(Image.fromarray(arr, mode="RGB"), hash_size=hash_size))
     except Exception as e:  # noqa: BLE001 — a frame without a hash is never a cut, never merged
         _log.debug("phash failed for frame at %.2f: %s", raw.pts, e)
         return None

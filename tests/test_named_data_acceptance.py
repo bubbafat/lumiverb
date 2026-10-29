@@ -49,12 +49,17 @@ BEFORE = Path(__file__).parent / "plugins" / "tester_named_data_before.json"
 WRITE = "LUMIVERB_WRITE_TESTER_NAMED_DATA"
 # What phase 1 adds to each producer's row (the plan's section 2).
 ADDED = ("makes", "reads", "reads_others")
+# Versions raised on purpose since v0.1.104, (then, now): a row at its new version reads as it did then.
+RAISED_SINCE = {"lumiverb.video.scenes": ("4", "5")}  # pictures compared by a wavelet hash
 
 
 def _as_then(row: dict) -> dict:
-    """A producer's row without what was added since v0.1.104: phase 1's fields, and its counts' lacking (what
-    its clips may never have: an installed plug-in's, ADR-023)."""
+    """A producer's row without what was added since v0.1.104: phase 1's fields, its counts' lacking (what
+    its clips may never have: an installed plug-in's, ADR-023), and a version raised since (RAISED_SINCE)."""
     row = {k: v for k, v in row.items() if k not in ADDED}
+    then, now = RAISED_SINCE.get(row.get("artifact"), (None, None))
+    if now is not None and row.get("version") == now:
+        row["version"] = then
     if row.get("counts"):
         row["counts"] = {k: v for k, v in row["counts"].items() if k != "lacking"}
     return row

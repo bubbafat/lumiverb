@@ -32,7 +32,7 @@ def test_the_workers_constants_are_the_registrys_settings():
 
     assert P.PRODUCERS["lumiverb.video.scenes"].defaults == {}
     assert video_scanner.OUT_WIDTH == scene_detail.FRAME_WIDTH
-    assert scene_segmenter.HASH_SIZE == scene_detail.HASH_SIZE == 16
+    assert scene_segmenter.HASH_SIZE == scene_detail.HASH_SIZE == 8
     assert "select='eq(pict_type\\\\,I)'" in inspect.getsource(video_scanner)  # keyframes only
     faces = P.PRODUCERS["lumiverb.image.faces"].defaults
     assert face.MODEL_VERSION == faces["model"]

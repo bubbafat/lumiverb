@@ -20,9 +20,9 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
             'tests/test_last_modified.py', 'tests/test_lineage_api.py', 'tests/test_ocr_table.py',
             'tests/test_producers_run_api.py',
             'tests/test_public_search_cap.py', 'tests/test_reconciler.py', 'tests/test_saved_search_as_project.py',
-            'tests/test_scheduler_queue.py', 'tests/test_search_cross_library.py', 'tests/test_search_filters.py',
-            'tests/test_search_slow.py', 'tests/test_search_sync_real.py', 'tests/test_unified_query.py',
-            'tests/test_vision_submit.py',
+            'tests/test_scene_redo_api.py', 'tests/test_scheduler_queue.py', 'tests/test_search_cross_library.py',
+            'tests/test_search_filters.py', 'tests/test_search_slow.py', 'tests/test_search_sync_real.py',
+            'tests/test_unified_query.py', 'tests/test_vision_submit.py',
         ),
     },
     "a call's name (Resolve's plug-in, its own)": {

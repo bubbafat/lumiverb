@@ -7,7 +7,9 @@ them. The clip shows its old scenes, described, with their images and
 search entries, while the new ones are found and then described; the last
 one described swaps them in, and only then do the old ones go (ADR-016,
 principle 11). With no model to describe them, they're swapped in once
-found. Scenes hold no human data.
+found. A new scene whose picture is a frame an old one was described on
+keeps that description: found again with every scene so, they're shown at
+once. Scenes hold no human data.
 """
 
 from __future__ import annotations
@@ -25,8 +27,11 @@ pytestmark = pytest.mark.slow
 OLD = "0ld5ce7e5"  # settings nothing finds scenes with now
 
 
-def _find(lib, vid: str, made: dict, scenes: list[tuple[int, int]]) -> None:
-    """Find the clip's scenes as `made` says, through the chunk API the indexer uses."""
+def _find(lib, vid: str, made: dict, scenes: list[tuple[int, int]], frame: int | list[int] = 0) -> None:
+    """Find the clip's scenes as `made` says, through the chunk API the indexer uses: each
+    scene's picture `frame` ms after its start, or each its own (a redo's on frames no old
+    scene was described on, unless a test means it to be)."""
+    frames = frame if isinstance(frame, list) else [frame] * len(scenes)
     client, headers, *_ = lib
     while True:
         work = client.post(f"/v1/video/{vid}/chunks/next", headers=headers)
@@ -35,7 +40,7 @@ def _find(lib, vid: str, made: dict, scenes: list[tuple[int, int]]) -> None:
         assert work.status_code == 200, work.text
         w = work.json()
         body = {"worker_id": w["worker_id"], "lineage": made, "scenes": [
-                    {"scene_index": i, "start_ms": a, "end_ms": b, "rep_frame_ms": a, "keep_reason": "phash"}
+                    {"scene_index": i, "start_ms": a, "end_ms": b, "rep_frame_ms": a + frames[i], "keep_reason": "phash"}
                     for i, (a, b) in enumerate(scenes) if w["chunk_index"] == 0]}
         r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete", json=body, headers=headers)
         assert r.status_code == 200, r.text
@@ -88,10 +93,14 @@ def _describe(lib, vid: str, sha: str, scenes: list[dict], text_: str = "a cat")
 
 @pytest.fixture
 def describer(monkeypatch):
-    """The account has a model describing scenes (the tests' accounts have none)."""
+    """The account has a model describing scenes (the tests' accounts have none),
+    describing as the tests' describer does (_want's lineage)."""
     from src.server.api.routers import video
+    from src.server.api.routers.producers import tenant_ai
+    from src.server.repository import lineage
 
-    monkeypatch.setattr(video, "_described_here", lambda request: True)
+    monkeypatch.setattr(video, "_described_as", lambda request, session: video._scene_lineage(
+        lineage.desired(session, "lumiverb.video.scene_descriptions", tenant_ai(request)[0])))
 
 
 def _found(lib, words: str) -> dict[str, dict]:
@@ -149,7 +158,7 @@ def test_a_redo_finds_new_scenes_beside_the_old_ones_and_swaps_them_in_once_desc
     new = _want(lib, "lumiverb.video.scenes", sha)
     r = _start(lib, vid, redo=True, lineage=new)
     assert r.status_code == 200 and r.json()["already_initialized"] is False, r.text
-    _find(lib, vid, new, [(0, 30000)])
+    _find(lib, vid, new, [(0, 30000)], frame=500)
     # Found: the clip still shows its old scenes, described, with their images.
     assert _scenes(lib, vid) == old and all(p.exists() for p in image.values())
     assert _counts(lib, "lumiverb.video.scenes")["current"] == 1 and _lineage(lib, vid) == {"lumiverb.video.scenes"}
@@ -160,14 +169,112 @@ def test_a_redo_finds_new_scenes_beside_the_old_ones_and_swaps_them_in_once_desc
 
     (r,) = _describe(lib, vid, sha, [found])
     assert r.status_code == 200, r.text
-    # Described: swapped in, in one step; the old ones' images go, but not
-    # the one at the moment a new scene shares (0 ms), and they're no longer found.
+    # Described: swapped in, in one step; the old ones' images go, and they're no longer found.
     assert [(s["scene_id"], s["description"]) for s in _scenes(lib, vid)] == [(found["scene_id"], "a cat")]
-    assert image[0].read_bytes() == b"new jpeg" and not image[12000].exists()
+    assert not image[0].exists() and not image[12000].exists()
+    assert storage.abs_path(storage.scene_rep_key(tenant_id, library_id, vid, 500)).read_bytes() == b"new jpeg"
     assert _search_hit(lib, vid, "cat") == ("scene", 0, 30000, "a cat")
     assert vid not in _found(lib, "dog")
     assert _lineage(lib, vid) == {"lumiverb.video.scenes", "lumiverb.video.scene_descriptions"}
     assert _counts(lib, "lumiverb.video.scene_descriptions")["current"] == 1 and _counts(lib, "lumiverb.video.scenes")["current"] == 1
+
+
+def _video_description_made(lib, vid: str, sha: str) -> None:
+    """The video's own description, written from its scenes', saved as its producer saves it."""
+    from tests.derived import saved
+
+    client, headers, *_ = lib
+    r = saved(client, "vision", vid, json={"model_id": "m", "model_version": "1", "description": "a day out",
+                                          "tags": [], "lineage": _want(lib, "lumiverb.video.description", sha)},
+              headers=headers)
+    assert r.status_code == 200, r.text
+
+
+def _made(lib, vid: str) -> set[str]:
+    with _db(lib) as s:
+        return {r[0] for r in s.execute(text("SELECT artifact FROM artifact_lineage WHERE asset_id = :a"
+                                             " AND outcome = 'ok' AND artifact LIKE 'lumiverb.video.%'"), {"a": vid})}
+
+
+def test_a_scene_found_again_on_a_frame_already_described_keeps_its_description(env, describer):
+    # Its description is of that frame alone (scene_vision): the same frame
+    # is described the same way, so only the new frames are described.
+    lib = _library(env, "SceneKeepsDescription")
+    client, headers, library_id, storage, tenant_id, _ = lib
+    vid, sha = _video_found_the_old_way(lib)  # (0, 12 s) on 0 ms and (12 s, 30 s) on 12 s, "a dog"
+    old = _scenes(lib, vid)
+    new = _want(lib, "lumiverb.video.scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    _find(lib, vid, new, [(0, 20000), (20000, 30000)], frame=[0, 500])  # the first on 0 ms, as the first old one
+    assert _scenes(lib, vid) == old  # still shown, until the new frame is described
+    kept, fresh = _scenes(lib, vid, describing=True)
+    described_now = {k: v for k, v in _want(lib, "lumiverb.video.scene_descriptions", sha).items()
+                     if k in ("producer", "version", "settings_hash")}
+    assert (kept["rep_frame_ms"], kept["description"], kept["lineage"]) == (0, "a dog", described_now)
+    assert fresh["description"] is None
+    assert _counts(lib, "lumiverb.video.scene_descriptions")["missing"] == 1
+
+    (r,) = _describe(lib, vid, sha, [fresh])  # the describer passes the kept one by (scene_vision.described)
+    assert r.status_code == 200, r.text
+    assert [(s["start_ms"], s["end_ms"], s["description"]) for s in _scenes(lib, vid)] == [
+        (0, 20000, "a dog"), (20000, 30000, "a cat")]
+    key = lambda ms: storage.abs_path(storage.scene_rep_key(tenant_id, library_id, vid, ms))  # noqa: E731
+    assert key(0).read_bytes() == b"jpeg" and not key(12000).exists()  # the kept frame's image stays
+    assert _search_hit(lib, vid, "dog")[1:3] == (0, 20000)
+
+
+def test_found_again_with_every_scene_on_a_frame_already_described_theyre_shown_at_once(env, describer):
+    lib = _library(env, "SceneKeepsAll")
+    client, headers, library_id, storage, tenant_id, _ = lib
+    vid, sha = _video_found_the_old_way(lib)
+    _video_description_made(lib, vid, sha)
+    new = _want(lib, "lumiverb.video.scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    _find(lib, vid, new, [(0, 30000)])  # the two merged into one, on the first one's frame
+    # Nothing to describe: shown now, described as they would be, and the
+    # video's own description written again from the scenes it shows now.
+    assert [(s["start_ms"], s["end_ms"], s["description"]) for s in _scenes(lib, vid)] == [(0, 30000, "a dog")]
+    assert _scenes(lib, vid, describing=True) == _scenes(lib, vid)
+    assert _counts(lib, "lumiverb.video.scene_descriptions")["current"] == 1
+    assert _made(lib, vid) == {"lumiverb.video.scenes", "lumiverb.video.scene_descriptions"}
+    c = _counts(lib, "lumiverb.video.description")
+    assert (c["current"], c["stale"]) == (0, 1)  # written again
+    assert not storage.abs_path(storage.scene_rep_key(tenant_id, library_id, vid, 12000)).exists()
+
+
+def test_found_again_as_they_are_nothing_is_made_again(env, describer):
+    lib = _library(env, "SceneSameAgain")
+    vid, sha = _video_found_the_old_way(lib)
+    _video_description_made(lib, vid, sha)
+    old = _scenes(lib, vid)
+    new = _want(lib, "lumiverb.video.scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    _find(lib, vid, new, [(0, 12000), (12000, 30000)])
+    shown = _scenes(lib, vid)
+    assert [(s["start_ms"], s["end_ms"], s["rep_frame_ms"], s["description"]) for s in shown] == [
+        (s["start_ms"], s["end_ms"], s["rep_frame_ms"], s["description"]) for s in old]
+    assert _made(lib, vid) == {"lumiverb.video.scenes", "lumiverb.video.scene_descriptions",
+                               "lumiverb.video.description"}
+    assert _counts(lib, "lumiverb.video.description")["current"] == 1
+
+
+def test_a_scene_described_another_way_is_described_again_on_the_same_frame(env, describer):
+    lib = _library(env, "SceneKeptButOld")
+    client, headers, *_ = lib
+    vid, sha = _video_found_the_old_way(lib)
+    with _db(lib) as s:  # described with settings nothing describes with now
+        s.execute(text("UPDATE video_scenes SET lineage = jsonb_set(lineage, '{settings_hash}', '\"0ld\"')"
+                       " WHERE asset_id = :a"), {"a": vid})
+        s.commit()
+    old = _scenes(lib, vid)
+    new = _want(lib, "lumiverb.video.scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    _find(lib, vid, new, [(0, 12000), (12000, 30000)])
+    assert _scenes(lib, vid) == old  # not shown: described again first
+    found = _scenes(lib, vid, describing=True)
+    assert [(s["description"], s["lineage"]["settings_hash"]) for s in found] == [("a dog", "0ld")] * 2
+    assert all(r.status_code == 200 for r in _describe(lib, vid, sha, found))
+    assert [s["description"] for s in _scenes(lib, vid)] == ["a cat", "a cat"]
 
 
 def test_with_nothing_to_describe_them_new_scenes_are_shown_once_found(env):
@@ -176,7 +283,7 @@ def test_with_nothing_to_describe_them_new_scenes_are_shown_once_found(env):
     assert _search_hit(lib, vid, "dog")[0] == "scene"
     new = _want(lib, "lumiverb.video.scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
-    _find(lib, vid, new, [(0, 30000)])
+    _find(lib, vid, new, [(0, 30000)], frame=500)
     (shown,) = _scenes(lib, vid)
     assert (shown["start_ms"], shown["end_ms"], shown["description"]) == (0, 30000, None)
     assert vid not in _found(lib, "dog")  # the old ones went, and what they said with them
@@ -211,7 +318,7 @@ def test_a_redo_sent_again_changes_nothing(env, describer):
         s.execute(text("UPDATE video_index_chunks SET status = 'pending', worker_id = NULL WHERE asset_id = :a"),
                   {"a": vid})
         s.commit()
-    _find(lib, vid, new, [(0, 30000)])
+    _find(lib, vid, new, [(0, 30000)], frame=500)
     # Found this way already, waiting to be described: nothing to start again.
     r = _start(lib, vid, redo=True, lineage=new)
     assert r.status_code == 200 and r.json()["already_initialized"] is True, r.text
@@ -225,7 +332,7 @@ def test_another_redo_drops_the_last_ones_staged_never_the_ones_shown(env, descr
     old = _scenes(lib, vid)
     new = _want(lib, "lumiverb.video.scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
-    _find(lib, vid, new, [(0, 30000)])
+    _find(lib, vid, new, [(0, 30000)], frame=500)
     # Found by a run with settings that aren't the account's now (then changed again).
     with _db(lib) as s:
         s.execute(text("UPDATE video_index_chunks SET run = jsonb_set(run, '{settings_hash}', '\"0ther\"')"
@@ -342,10 +449,10 @@ def test_scenes_alike_are_merged_when_the_last_chunk_completes(env):
         s.commit()
     r = client.post(f"/v1/video/{vid}/chunks", json={"duration_sec": 60.0, "scene_sec": 15.0}, headers=headers)
     assert r.json()["chunk_count"] == 2  # two windows a chunk
-    bits = lambda n: f"{(1 << n) - 1:064x}"  # noqa: E731
-    # A talking head in two windows, then a cut to the beach, in two (Normal: alike within 40 bits).
-    found = {0: [(0, 15000, bits(0)), (15000, 30000, bits(12))], 1: [(30000, 45000, bits(200)),
-                                                                     (45000, 60000, bits(190))]}
+    bits = lambda n: f"{(1 << n) - 1:016x}"  # noqa: E731 — a 64-bit hash, n bits from bits(0)
+    # A talking head in two windows, then a cut to the beach, in two (Normal: alike within 14 bits).
+    found = {0: [(0, 15000, bits(0)), (15000, 30000, bits(12))], 1: [(30000, 45000, bits(60)),
+                                                                     (45000, 60000, bits(50))]}
     made = _want(lib, "lumiverb.video.scenes", sha)
     for _ in found:
         w = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
@@ -419,7 +526,7 @@ def _found_again_and_described(lib) -> tuple[str, str, list[dict]]:
     old = _scenes(lib, vid)
     new = _want(lib, "lumiverb.video.scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
-    _find(lib, vid, new, [(0, 30000)])
+    _find(lib, vid, new, [(0, 30000)], frame=500)
     assert all(r.status_code == 200 for r in _describe(lib, vid, sha, _scenes(lib, vid, describing=True)))
     assert [s["start_ms"] for s in _scenes(lib, vid)] == [0] and _scenes(lib, vid)[0]["end_ms"] == 30000
     return vid, sha, old
@@ -442,7 +549,7 @@ def test_a_scene_found_again_is_searchable_once_its_shown(env, describer):
     vid, sha = _video_found_the_old_way(lib)
     new = _want(lib, "lumiverb.video.scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
-    _find(lib, vid, new, [(0, 20000), (20000, 30000)])
+    _find(lib, vid, new, [(0, 20000), (20000, 30000)], frame=500)
     first, second = _scenes(lib, vid, describing=True)
     (r,) = _describe(lib, vid, sha, [first])
     assert r.status_code == 200, r.text
