@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
+from src.producers.clip import CLIP_MODEL_ID
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 from tests.test_reconciler import _counts, _library
@@ -346,6 +347,90 @@ def test_another_redo_drops_the_last_ones_staged_never_the_ones_shown(env, descr
     with _db(lib) as s:
         assert s.execute(text("SELECT count(*) FROM video_scenes WHERE asset_id = :a AND staged IS NOT NULL"),
                          {"a": vid}).scalar() == 0
+
+
+# Scenes' CLIP vectors (src/producers/scene_likeness): of each one's frame alone, as its description is.
+LIKENESS = "lumiverb.video.scene_likeness"
+MODEL = "ViT-B-32-openai"
+
+
+def _embed(lib, vid: str, sha: str, scenes: list[dict]) -> dict:
+    """Each scene's picture's vector, saved as the producer saves them: 512 numbers, each its frame's
+    seconds and a quarter (POST /v1/video/{id}/scene-likeness)."""
+    client, headers, *_ = lib
+    r = client.post(f"/v1/video/{vid}/scene-likeness", headers=headers, json={
+        "scenes": [{"scene_id": s["scene_id"], "vector": [s["rep_frame_ms"] / 1000 + 0.25] * 512} for s in scenes],
+        "model_id": CLIP_MODEL_ID, "model_version": MODEL, "lineage": _want(lib, LIKENESS, sha)})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _vector_from(lib, scene: dict) -> float | None:
+    """The frame (its seconds) a scene's vector was made of, as _embed made it; None: it has none."""
+    with _db(lib) as s:
+        first = s.execute(text("SELECT (CAST(likeness AS real[]))[1] FROM video_scenes WHERE scene_id = :s"),
+                          {"s": scene["scene_id"]}).scalar()
+    return None if first is None else first - 0.25
+
+
+def test_a_scene_found_again_on_a_frame_already_embedded_keeps_its_vector(env, describer):
+    # Its vector is of that frame alone: the same frame makes the same vector, so only new frames are embedded.
+    lib = _library(env, "SceneKeepsLikeness")
+    vid, sha = _video_found_the_old_way(lib)  # (0, 12 s) on 0 ms and (12 s, 30 s) on 12 s, described
+    assert _embed(lib, vid, sha, _scenes(lib, vid))["made"] is True
+    assert _counts(lib, LIKENESS)["current"] == 1
+    new = _want(lib, "lumiverb.video.scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    _find(lib, vid, new, [(0, 20000), (20000, 30000)], frame=[0, 500])  # the first on 0 ms, as the first old one
+    kept, fresh = _scenes(lib, vid, describing=True)
+    assert (kept["likeness_model"], _vector_from(lib, kept)) == (MODEL, 0)
+    assert (fresh["likeness_model"], _vector_from(lib, fresh)) == (None, None)
+    # Its new frame has none: the video is missing its vectors (not current, though its lineage stays) until
+    # that one is embedded; nothing goes with its scenes being found again.
+    c = _counts(lib, LIKENESS)
+    assert (c["current"], c["missing"], c["stale"]) == (0, 1, 0) and _due(lib, LIKENESS) == [vid]
+    assert _embed(lib, vid, sha, [fresh]) == {"saved": 1, "gone": 0, "made": True}
+    assert _counts(lib, LIKENESS)["current"] == 1 and _due(lib, LIKENESS) == []
+    # Described: shown, each with its vector.
+    (r,) = _describe(lib, vid, sha, [fresh])
+    assert r.status_code == 200, r.text
+    assert [(s["start_ms"], s["likeness_model"], _vector_from(lib, s)) for s in _scenes(lib, vid)] == [
+        (0, MODEL, 0), (20000, MODEL, 20.5)]
+    assert _counts(lib, LIKENESS)["current"] == 1
+
+
+def test_found_again_on_frames_already_embedded_nothing_is_embedded_again(env, describer):
+    lib = _library(env, "SceneLikenessAllKept")
+    vid, sha = _video_found_the_old_way(lib)
+    _embed(lib, vid, sha, _scenes(lib, vid))
+    new = _want(lib, "lumiverb.video.scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    _find(lib, vid, new, [(0, 30000)])  # the two merged into one, on the first one's frame: shown at once
+    (shown,) = _scenes(lib, vid)
+    assert (shown["start_ms"], shown["end_ms"], shown["likeness_model"], _vector_from(lib, shown)) == (
+        0, 30000, MODEL, 0)
+    assert _counts(lib, LIKENESS)["current"] == 1 and _due(lib, LIKENESS) == []
+
+
+def test_while_a_redos_scenes_wait_to_be_described_theirs_are_the_vectors_made(env, describer):
+    # The scenes shown go once the new ones are described: what's embedded is what the describer works on, so a
+    # video whose shown scenes never had vectors isn't handed out again and again meanwhile.
+    lib = _library(env, "SceneLikenessDuringRedo")
+    vid, sha = _video_found_the_old_way(lib)  # shown and described, never embedded
+    old = _scenes(lib, vid)
+    new = _want(lib, "lumiverb.video.scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    _find(lib, vid, new, [(0, 30000)], frame=500)  # a new frame: described next, the old ones shown meanwhile
+    (found,) = _scenes(lib, vid, describing=True)
+    assert _due(lib, LIKENESS) == [vid]
+    assert _embed(lib, vid, sha, [found]) == {"saved": 1, "gone": 0, "made": True}
+    assert _due(lib, LIKENESS) == [] and _counts(lib, LIKENESS)["current"] == 1
+    assert [s["likeness_model"] for s in _scenes(lib, vid)] == [None, None]  # still shown, until it's described
+    (r,) = _describe(lib, vid, sha, [found])
+    assert r.status_code == 200, r.text
+    assert [(s["scene_id"], s["likeness_model"]) for s in _scenes(lib, vid)] == [(found["scene_id"], MODEL)]
+    # The old scenes' vectors, sent late: passed by, they're gone.
+    assert _embed(lib, vid, sha, old) == {"saved": 0, "gone": 2, "made": True}
 
 
 def test_a_redo_must_say_how_the_scenes_will_be_found(env):

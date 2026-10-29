@@ -14,7 +14,7 @@ def test_one_producer_per_artifact_and_each_artifact_once():
     assert set(P.ARTIFACTS) == {
         "lumiverb.video.format", "lumiverb.capture_time", "lumiverb.preview", "lumiverb.video.preview", "lumiverb.video.analysis_proxy", "lumiverb.video.scenes", "lumiverb.video.scene_descriptions",
         "lumiverb.image.description", "lumiverb.image.text", "lumiverb.image.likeness", "lumiverb.image.faces", "lumiverb.video.faces", "lumiverb.video.transcript", "lumiverb.location.guess",
-        "lumiverb.video.description", "lumiverb.live_photo",
+        "lumiverb.video.description", "lumiverb.live_photo", "lumiverb.video.scene_likeness",
     }
     # A producer is named by what it makes (ADR-024): its artifact is its name.
     assert all(a == p.makes.name for a, p in P.PRODUCERS.items())
@@ -35,7 +35,7 @@ def test_each_ai_producer_takes_its_jobs_model():
     assert {a: p.job for a, p in P.PRODUCERS.items() if p.job} == {
         "lumiverb.image.description": "vision", "lumiverb.image.text": "vision", "lumiverb.video.scene_descriptions": "vision",
         "lumiverb.video.description": "vision", "lumiverb.video.transcript": "transcripts", "lumiverb.image.likeness": "clip",
-        "lumiverb.image.faces": "faces", "lumiverb.video.faces": "faces"}  # the AI jobs keep their words
+        "lumiverb.video.scene_likeness": "clip", "lumiverb.image.faces": "faces", "lumiverb.video.faces": "faces"}  # the AI jobs keep their words
     assert all(p.job in JOBS for p in P.PRODUCERS.values() if p.job)
     models = {"vision": "qwen3-vl:8b", "transcripts": "medium"}
     s = P.effective_settings("lumiverb.image.description", account=models)
@@ -71,7 +71,9 @@ def test_lineage_names_the_producer_version_settings_and_source():
 
 
 def test_clip_and_faces_are_all_or_nothing():
-    assert {a for a, p in P.PRODUCERS.items() if p.uniform} == {"lumiverb.image.likeness", "lumiverb.image.faces"}
+    # Scenes' vectors are compared with photos': one model across the library.
+    assert {a for a, p in P.PRODUCERS.items() if p.uniform} == {"lumiverb.image.likeness", "lumiverb.video.scene_likeness",
+                                                                "lumiverb.image.faces"}
 
 
 def test_the_prompts_are_the_ones_the_worker_sends():

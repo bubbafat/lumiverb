@@ -388,6 +388,10 @@ class VideoScene(SQLModel, table=True):
     phash: str | None = Field(default=None, nullable=True)
     # How its description was made: {producer, version, settings_hash}.
     lineage: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    # Its picture's CLIP vector (src/producers/scene_likeness), dimensionless as asset_embeddings', and the
+    # model it's from ("ViT-B-32-openai"). Never loaded with a scenes list (get_scenes_for_asset defers it).
+    likeness: Any = Field(default=None, sa_column=Column(Vector(), nullable=True))
+    likeness_model: str | None = Field(default=None, nullable=True)
     # None: one of the scenes the video shows. A redo finds new scenes beside
     # them ("finding"; "found" once its run is merged, while they're
     # described), and the last one described swaps them in: the video keeps

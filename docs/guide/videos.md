@@ -12,6 +12,7 @@ Once a video is scanned, Lumiverb makes these for it in the background, each whe
 | An analysis copy | the server | The video the viewer plays. Scenes, faces and the transcript are made from it |
 | Scenes | the server | Nowhere directly: they're what gets described |
 | Scene descriptions and tags | an AI machine | Search |
+| Each scene's picture as a visual search (CLIP) vector, as photos have | the server | Nowhere directly: kept with each scene |
 | The video's description and tags | an AI machine, from its scene descriptions | The viewer's **Description** and **Tags** |
 | A transcript | the server | The viewer's **Transcript** |
 | Faces | the server | The viewer's **People** |
@@ -41,6 +42,8 @@ Lumiverb cuts each video into scenes where the picture changes, then joins neigh
 An AI machine describes each scene and tags it. Once every scene of a video is described, it writes the video's own description and tags from them, in order. That's what the viewer shows as the video's **Description** and **Tags**, and editors and admins correct it the same way as a photo's (**Edit**, marked **Edited**).
 
 The web app doesn't list a video's scenes. Their descriptions are what search reads, and what the video's description is written from.
+
+The server also turns each scene's picture into the kind of vector visual search keeps for a photo (**Visual search in videos (CLIP)** in **Settings › Processing**), with no AI machine to set up: the **Built in** machine does it, or one you add for visual search ([A second machine for search and faces](ai-worker.md)). When a video's scenes are found again, a scene on a picture that was already done keeps its vector, so only new pictures are done.
 
 ## Transcripts
 

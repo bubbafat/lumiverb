@@ -151,7 +151,7 @@ The copy of a video Lumiverb analyses: smaller, and the browser plays it.
 - **Fields:** `video` video.
 - **Made by:** Analysis proxies (videos).
 - **Made from:** `lumiverb.original`.
-- **Read by:** Scenes, Scene descriptions, Faces in videos, Transcripts.
+- **Read by:** Scenes, Scene descriptions, Visual search in videos (CLIP), Faces in videos, Transcripts.
 - **Was:** `analysis_proxy` (lineage's producer `analysis-proxy`, its job's kind `render`).
 - **Files:** `lumiverb.video.analysis_proxy` (was `analysis_proxy`).
 
@@ -203,6 +203,14 @@ Each scene described, with tags.
 - **Read by:** Video descriptions.
 - **Was:** `scene_vision` (lineage's producer `scene-vision`).
 
+## `lumiverb.video.scene_likeness`
+
+What visual search compares in a video: each scene's picture's CLIP vector, and the model it's from.
+
+- **A list, each with:** `start_ms` number; `end_ms` number; `vector` vector; `model` text.
+- **Made by:** Visual search in videos (CLIP) (videos).
+- **Made from:** `lumiverb.video.analysis_proxy`, `lumiverb.video.scenes`.
+
 ## `lumiverb.video.scenes`
 
 Where its scenes start and end, each with its picture.
@@ -210,7 +218,7 @@ Where its scenes start and end, each with its picture.
 - **A list, each with:** `start_ms` number; `end_ms` number; `picture` image.
 - **Made by:** Scenes (videos).
 - **Made from:** `lumiverb.video.analysis_proxy`, `lumiverb.metadata`.
-- **Read by:** Scene descriptions, Faces in videos.
+- **Read by:** Scene descriptions, Visual search in videos (CLIP), Faces in videos.
 - **Was:** `scenes` (lineage's producer `scene-detect`).
 - **Files:** `lumiverb.video.scenes.picture` (was `scene_rep`).
 

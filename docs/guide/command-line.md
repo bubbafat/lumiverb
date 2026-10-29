@@ -71,7 +71,7 @@ What a command can do is what the key's role can do in the web app.
 | `lumiverb settings show` | The account's settings |
 | `lumiverb device run` | Read libraries for a server elsewhere ([Libraries on another computer](devices.md)) |
 
-A kind of work is named by what it makes, with or without `lumiverb.` in front: `image.description`, `image.text`, `image.likeness`, `image.faces`, `video.faces`, `video.transcript`, `video.scenes`, `video.scene_descriptions`, `video.description`, `video.analysis_proxy`, `video.format`, `capture_time`, `location.guess`. A plug-in's work is named by its id. `lumiverb producers` shows each name in parentheses after its title.
+A kind of work is named by what it makes, with or without `lumiverb.` in front: `image.description`, `image.text`, `image.likeness`, `video.scene_likeness`, `image.faces`, `video.faces`, `video.transcript`, `video.scenes`, `video.scene_descriptions`, `video.description`, `video.analysis_proxy`, `video.format`, `capture_time`, `location.guess`. A plug-in's work is named by its id. `lumiverb producers` shows each name in parentheses after its title.
 
 ## lumiverb-server
 

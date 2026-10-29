@@ -436,6 +436,7 @@ const KIND_LABELS: Record<string, [string, string]> = {
   "lumiverb.video.format": ["video probe", "video probes"],
   "lumiverb.video.analysis_proxy": ["analysis copy", "analysis copies"],
   "lumiverb.image.likeness": ["CLIP embedding", "CLIP embeddings"],
+  "lumiverb.video.scene_likeness": ["scene embedding", "scene embeddings"],
   "lumiverb.image.description": ["description", "descriptions"],
   "lumiverb.image.text": ["text read", "texts read"],
   "lumiverb.video.scene_descriptions": ["scene description", "scene descriptions"],

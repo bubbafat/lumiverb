@@ -33,8 +33,9 @@ def test_every_producer_declares_what_the_rest_needs():
     assert list(producers) == [
         "lumiverb.video.format", "lumiverb.capture_time", "lumiverb.live_photo", "lumiverb.preview", "lumiverb.video.preview",
         "lumiverb.video.analysis_proxy", "lumiverb.video.scenes", "lumiverb.video.scene_descriptions",
-        "lumiverb.video.description", "lumiverb.image.description", "lumiverb.image.text", "lumiverb.image.likeness", "lumiverb.image.faces",
-        "lumiverb.video.faces", "lumiverb.video.transcript", "lumiverb.location.guess"]
+        "lumiverb.video.description", "lumiverb.image.description", "lumiverb.image.text", "lumiverb.image.likeness",
+        "lumiverb.video.scene_likeness", "lumiverb.image.faces", "lumiverb.video.faces", "lumiverb.video.transcript",
+        "lumiverb.location.guess"]
     for p in producers.values():
         assert isinstance(p, ProducerSpec) and p.applies and p.made and p.artifact == p.makes.name
         assert all(n in producers for n in p.needs), (p.artifact, p.needs)
@@ -311,7 +312,7 @@ def test_video_producers_are_timed_by_the_second_and_the_rest_by_the_clip():
 
     by_second = {a for a, p in PRODUCERS.items() if p.unit == "second"}
     assert by_second == {"lumiverb.video.analysis_proxy", "lumiverb.video.transcript", "lumiverb.video.scenes",
-                         "lumiverb.video.scene_descriptions", "lumiverb.video.faces"}
+                         "lumiverb.video.scene_descriptions", "lumiverb.video.scene_likeness", "lumiverb.video.faces"}
     assert KINDS["lumiverb.video.analysis_proxy"].spec.by_seconds \
         and KINDS["redo:lumiverb.video.transcript"].spec.by_seconds
     assert not KINDS["lumiverb.image.description"].spec.by_seconds

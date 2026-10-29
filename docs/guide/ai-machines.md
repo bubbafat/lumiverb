@@ -10,7 +10,7 @@ Lumiverb's AI work is four jobs, each with one model for the whole account:
 |---|---|---|
 | Descriptions & text | Photos' descriptions and tags, text in photos (signs, screens, documents), descriptions of video scenes, and each video's description | Off: needs a machine and a model |
 | Transcripts | What's said in videos | The Built in machine, model `small` |
-| Visual search (CLIP) | Similar photos, and search by picture | The Built in machine |
+| Visual search (CLIP) | Similar photos, search by picture, and the same vectors of video scenes' pictures | The Built in machine |
 | Faces | Faces in photos and videos | The Built in machine |
 
 Until Descriptions & text has a machine and a model, that work waits. Nothing fails, and once you add one it catches up on everything.

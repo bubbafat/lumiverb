@@ -46,7 +46,7 @@ REPO = Path(__file__).resolve().parent.parent
 BEFORE = REPO / "tests" / "fixtures" / "producers_before_names.json"
 # Lumiverb's own producers added since the names (ADR-024): named from the start, with no old word and nothing
 # before names to hold them to. A new one is added here on purpose.
-ADDED_SINCE = {"lumiverb.video.description", "lumiverb.live_photo"}
+ADDED_SINCE = {"lumiverb.video.description", "lumiverb.live_photo", "lumiverb.video.scene_likeness"}
 
 
 def _without_added(now: dict) -> dict:

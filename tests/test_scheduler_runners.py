@@ -760,6 +760,96 @@ def test_a_scene_described_another_way_is_described_again() -> None:
     assert not described({"description": None, "lineage": dict(now)}, now)
 
 
+LIKENESS_MODEL = "ViT-B-32-openai"
+
+
+def _embedded(acct, monkeypatch, tmp_path, scenes: list[dict], embed=None, **extra):
+    """A video's scenes embedded by their producer's work (src/producers/scene_likeness), through the runner:
+    each scene's frame a stand-in's, each picture embedded by the CLIP job's machines (a stand-in for the guard's)."""
+    proxy = tmp_path / "v.mp4"
+    proxy.write_bytes(b"x")
+    acct.analysis_cache.get.return_value = proxy
+
+    def extracted(source, dest, timestamp):
+        dest.write_bytes(f"frame at {timestamp:g} s".encode())
+        return MagicMock(ok=True)
+
+    monkeypatch.setattr("src.processing.video.clip_extractor.extract_video_frame_detailed", extracted)
+    acct.clip.embedder.return_value.embed.side_effect = embed or (lambda image: {
+        "vector": [0.1, 0.2], "model_id": "clip", "model_version": LIKENESS_MODEL})
+    acct.client.get.return_value.json.return_value = {"scenes": scenes}
+    return _run(acct, "lumiverb.video.scene_likeness", "ast_1", **extra)
+
+
+def _likeness_saved(acct) -> list[list[str]]:
+    """The scene ids of each request saving a video's scenes' vectors, in order."""
+    return [[i["scene_id"] for i in c.kwargs["json"]["scenes"]] for c in acct.client.post.call_args_list
+            if c.args[0] == "/v1/video/ast_1/scene-likeness"]
+
+
+def test_a_videos_scenes_are_embedded_and_saved_a_few_at_a_time(acct, monkeypatch, tmp_path) -> None:
+    scenes = [_scene(f"s{i}", i * 1000, likeness_model=None) for i in range(120)]
+    scenes[3]["likeness_model"] = LIKENESS_MODEL  # embedded already, with the model in use: passed by
+    assert _embedded(acct, monkeypatch, tmp_path, scenes) is None
+    sent = [s["scene_id"] for s in scenes if s["scene_id"] != "s3"]
+    assert _likeness_saved(acct) == [sent[:50], sent[50:100], sent[100:]]  # a long video's kept as it goes
+    images = [c.args[0] for c in acct.clip.embedder.return_value.embed.call_args_list]
+    assert images[:2] == [b"frame at 0 s", b"frame at 1 s"]  # each scene's frame, at its rep_frame_ms
+    body = acct.client.post.call_args.kwargs["json"]
+    assert (body["model_id"], body["model_version"]) == ("clip", LIKENESS_MODEL)
+    assert body["lineage"]["producer"] == "lumiverb.video.scene_likeness" and body["lineage"]["source_hash"] == SHA
+    acct.clip.embedder.assert_called_once_with(acct.models)  # the built-in machine's model is the scheduler's
+    acct.failures.add.assert_not_called()
+
+
+def test_a_scene_embedded_with_another_model_is_embedded_again(acct, monkeypatch, tmp_path) -> None:
+    scenes = [_scene("s1", likeness_model="ViT-L-14-laion2b"), _scene("s2", likeness_model=LIKENESS_MODEL)]
+    assert _embedded(acct, monkeypatch, tmp_path, scenes) is None
+    assert _likeness_saved(acct) == [["s1"]]
+
+
+def test_a_video_without_its_analysis_copy_waits_for_its_vectors(acct) -> None:
+    acct.analysis_cache.get.return_value = None
+    assert _run(acct, "lumiverb.video.scene_likeness", "ast_1") == ["ast_1"]
+    acct.clip.embedder.return_value.embed.assert_not_called()
+    acct.failures.add.assert_not_called()
+
+
+def test_the_clip_machines_trouble_stops_a_videos_vectors_uncharged(acct, monkeypatch, tmp_path) -> None:
+    from src.processing.workers.embeddings.base import EmbeddingError
+
+    acct.clip.charges.return_value = False  # the machines': it waits, uncharged
+    fault = EmbeddingError("connection refused", endpoint_fault=True)
+    assert _embedded(acct, monkeypatch, tmp_path, [_scene("s1"), _scene("s2")],
+                     embed=MagicMock(side_effect=fault)) == ["ast_1"]
+    acct.clip.charges.assert_called_once_with(fault)
+    assert _likeness_saved(acct) == [] and acct.clip.embedder.return_value.embed.call_count == 1
+    acct.failures.add.assert_not_called()
+
+
+def test_a_scenes_vector_made_with_another_model_isnt_saved(acct, monkeypatch, tmp_path) -> None:
+    acct.clip.charges.return_value = False  # the machine's: it served another model under the name
+    other = {"vector": [0.1], "model_id": "clip", "model_version": "ViT-L-14-laion2b"}
+    assert _embedded(acct, monkeypatch, tmp_path, [_scene("s1")], embed=lambda image: other) == ["ast_1"]
+    assert _likeness_saved(acct) == []
+    acct.failures.add.assert_not_called()
+
+
+def test_a_picture_the_machine_cant_read_is_the_videos_once_the_rest_are_saved(acct, monkeypatch, tmp_path) -> None:
+    from src.processing.workers.embeddings.base import EmbeddingError
+
+    def embed(image):
+        if image == b"frame at 1 s":
+            raise EmbeddingError("its proxy can't be read: truncated", endpoint_fault=False)
+        return {"vector": [0.1], "model_id": "clip", "model_version": LIKENESS_MODEL}
+
+    scenes = [_scene("s1", 1000), _scene("s2", 2000)]
+    assert _embedded(acct, monkeypatch, tmp_path, scenes, embed=embed) is None
+    assert _likeness_saved(acct) == [["s2"]]
+    assert _charged(acct) == [("lumiverb.video.scene_likeness", "ast_1")]
+    assert "1 of 2 scenes failed: its proxy can't be read" in str(acct.failures.add.call_args.args[2])
+
+
 def test_a_scene_whose_record_isnt_said_counts_as_described() -> None:
     from src.producers.scene_vision.work import described
 
