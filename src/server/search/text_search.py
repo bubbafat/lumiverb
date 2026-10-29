@@ -34,8 +34,8 @@ each match.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 
 from sqlalchemy import text
 from sqlmodel import Session
@@ -68,6 +68,8 @@ class Hit:
     # What matched (MATCHED_IN), and for a plug-in's fact, the plug-in's id.
     matched_in: str | None = None
     source: str | None = None
+    # Which of the search's unquoted words (Query.words) it matched.
+    words: tuple[bool, ...] = ()
 
 
 # What a hit's words matched in: a clip's description (and tags), its note, the text read in it, its transcript,
@@ -88,20 +90,27 @@ def _excerpt_sql(field: str, q: Query) -> str:
 class Query:
     """A search's tsquery expressions (SQL over bound parameters): `exact`
     what must match, `loose` the same with each word also a prefix, `phrase`
-    each term's unquoted words in a row (ranked, never required)."""
+    each term's unquoted words in a row (ranked, never required). `words`:
+    each unquoted word of every term, (exact, loose) with the things it names
+    (an AI-assisted search's), so a search can say which of them a clip
+    matched (`_words_matched`; ranked by src/server/search/rank.py)."""
 
     exact: str
     loose: str
     phrase: str | None
     params: dict[str, str]
+    words: list[tuple[str, str]] = field(default_factory=list)
 
 
-def build(terms: list[str], also: Sequence[Sequence[str]] | None = None) -> Query | None:
+def build(terms: list[str], also: Sequence[Mapping[str, Sequence[str]]] | None = None) -> Query | None:
     """The tsquery for search terms (each what a person typed; all must
-    match), or None when none has a word. also: for each term, other words or
-    phrases that match as its unquoted words do (an AI-assisted search's
-    things of a kind: src/server/search/assist.py), never counted against its
-    size. SearchTooLongError past MAX_TERMS terms, or a term past MAX_WORDS words."""
+    match), or None when none has a word. also: for each term, the other
+    words or phrases matching as one of its unquoted words does, by that word
+    (folded: an AI-assisted search's things of a kind, src/server/search
+    /assist.py), never counted against its size. SearchTooLongError past
+    MAX_TERMS terms, or a term past MAX_WORDS words."""
+    from src.server.search.understand import fold
+
     if len(terms) > MAX_TERMS:
         raise SearchTooLongError(f"At most {MAX_TERMS} searches can be combined; this has {len(terms)}.")
     params: dict[str, str] = {}
@@ -125,6 +134,7 @@ def build(terms: list[str], also: Sequence[Sequence[str]] | None = None) -> Quer
     exact: list[str] = []
     loose: list[str] = []
     phrases: list[str] = []
+    each: list[tuple[str, str]] = []
     for n, raw in enumerate(terms):
         parsed = parse_query(raw)
         if not parsed:
@@ -136,9 +146,16 @@ def build(terms: list[str], also: Sequence[Sequence[str]] | None = None) -> Quer
         quoted = [t.tokens for t in parsed if t.is_phrase]
         free = [t.tokens[0] for t in parsed if not t.is_phrase]
         required = [phrase(q) for q in quoted]
-        others = [tuple(t for p in parse_query(alt) for t in p.tokens) for alt in (also[n] if also else ())]
-        for clauses, one in ((exact, word), (loose, prefix)):
-            group = [one(t) for t in free] + [phrase(o) if len(o) > 1 else one(o[0]) for o in others if o]
+        things = also[n] if also and n < len(also) else {}
+        free_words: list[tuple[str, str]] = []
+        for token in free:
+            others = [tuple(t for p in parse_query(alt) for t in p.tokens) for alt in things.get(fold(token), ())]
+            free_words.append(tuple(  # type: ignore[arg-type]
+                "(" + " || ".join([one(token)] + [phrase(o) if len(o) > 1 else one(o[0]) for o in others if o]) + ")"
+                for one in (word, prefix)))
+        each.extend(free_words)
+        for clauses, i in ((exact, 0), (loose, 1)):
+            group = [w[i] for w in free_words]
             parts = required + ([f"({' || '.join(group)})"] if group else [])
             clauses.append("(" + " && ".join(parts) + ")")
         if len(free) > 1:
@@ -146,7 +163,14 @@ def build(terms: list[str], also: Sequence[Sequence[str]] | None = None) -> Quer
     if not exact:
         return None
     return Query(exact=" && ".join(exact), loose=" && ".join(loose),
-                 phrase=" || ".join(phrases) if phrases else None, params=params)
+                 phrase=" || ".join(phrases) if phrases else None, params=params, words=each)
+
+
+def _words_matched(column: str, q: Query, *, loose: bool = True) -> str:
+    """SQL: which of the search's unquoted words (Query.words, in order) the row's words match, as booleans."""
+    if not q.words:
+        return "ARRAY[]::boolean[]"
+    return "ARRAY[" + ", ".join(f"COALESCE({column} @@ ({w[1] if loose else w[0]}), false)" for w in q.words) + "]"
 
 
 def _score(column: str, q: Query, *, loose: bool) -> str:
@@ -177,7 +201,7 @@ def clips(session: Session, q: Query, library_ids: list[str] | None, limit: int,
     column = "s." + ("shown_capped" if public_cap_ms is not None else "shown" if public else "everything")
     params = {**q.params, "limit": limit, "excerpt": _EXCERPT}
     rows = session.execute(text(f"""
-        SELECT s.asset_id, m.matched_in, {_score(column, q, loose=True)} AS score,
+        SELECT s.asset_id, m.matched_in, {_score(column, q, loose=True)} AS score, {_words_matched(column, q)} AS words,
                CASE m.matched_in
                    WHEN 'text' THEN {_excerpt_sql('s.ocr_text', q)}
                    WHEN 'note' THEN {_excerpt_sql('s.note', q)}
@@ -189,7 +213,7 @@ def clips(session: Session, q: Query, library_ids: list[str] | None, limit: int,
         ORDER BY score DESC, s.asset_id LIMIT :limit
     """), params).all()
     return [Hit(r.asset_id, float(r.score), _excerpt(r.snippet) if r.matched_in in _EXCERPTED else r.snippet or None,
-                matched_in=r.matched_in) for r in rows]
+                matched_in=r.matched_in, words=tuple(r.words)) for r in rows]
 
 
 _EXCERPTED = ("text", "note", "transcript")
@@ -233,13 +257,14 @@ def facts(session: Session, q: Query, library_ids: list[str] | None, limit: int,
         params[f"plugin{n}"] = plugin_id
         shown.append(f"(po.plugin_id = :plugin{n} AND {where})")
     rows = session.execute(text(f"""
-        SELECT po.asset_id, po.plugin_id, po.search_text, {_score('po.words', q, loose=True)} AS score
+        SELECT po.asset_id, po.plugin_id, po.search_text, {_score('po.words', q, loose=True)} AS score,
+               {_words_matched('po.words', q)} AS words
         FROM plugin_outputs po JOIN active_assets a ON a.asset_id = po.asset_id
         WHERE ({' OR '.join(shown)}) AND po.words @@ ({q.loose}){_in(library_ids, params)}
         ORDER BY score DESC, po.asset_id LIMIT :limit
     """), params).all()
-    return [Hit(r.asset_id, float(r.score), r.search_text or None, matched_in="fact", source=r.plugin_id)
-            for r in rows]
+    return [Hit(r.asset_id, float(r.score), r.search_text or None, matched_in="fact", source=r.plugin_id,
+                words=tuple(r.words)) for r in rows]
 
 
 def scenes(session: Session, q: Query, library_ids: list[str] | None, limit: int, *,
@@ -253,12 +278,14 @@ def scenes(session: Session, q: Query, library_ids: list[str] | None, limit: int
         capped = " AND v.start_ms < :cap"
         params["cap"] = public_cap_ms
     rows = session.execute(text(f"""
-        SELECT v.asset_id, v.description, v.start_ms, v.end_ms, {_score('v.words', q, loose=True)} AS score
+        SELECT v.asset_id, v.description, v.start_ms, v.end_ms, {_score('v.words', q, loose=True)} AS score,
+               {_words_matched('v.words', q)} AS words
         FROM video_scenes v JOIN active_assets a ON a.asset_id = v.asset_id
         WHERE v.words @@ ({q.loose}) AND v.staged IS NULL AND v.description IS NOT NULL{capped}{_in(library_ids, params)}
         ORDER BY score DESC, v.scene_id LIMIT :limit
     """), params).all()
-    return [Hit(r.asset_id, float(r.score), r.description, r.start_ms, r.end_ms, matched_in="scene") for r in rows]
+    return [Hit(r.asset_id, float(r.score), r.description, r.start_ms, r.end_ms, matched_in="scene",
+                words=tuple(r.words)) for r in rows]
 
 
 def segments(session: Session, q: Query, library_ids: list[str] | None, limit: int, *,
@@ -273,10 +300,11 @@ def segments(session: Session, q: Query, library_ids: list[str] | None, limit: i
         capped = " AND t.start_ms < :cap"
         params["cap"] = public_cap_ms
     rows = session.execute(text(f"""
-        SELECT t.asset_id, t.text, t.start_ms, t.end_ms, {_score('t.words', q, loose=False)} AS score
+        SELECT t.asset_id, t.text, t.start_ms, t.end_ms, {_score('t.words', q, loose=False)} AS score,
+               {_words_matched('t.words', q, loose=False)} AS words
         FROM transcript_segments t JOIN active_assets a ON a.asset_id = t.asset_id
         WHERE t.words @@ ({q.exact}){capped}{_in(library_ids, params)}
         ORDER BY score DESC, t.asset_id, t.seq LIMIT :limit
     """), params).all()
-    return [Hit(r.asset_id, float(r.score), r.text, r.start_ms, r.end_ms, matched_in="transcript")
-            for r in rows]
+    return [Hit(r.asset_id, float(r.score), r.text, r.start_ms, r.end_ms, matched_in="transcript",
+                words=tuple(r.words)) for r in rows]

@@ -146,7 +146,15 @@
 <li>A word of three letters or more also matches the start of longer words: <code>disney</code> finds &quot;Disneyland&quot;.</li>
 <li>Plurals and accents don't matter: <code>dogs</code> finds &quot;dog&quot;, and <code>zurich</code> finds &quot;Zürich&quot;.</li>
 </ul>
-<p>Results are ranked by how well they match: a description, tags or a note counts most, a file or folder name least. A search shows its 5,000 best matches at most.</p>
+<p>Results are ranked, each rule deciding before the next:</p>
+<ol>
+<li>A clip the search names comes first: its file name, with or without the extension (<code>DJI_20261025123119_0003_D</code>, <code>IMG_7616.JPG</code>), then the clips in a folder of that name (<code>Dockcase</code>).</li>
+<li>Then the clips matching more of the search, a rare word counting for more than a common one: in <code>dundee beach</code>, a clip that says Dundee beats one that only says beach, and one that says both beats either.</li>
+<li>Then by where it matched: your own words (a note, a description or tags you wrote) first, then where it was or who's in it for a search that names a place or a person, then its description, tags and scenes, the text read in it and what's said, a plug-in's facts, and its file and folder names last.</li>
+<li>Then how well: the words together and in order, and whole words over the start of longer ones.</li>
+<li>Then the newest first.</li>
+</ol>
+<p>A search shows its 5,000 best matches at most.</p>
 <h3 id="why-a-clip-was-found">Why a clip was found<a class="anchor" href="#why-a-clip-was-found" aria-label="Link to this section">#</a></h3>
 <p>A clip found by something other than its description says so in the corner of its thumbnail: <strong>Text in photo</strong>, <strong>Note</strong>, <strong>Folder or file name</strong>, <strong>Said at 1:23</strong>, <strong>Scene at 0:42</strong>, a plug-in's name (<strong>Place names</strong>), and for a search understood, <strong>Near</strong> a place or <strong>Recognised</strong> and a name. Hover over it for the words that matched, as <code>Text in photo: Dundee Diner Kitchen</code>; open it and <strong>Found by</strong> says the same at the top of the panel. A video found by a scene or by what's said in it opens at that moment.</p>
 <h3 id="who-where-and-what-kind">Who, where and what kind<a class="anchor" href="#who-where-and-what-kind" aria-label="Link to this section">#</a></h3>
