@@ -28,7 +28,7 @@ import { HeartButton, StarPicker, ColorPicker } from "../components/RatingContro
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
-import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
+import { BEST_FIRST, BEST_MORE, searchRows, type GridLayout } from "../lib/bestMatches";
 import { useScrollAnchor } from "../lib/useScrollAnchor";
 import { NewClipsPill } from "../components/NewClipsPill";
 import { useLocalStorage } from "../lib/useLocalStorage";
@@ -49,6 +49,38 @@ const ZOOM_LEVELS = [
 
 const CELL_ASPECT_RATIO = 1.0;
 
+/** A query's clip as the grid and lightbox take it, with its library. */
+function browseItem(item: QueryItem): BrowseItem {
+  return {
+    asset_id: item.asset_id,
+    library_id: item.library_id,
+    library_name: item.library_name,
+    rel_path: item.rel_path,
+    file_size: item.file_size,
+    file_mtime: null,
+    content_hash: null,
+    media_type: item.media_type,
+    width: item.width,
+    height: item.height,
+    taken_at: item.taken_at,
+    status: item.status,
+    duration_sec: item.duration_sec,
+    camera_make: item.camera_make,
+    camera_model: item.camera_model,
+    iso: item.iso,
+    aperture: item.aperture,
+    focal_length: item.focal_length,
+    focal_length_35mm: item.focal_length_35mm,
+    lens_model: item.lens_model,
+    flash_fired: item.flash_fired,
+    gps_lat: item.gps_lat,
+    gps_lon: item.gps_lon,
+    created_at: item.created_at,
+    changed_at: item.changed_at ?? null,
+    search_context: item.search_context,
+  };
+}
+
 export default function UnifiedBrowsePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
@@ -62,6 +94,8 @@ export default function UnifiedBrowsePage() {
   // ref, because the grid mounts only once there are assets.
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
+  // Opened from a search's best matches: the lightbox steps through them, else through the days.
+  const [lightboxFromBest, setLightboxFromBest] = useState(false);
   const [zoomLevel, setZoomLevel] = useLocalStorage("lv_grid_zoom", 2);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [saveViewName, setSaveViewName] = useState("");
@@ -215,6 +249,8 @@ export default function UnifiedBrowsePage() {
         dir: browseDir,
         after: pageParam,
         limit: PAGE_SIZE,
+        // A search's best matches come apart with its first page, everything it found by date.
+        best: filters.some((f) => f.type === "query") ? BEST_FIRST : undefined,
       }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage?.next_cursor ?? undefined,
@@ -250,34 +286,7 @@ export default function UnifiedBrowsePage() {
   const flatAssets: BrowseItem[] = useMemo(() => {
     if (!browseQuery.data?.pages) return [];
     return browseQuery.data.pages.flatMap((p) =>
-      (p?.items ?? []).map((item: QueryItem): BrowseItem => ({
-        asset_id: item.asset_id,
-        library_id: item.library_id,
-        library_name: item.library_name,
-        rel_path: item.rel_path,
-        file_size: item.file_size,
-        file_mtime: null,
-        content_hash: null,
-        media_type: item.media_type,
-        width: item.width,
-        height: item.height,
-        taken_at: item.taken_at,
-        status: item.status,
-        duration_sec: item.duration_sec,
-        camera_make: item.camera_make,
-        camera_model: item.camera_model,
-        iso: item.iso,
-        aperture: item.aperture,
-        focal_length: item.focal_length,
-        focal_length_35mm: item.focal_length_35mm,
-        lens_model: item.lens_model,
-        flash_fired: item.flash_fired,
-        gps_lat: item.gps_lat,
-        gps_lon: item.gps_lon,
-        created_at: item.created_at,
-        changed_at: item.changed_at ?? null,
-        search_context: item.search_context,
-      })),
+      (p?.items ?? []).map(browseItem),
     );
   }, [browseQuery.data]);
 
@@ -305,17 +314,42 @@ export default function UnifiedBrowsePage() {
 
   const browseCount = flatAssets.length;
 
-  // Grouped by the date it's sorted by; a text search's, ranked by relevance, by taken date as before.
-  const searching = filters.some((f) => f.type === "query");
+  // Grouped by the date it's sorted by: a search's too, everything it found by the page's sort (its best matches
+  // apart, above).
   const groups = useMemo(
-    () => groupAssetsByDate(flatAssets, searching ? undefined : browseSort),
-    [flatAssets, searching, browseSort],
+    () => groupAssetsByDate(flatAssets, browseSort),
+    [flatAssets, browseSort],
   );
 
   const orderedAssets = useMemo(
     () => groups.flatMap((g) => g.assets),
     [groups],
   );
+
+  // A search's best matches, as Google Photos shows a search: the first page's, then, opened (More), by
+  // relevance a page at a time, as many as there are (lib/bestMatches.ts).
+  const firstBest = browseQuery.data?.pages[0]?.best ?? null;
+  const searchKey = JSON.stringify(filters);
+  const [bestOpenFor, setBestOpenFor] = useState<string | null>(null);
+  const bestOpen = bestOpenFor === searchKey;
+  const bestQuery = useInfiniteQuery({
+    queryKey: ["best-matches", filters],
+    queryFn: ({ pageParam }) => queryAssets(filters, { after: pageParam, limit: BEST_MORE }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage?.next_cursor ?? undefined,
+    enabled: bestOpen && !!firstBest,
+  });
+  const bestItems: BrowseItem[] = useMemo(() => {
+    if (!firstBest) return [];
+    const opened = bestOpen ? bestQuery.data?.pages.flatMap((p) => p?.items ?? []) : undefined;
+    const items = opened && opened.length >= firstBest.items.length ? opened : firstBest.items;
+    return items.slice(0, firstBest.total).map(browseItem);
+  }, [firstBest, bestOpen, bestQuery.data]);
+  const { hasNextPage: moreBest, isFetchingNextPage: fetchingBest, fetchNextPage: fetchMoreBest } = bestQuery;
+  const showMoreBest = useCallback(() => {
+    if (!bestOpen) setBestOpenFor(searchKey);
+    else if (moreBest && !fetchingBest) void fetchMoreBest();
+  }, [bestOpen, searchKey, moreBest, fetchingBest, fetchMoreBest]);
 
   const orderedAssetIds = useMemo(
     () => orderedAssets.map((a) => a.asset_id),
@@ -347,18 +381,20 @@ export default function UnifiedBrowsePage() {
 
   const zoom = ZOOM_LEVELS[zoomLevel] ?? ZOOM_LEVELS[2];
 
-  const virtualRows: VirtualRowKind[] = useMemo(() => {
-    if (containerWidth <= 0) return [];
+  // The grid's groups and rows: a search's best matches first, then the days.
+  const { gridGroups, virtualRows } = useMemo(() => {
+    if (containerWidth <= 0) return { gridGroups: groups, virtualRows: [] as VirtualRowKind[] };
+    let layout: GridLayout = { kind: "justified", rowHeight: zoom.justifiedHeight };
     if (containerWidth <= FIXED_GRID_BREAKPOINT) {
       const columns = Math.max(2, Math.floor(containerWidth / zoom.fixedCellWidth));
       const cellWidth = Math.floor(
         (containerWidth - ROW_GAP * (columns - 1)) / columns,
       );
-      const rowHeight = Math.round(cellWidth * CELL_ASPECT_RATIO);
-      return buildFixedGridRows(groups, containerWidth, columns, rowHeight, ROW_GAP);
+      layout = { kind: "fixed", columns, rowHeight: Math.round(cellWidth * CELL_ASPECT_RATIO) };
     }
-    return buildVirtualRows(groups, containerWidth, zoom.justifiedHeight, ROW_GAP);
-  }, [groups, containerWidth, zoom]);
+    const laid = searchRows(bestItems, firstBest?.total ?? 0, bestOpen, groups, containerWidth, layout, ROW_GAP);
+    return { gridGroups: laid.groups, virtualRows: laid.rows };
+  }, [groups, containerWidth, zoom, bestItems, firstBest, bestOpen]);
 
   // A new key function for every new set of rows: the virtualizer only
   // re-reads row heights when its count or key function changes, so a
@@ -380,7 +416,7 @@ export default function UnifiedBrowsePage() {
     parentEl,
     gridEl,
     virtualRows,
-    groups,
+    gridGroups,
     JSON.stringify([filters, browseSort, browseDir]),
   );
 
@@ -417,7 +453,8 @@ export default function UnifiedBrowsePage() {
     return () => parentEl.removeEventListener("scroll", onScroll);
   }, [parentEl]);
 
-  const handleAssetClick = useCallback((asset: AssetPageItem) => {
+  const handleAssetClick = useCallback((asset: AssetPageItem, fromBest = false) => {
+    setLightboxFromBest(fromBest);
     setLightboxAsset(asset);
   }, []);
 
@@ -425,15 +462,17 @@ export default function UnifiedBrowsePage() {
     setLightboxAsset(null);
   }, []);
 
+  // The lightbox steps through the best matches when opened from them, else through the days.
+  const lightboxAssets = lightboxFromBest ? bestItems : orderedAssets;
   const handleLightboxNavigate = useCallback(
     (index: number) => {
-      const asset = orderedAssets[index];
+      const asset = lightboxAssets[index];
       if (asset) setLightboxAsset(asset);
-      if (hasNextPage && !isFetchingNextPage && index >= orderedAssets.length - 20) {
+      if (!lightboxFromBest && hasNextPage && !isFetchingNextPage && index >= lightboxAssets.length - 20) {
         fetchNextPageRef.current();
       }
     },
-    [orderedAssets, hasNextPage, isFetchingNextPage],
+    [lightboxAssets, lightboxFromBest, hasNextPage, isFetchingNextPage],
   );
 
   const handleLightboxDateClick = useCallback(
@@ -626,7 +665,7 @@ export default function UnifiedBrowsePage() {
               };
 
               if (vr.type === "header") {
-                const headerGroup = groups[vr.groupIndex];
+                const headerGroup = gridGroups[vr.groupIndex];
                 const groupIds = headerGroup?.assets.map((a) => a.asset_id) ?? [];
                 const allSelected = groupIds.length > 0 && groupIds.every((id) => selection.has(id));
                 return (
@@ -655,7 +694,7 @@ export default function UnifiedBrowsePage() {
                         {vr.label}
                       </button>
                       <span className="rounded-full bg-gray-700 px-2 py-0.5 text-xs text-gray-400">
-                        {headerGroup?.assets.length ?? 0}
+                        {vr.count ?? headerGroup?.assets.length ?? 0}
                       </span>
                       {vr.dateIso && (
                         <button
@@ -676,9 +715,26 @@ export default function UnifiedBrowsePage() {
                 );
               }
 
-              const group = groups[vr.groupIndex];
+              if (vr.type === "more") {
+                return (
+                  <div key={virtualItem.key} style={commonStyle} className="flex items-center justify-center">
+                    <button
+                      type="button"
+                      onClick={showMoreBest}
+                      disabled={fetchingBest}
+                      className="rounded-full border border-gray-600 px-6 py-1.5 text-sm font-medium text-indigo-300 hover:bg-gray-800 disabled:opacity-50"
+                    >
+                      More
+                    </button>
+                  </div>
+                );
+              }
+
+              const group = gridGroups[vr.groupIndex];
               if (!group) return null;
               const { justifiedRow } = vr;
+              // A search's best matches: opened from them, the lightbox steps through them.
+              const fromBest = gridGroups !== groups && vr.groupIndex === 0;
 
               let x = 0;
 
@@ -700,6 +756,8 @@ export default function UnifiedBrowsePage() {
 
                       const aspectRatio =
                         justifiedRow.widths[idx] / justifiedRow.height;
+                      // A phone's best matches: the last tile says how many more, and shows them.
+                      const more = vr.more && idx === justifiedRow.items.length - 1 ? vr.more : null;
 
                       return (
                         <div
@@ -714,7 +772,7 @@ export default function UnifiedBrowsePage() {
                         >
                           <AssetCell
                             asset={asset}
-                            onClick={() => handleAssetClick(asset)}
+                            onClick={() => (more ? showMoreBest() : handleAssetClick(asset, fromBest))}
                             aspectRatio={aspectRatio}
                             selected={selection.has(asset.asset_id)}
                             selectionActive={selection.isActive}
@@ -723,6 +781,11 @@ export default function UnifiedBrowsePage() {
                             onFavoriteToggle={demo ? undefined : (id) => handleRatingChange(id, { favorite: !(ratingsMap[id]?.favorite ?? false) })}
                             libraryName={libraryNames[asset.library_id]}
                           />
+                          {more && (
+                            <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-black/60 text-2xl font-semibold text-white">
+                              +{more}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -746,8 +809,8 @@ export default function UnifiedBrowsePage() {
       {lightboxAsset && (
         <Lightbox
           asset={lightboxAsset}
-          assets={orderedAssets}
-          hasMore={hasNextPage}
+          assets={lightboxAssets}
+          hasMore={lightboxFromBest ? false : hasNextPage}
           onClose={handleLightboxClose}
           onNavigate={handleLightboxNavigate}
           onDateClick={handleLightboxDateClick}
