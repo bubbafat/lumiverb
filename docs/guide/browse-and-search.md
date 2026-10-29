@@ -101,7 +101,7 @@ Hover over a thumbnail and tick the box in its corner. While anything is selecte
 
 ## Similar photos and search by picture
 
-Open a photo from a library's page and click **Find similar** for up to 20 photos in that library that look like it. Photos only; those with the same named people rank higher.
+Open a photo or a video from a library's page and click **Find similar** for up to 20 photos and videos in that library that look like it; those with the same named people rank higher. A video is compared by its scenes' pictures, so a video found opens at the scene most like what you started from, and a video finds what looks like any of its scenes. A video's scenes are compared once **Visual search in videos** has run on it (Settings › Processing).
 
 The web app has no search by a picture of your own; the [command line](command-line.md) does:
 

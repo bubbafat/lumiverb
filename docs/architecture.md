@@ -306,8 +306,11 @@ Client calls GET /search?q=...&library_id=...
 
 ```
 Client calls GET /v1/similar?asset_id=...&library_id=...
-    → API fetches asset's CLIP embedding from asset_embeddings
-    → Runs pgvector nearest-neighbor search (excluding self)
+    → API fetches a photo's CLIP embedding from asset_embeddings,
+      or a video's scenes' (video_scenes.likeness, up to 12, first to last)
+    → Compares them with photos' embeddings and videos' scenes' in one pass each
+      (AssetEmbeddingRepository.find_alike; excluding self), a video by its
+      scene most alike, whose start is the hit's at_ms
     → Applies optional scope filters (date range, media type, camera)
     → Returns ranked similar assets with similarity scores
 ```

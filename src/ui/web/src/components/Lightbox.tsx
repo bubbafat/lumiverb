@@ -27,7 +27,8 @@ interface LightboxProps {
   onClose: () => void;
   onNavigate: (index: number) => void;
   onTagClick?: (tag: string) => void;
-  onSimilarClick?: (asset: AssetPageItem) => void;
+  /** A similar clip opened; a video found by a scene, at that scene (seconds). */
+  onSimilarClick?: (asset: AssetPageItem, startAt?: number) => void;
   onDateClick?: (dateStr: string) => void;
   onNearbyClick?: (lat: number, lon: number) => void;
   onFilterClick?: (params: Record<string, string>) => void;
@@ -1807,14 +1808,16 @@ export function Lightbox({
                       {!similarLoading &&
                         !similarData?.embedding_available && (
                           <p className="text-xs text-gray-500">
-                            No visual embedding yet for this image.
+                            {isVideo
+                              ? "Its scenes aren't compared by their look yet."
+                              : "No visual embedding yet for this image."}
                           </p>
                         )}
                       {!similarLoading &&
                         similarData?.embedding_available &&
                         similarData.hits.length === 0 && (
                           <p className="text-xs text-gray-500">
-                            No similar images found.
+                            Nothing found that looks like it.
                           </p>
                         )}
                       {!similarLoading &&
@@ -1853,7 +1856,7 @@ export function Lightbox({
                                       gps_lat: null,
                                       gps_lon: null,
                                       created_at: null,
-                                    });
+                                    }, hit.at_ms != null ? hit.at_ms / 1000 : undefined);
                                   }
                                 }}
                               />

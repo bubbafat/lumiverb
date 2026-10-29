@@ -12,7 +12,7 @@ Once a video is scanned, Lumiverb makes these for it in the background, each whe
 | An analysis copy | the server | The video the viewer plays. Scenes, faces and the transcript are made from it |
 | Scenes | the server | Nowhere directly: they're what gets described |
 | Scene descriptions and tags | an AI machine | Search |
-| Each scene's picture as a visual search (CLIP) vector, as photos have | the server | Nowhere directly: kept with each scene |
+| Each scene's picture as a visual search (CLIP) vector, as photos have | the server | **Find similar**: a video found by its scene most alike, opened there |
 | The video's description and tags | an AI machine, from its scene descriptions | The viewer's **Description** and **Tags** |
 | A transcript | the server | The viewer's **Transcript** |
 | Faces | the server | The viewer's **People** |

@@ -428,6 +428,8 @@ export interface SimilarHit {
   file_size: number | null;
   width: number | null;
   height: number | null;
+  /** A video found by its scenes: where the scene most like it starts. */
+  at_ms?: number | null;
 }
 
 export interface UserItem {
