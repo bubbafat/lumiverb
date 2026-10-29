@@ -16,6 +16,26 @@ MOST_CHARS = 8000
 MOST_SENTENCE = 300
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+# A sentence about how a frame feels, as scenes described with the photos' prompt end ("The mood is serene…"): left
+# out, so the video's description is written from what's shown (Robert, Oct 29: a third of those scenes' words).
+_MOOD = re.compile(r"\b(mood|atmosphere|ambiance|ambience|vibe|evok\w*)\b", re.I)
+
+
+def _plain(description: str) -> str:
+    """A scene's description without its sentences about mood; as it is when that's all it says."""
+    kept = [s for s in _SENTENCE_END.split(description) if not _MOOD.search(s)]
+    return " ".join(kept) if kept else description
+
+
+def length_said(seconds) -> str:
+    """The video's length, as the model is told it ("" when it isn't known)."""
+    try:
+        s = round(float(seconds))
+    except (TypeError, ValueError):
+        return ""
+    if s <= 0:
+        return ""
+    return f"{s // 60} min {s % 60} s" if s >= 60 else f"{s} seconds"
 
 
 def _first_sentence(description: str) -> str:
@@ -29,7 +49,7 @@ def _lines(scenes: list[dict], *, tags: bool, first_sentence: bool) -> list[str]
     lines = []
     for n, scene in enumerate(scenes, 1):
         seconds = int(scene["start_ms"]) // 1000
-        description = scene["description"].strip()
+        description = _plain(scene["description"].strip())
         line = f"{n}. ({seconds // 60}:{seconds % 60:02d}) "
         line += _first_sentence(description) if first_sentence else description
         its_tags = [t for t in scene.get("tags") or [] if isinstance(t, str) and t.strip()]
@@ -79,8 +99,10 @@ class VideoDescription(Work):
         described = [s for s in scenes if (s.get("description") or "").strip()]
         if not described or len(described) < len(scenes):
             raise Waits("its scenes aren't all described yet")  # made once they are (it needs them)
+        length = length_said(clip.get("duration_sec"))
+        said = (f"The video is {length} long. " if length else "") + "Its moments, in order:\n"
         try:
-            result = self.provider.describe_text(scenes_text(described))
+            result = self.provider.describe_text(said + scenes_text(described))
         except CaptionError as e:
             raise self.machines_or_clip(e) from e
         description = (result.get("description") or "").strip() if result else ""

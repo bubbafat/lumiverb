@@ -149,6 +149,15 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
 
         return "".join(out)
 
+    @staticmethod
+    def _gist_and_details(parsed: dict) -> str:
+        """A reply of a gist and its details (a video's prompt, VIDEO_PROMPT) as one description: the gist, then each
+        detail, a sentence each; "" for neither."""
+        details = parsed.get("details")
+        said = [parsed.get("gist"), *(details if isinstance(details, list) else [])]
+        sentences = [s.strip() for s in said if isinstance(s, str) and s.strip()]
+        return " ".join(s if s[-1] in ".!?" else s + "." for s in sentences)
+
     def _parse_description(self, raw: str) -> dict:
         """{"description", "tags"} from the model's reply; ValueError when it holds none."""
         # Strip markdown code fences if present
@@ -173,7 +182,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 except json.JSONDecodeError:
                     continue
                 if isinstance(parsed, dict):
-                    description = str(parsed.get("description") or "").strip()
+                    description = str(parsed.get("description") or "").strip() or self._gist_and_details(parsed)
                     tags = [t.strip() for t in parsed.get("tags") or [] if isinstance(t, str) and t.strip()]
                     return {"description": description, "tags": tags}
         salvaged = self._salvage(clean)

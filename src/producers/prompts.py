@@ -7,16 +7,34 @@ VISION_PROMPT = (
     "tags. Respond only with valid JSON in this exact format:\n"
     '{"description": "...", "tags": ["tag1", "tag2", ...]}'
 )
-# A video's own description, written from its scenes' (they come before it, in order: video_description.work.scenes_text).
-VIDEO_PROMPT = (
-    "These are the scenes of one video, in order, each described from a single frame, with when it starts. "
-    "Say plainly what the video shows, as a careful viewer would note it: where it is, who or what is in it, "
-    "and what happens, in order. Use only what the scenes say. No praise, feelings or sales words "
-    "(luxurious, idyllic, breathtaking, evokes), and no guessing at what isn't shown. Short sentences: 2 for a "
-    "short, simple video, up to 8 for a long one with more going on, never padding. Don't mention scenes, "
-    "frames or times. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact "
-    "format:\n"
+# A scene's frame, one still of a video (Robert, Oct 29: the study of 70 videos, S1). The photos' prompt asked for
+# mood, which filled a third of every scene with it, and each scene guessed a landmark on its own ("likely Disney's
+# Hollywood Studios" on Main Street): a name only when it's written in the frame, and a dark frame said in a few words.
+SCENE_PROMPT = (
+    "This is one still frame from a video. Say in one or two plain sentences what it shows: who is there (by how "
+    "they look, never by name), what they are doing, and where, as far as the frame shows it. Copy any words you "
+    "can read on signs, menus or screens exactly, in quotes. Name a place, brand or ride only when its name is "
+    "written in the frame. No mood, lighting, atmosphere or praise words, and don't begin with 'The image' or "
+    "'This image'. If the frame is dark, blurred or shows nothing clear, say so in a few words. Then provide 5-10 "
+    "descriptive tags. Respond only with valid JSON in this exact format:\n"
     '{"description": "...", "tags": ["tag1", "tag2", ...]}'
+)
+# A video's own description, written from its scenes' (they come before it, in order: video_description.work.scenes_text).
+# What it is first, then what to find it by (Robert, Oct 29, P5 of the study): asked one scene at a time, a model
+# listed the scenes, a sentence each, and never said what the video was. The reply's gist and details are its
+# description (openai_caption's _parse_description).
+VIDEO_PROMPT = (
+    "These are moments from one video, in order, each described from a single still frame by someone who saw only "
+    "that frame. Work out what the video is of as a whole.\n"
+    "The frames are one continuous video: a person or place described a little differently in two frames is the "
+    "same one. Where frames disagree, keep what most say and drop the rest. Ignore dark, blurred or empty frames.\n"
+    "Write plainly, like a careful viewer's notes: no mood, lighting, praise or sales words (serene, vibrant, "
+    "luxurious, whimsical, bustling), no 'the video shows', and never 'scene', 'frame', 'then' or 'next'.\n"
+    "Respond only with valid JSON in this exact format:\n"
+    '{"gist": "one sentence: what the video is of (an outing, a meal, a walk through somewhere, a ride, a tour, a '
+    'show) and where, as the frames show it", "details": ["3 to 5 short sentences, fewer for a short, simple video, '
+    'each a different thing worth finding it by: what people do, notable things, words read on signs, menus or '
+    'screens copied exactly in quotes"], "tags": ["5-10 tags"]}'
 )
 OCR_PROMPT = (
     "What text is visible in this image? "

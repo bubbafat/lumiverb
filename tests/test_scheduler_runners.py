@@ -1100,33 +1100,46 @@ def test_the_scan_pass_checks_in_first_and_leaves_out_paused_libraries(acct, mon
 # ---------------------------------------------------------------------------
 
 
-def _video_described(acct, scenes: list[dict], answer=None):
+def _video_described(acct, scenes: list[dict], answer=None, **clip):
     provider = MagicMock()
     provider.describe_text.side_effect = answer or (lambda text: {"description": "A day at the beach.",
                                                                   "tags": ["beach", " "]})
     acct.vision.provider.return_value = provider
     acct.client.get.return_value.json.return_value = {"scenes": scenes}
-    return _run(acct, "lumiverb.video.description", "ast_1"), provider
+    return _run(acct, "lumiverb.video.description", "ast_1", **clip), provider
 
 
 def test_a_videos_description_is_written_from_its_scenes_in_order(acct) -> None:
     result, provider = _video_described(acct, [
-        {"start_ms": 0, "description": " Waves roll onto an empty beach. ", "tags": ["sea", ""]},
-        {"start_ms": 75_400, "description": "Two people walk along the shore at sunset.", "tags": []}])
+        {"start_ms": 0, "description": " Waves roll onto an empty beach. The mood is calm and serene. ",
+         "tags": ["sea", ""]},
+        {"start_ms": 75_400, "description": "Two people walk along the shore at sunset.", "tags": []}],
+        duration_sec=97.6)
     assert result is None
     acct.client.get.assert_called_once_with("/v1/video/ast_1/scenes")  # the scenes shown, in order
     [text] = provider.describe_text.call_args.args
-    assert text == ("1. (0:00) Waves roll onto an empty beach. [tags: sea]\n"
+    # Its length, then each scene without what it says of mood (scenes described with the photos' prompt).
+    assert text == ("The video is 1 min 38 s long. Its moments, in order:\n"
+                    "1. (0:00) Waves roll onto an empty beach. [tags: sea]\n"
                     "2. (1:15) Two people walk along the shore at sunset.")
     item, lineage = _item_posted(acct, "/v1/assets/batch-vision")
     assert (item["asset_id"], item["description"], item["tags"], item["source_hash"]) == (
         "ast_1", "A day at the beach.", ["beach"], SHA)
     used = acct.producers.with_model("lumiverb.video.description", acct.vision.model)
     assert lineage == acct.producers.lineage("lumiverb.video.description", None, used=used)
-    # Its own settings on the machines: the video's prompt, plain, from the scenes alone, up to 8 sentences.
+    # Its own settings on the machines: the video's prompt, what it is as a whole first, then 3 to 5 details.
     assert acct.vision.provider.call_args.kwargs["settings"] == used
-    assert "up to 8" in used["prompt"] and "Use only what the scenes say" in used["prompt"]
-    assert "No praise, feelings or sales words" in used["prompt"]
+    assert '"gist"' in used["prompt"] and "3 to 5 short sentences" in used["prompt"]
+    assert "no mood, lighting, praise or sales words" in used["prompt"]
+
+
+def test_a_scene_said_only_as_mood_is_kept_and_a_length_unknown_unsaid(acct) -> None:
+    _, provider = _video_described(acct, [{"start_ms": 0, "description": "A serene, evocative atmosphere."}])
+    [text] = provider.describe_text.call_args.args
+    assert text == "Its moments, in order:\n1. (0:00) A serene, evocative atmosphere."
+    from src.producers.video_description.work import length_said
+
+    assert [length_said(x) for x in (None, 0, "12.4", 59.6, 3600)] == ["", "", "12 seconds", "1 min 0 s", "60 min 0 s"]
 
 
 def _scenes(n: int) -> list[dict]:
@@ -1150,7 +1163,8 @@ def test_a_long_videos_scenes_are_sent_as_a_small_context_holds_them(acct) -> No
     def lines(n):
         text = scenes_text(_scenes(n))
         # At a cautious 3 characters a token, the scenes and the prompt leave the answer's 900 of 4,096.
-        assert len(text) <= MOST_CHARS and len(text) + 2 + len(VIDEO_PROMPT) <= 3 * (4096 - 900)
+        # (With "The video is 213 min 20 s long. Its moments, in order:" before them.)
+        assert len(text) <= MOST_CHARS and len(text) + 60 + 2 + len(VIDEO_PROMPT) <= 3 * (4096 - 900)
         return text.splitlines()
 
     whole = lines(10)
@@ -1181,7 +1195,7 @@ def test_a_long_videos_scenes_are_sent_as_a_small_context_holds_them(acct) -> No
     # What the producer sends.
     _video_described(acct, _scenes(55))
     [text] = acct.vision.provider.return_value.describe_text.call_args.args
-    assert text == "\n".join(first_sentences)
+    assert text == "Its moments, in order:\n" + "\n".join(first_sentences)
 
 
 def test_a_video_whose_scenes_arent_all_described_waits(acct) -> None:

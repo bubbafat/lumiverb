@@ -20,7 +20,7 @@ PRODUCER = ProducerSpec(
     applies=("a.media_type = 'video' AND EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id"
              " AND s.staged IS NULL AND s.description IS NOT NULL)"),
     made="EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)",
-    # Up to 8 sentences and the tags.
+    # A gist, up to 5 details and the tags.
     settings=text_ai_settings(VIDEO_PROMPT, max_tokens=900),
     # Made from its scenes, not its file: their descriptions made again remake it (scene descriptions' redo_also).
     redo_on_source_change=False,

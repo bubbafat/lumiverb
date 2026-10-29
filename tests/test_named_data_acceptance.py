@@ -35,7 +35,9 @@ from pathlib import Path
 import pytest
 from sqlalchemy import text
 
+from src.producers.prompts import SCENE_PROMPT, VISION_PROMPT
 from src.server.database import get_tenant_session, tenant_database_url
+from src.shared.producers import settings_hash
 from tests.producer_fakes import due
 from tests.test_data_names import ADDED_SINCE
 from tests.test_first_run_setup import control  # noqa: F401 (a fixture)
@@ -51,6 +53,9 @@ WRITE = "LUMIVERB_WRITE_TESTER_NAMED_DATA"
 ADDED = ("makes", "reads", "reads_others")
 # Versions raised on purpose since v0.1.104, (then, now): a row at its new version reads as it did then.
 RAISED_SINCE = {"lumiverb.video.scenes": ("4", "5")}  # pictures compared by a wavelet hash
+# Prompts changed on purpose since, (then, now): a row with the new one reads as it did then (Oct 29: scenes are a
+# video's frames, described with their own prompt, not the photos').
+PROMPTS_SINCE = {"lumiverb.video.scene_descriptions": (VISION_PROMPT, SCENE_PROMPT)}
 
 
 def _as_then(row: dict) -> dict:
@@ -62,6 +67,11 @@ def _as_then(row: dict) -> dict:
         row["version"] = then
     if row.get("counts"):
         row["counts"] = {k: v for k, v in row["counts"].items() if k != "lacking"}
+    if row.get("artifact") in PROMPTS_SINCE:
+        then, now = (json.dumps(p)[1:-1] for p in PROMPTS_SINCE[row["artifact"]])
+        row = json.loads(json.dumps(row).replace(now, then))
+        if "settings_hash" in row:
+            row["settings_hash"] = settings_hash(row["settings"])
     return row
 
 
@@ -214,6 +224,16 @@ def test_rename_an_account_from_before_migrated_up_answers_as_it_did_and_down_is
     mine = {row["artifact"]: row for row in now["producers"] if row["artifact"] not in ADDED_SINCE}
     theirs = {row["artifact"]: row for row in then["producers"]}
     assert list(mine) == list(theirs), "the same producers, in the same order"
+    for a in PROMPTS_SINCE:
+        # Made with the prompt before: what was current is stale now, and waits to be remade (an account that had
+        # seen the defaults before holds it, lineage.hold_new_defaults; this one hadn't, and has no model). The rest
+        # of its row is as it was.
+        before, after = theirs[a]["counts"], mine[a]["counts"]
+        assert (after["current"], after["stale"]) == (0, before["stale"] + before["current"]), (before, after)
+        mine[a] = {**mine[a], "counts": before, "waits": theirs[a]["waits"]}
+        redo = f"redo:{a}"
+        assert len(now["due"][redo]) == after["stale"], (now["due"][redo], after)
+        now["due"][redo] = then["due"][redo]
     changed = {a: {k: (theirs[a].get(k), mine[a].get(k)) for k in set(theirs[a]) | set(mine[a])
                    if theirs[a].get(k) != mine[a].get(k)} for a in theirs if mine[a] != theirs[a]}
     assert changed == {}, f"producers whose row changed (before, now): {changed}"
