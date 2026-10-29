@@ -208,18 +208,19 @@ def _run_text_search(
         from src.server.search import understand
 
         read = [understand.read(session, t, library_ids) for t in terms]
-        things: dict[str, list[str]] = {}
+        things: dict[str, dict[str, list[str]]] = {}
         if assist_for:
             from src.server.search import assist
 
             model, ask = assist.asker(assist_for)
-            words = list(dict.fromkeys(w for u in read for w in assist.asked_about(u.rest)))
-            things = assist.also(session, words, model, ask) if model else {}
+            asked = list(dict.fromkeys(a for u in read if (a := assist.asked_about(u.rest))))
+            things = assist.kinds(session, asked, model, ask) if model else {}
         if any(u.parts for u in read) or things:
             if understood is not None:
                 understood.extend(part for u in read for part in u.said())
-                understood.extend({"kind": "also", "words": w, "label": ", ".join(t[:5]) + (", …" if len(t) > 5 else "")}
-                                  for w, t in things.items())
+                understood.extend({"kind": "also", "words": kind,
+                                   "label": ", ".join(t[:5]) + (", …" if len(t) > 5 else "")}
+                                  for found in things.values() for kind, t in found.items())
             return _ordered(session, terms, *_understood_search(session, read, library_ids, limit, capped, things),
                             public=False, best=best)
     return _ordered(session, terms, *_words_search(session, terms, library_ids, limit, public_cap_ms, public, capped),
@@ -258,13 +259,13 @@ def assisting(request: Request, session: Session, spec: QuerySpec) -> str | None
 
 
 def _understood_search(session: Session, read: list, library_ids: list[str] | None, limit: int,
-                       capped: set[str] | None, things: dict[str, list[str]] | None = None,
+                       capped: set[str] | None, things: dict[str, dict[str, list[str]]] | None = None,
                        ) -> tuple[dict, dict[str, SearchContext], str]:
     """Understood searches (each an understand.Understood), every part of each to match: a person or a
     place by who's recognised in a clip or where it was, or by its words; the kind asked for. Ranked
     (src/server/search/rank.py) by the words left (each search's, combined); with none left, by the parts:
-    where it was or who's in it above a word naming them. things: the things of a kind each word names, searched
-    with it (an AI-assisted search's)."""
+    where it was or who's in it above a word naming them. things: the kinds each search's words name, with
+    their things, searched with them (an AI-assisted search's: assist.kinds)."""
     from src.server.search import assist, rank, understand
 
     ranks: dict[str, rank.Rank] | None = None
@@ -272,7 +273,7 @@ def _understood_search(session: Session, read: list, library_ids: list[str] | No
     for u in read:
         found: dict[str, rank.Rank] | None = None  # None: nothing has narrowed it yet
         if u.rest:
-            also = {w: (things or {}).get(w, []) for w in assist.asked_about(u.rest)}
+            also = assist.by_word((things or {}).get(assist.asked_about(u.rest), {}))
             found, said, _ = _words_search(session, [u.rest], library_ids, limit, None, False, capped, [also])
             for aid, c in said.items():
                 contexts.setdefault(aid, c)

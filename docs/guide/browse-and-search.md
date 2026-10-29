@@ -66,9 +66,9 @@ Under the box, **Searched for** shows what the search understood, a card each. C
 
 ### AI-assisted search
 
-A search is local unless you ask for help: free, and no AI machine is asked anything. Where an admin has turned on **Let searches use the machine that describes photos** (Settings › AI › Search), an **AI** switch shows beside the search box. With it on, a word that names a kind of thing is also searched with the particular things of that kind, as your AI machine lists them: `snacks` finds a scene described as "a basket of tortilla chips" or "a bag of popcorn". **Searched for** shows them as a card, `snacks: popcorn, chips, …`; click its × to search the word alone.
+A search is local unless you ask for help: free, and no AI machine is asked anything. Where an admin has turned on **Let searches use the machine that describes photos** (Settings › AI › Search), an **AI** switch shows beside the search box. With it on, words that name a kind of thing are also searched with the particular things of that kind, as your AI machine lists them: `snacks` finds a scene described as "a basket of tortilla chips" or "a bag of popcorn", and `disney theme park` one with "a roller coaster". **Searched for** shows them as a card, `snacks: popcorn, chips, …`; click its × to search those words alone.
 
-Each word is asked about once and the answer kept, so a word costs one request to the machine, ever. A word that's already particular (`churro`) is kept as it is. If the machine is busy or off, the search goes ahead with your words. Your browser remembers the switch for new searches, and the page's address keeps it with the search.
+A search's words are asked about together, so the machine reads them as you meant them: `theme park` is a kind of thing where `theme` and `park` alone aren't. That's one request to the machine for the search, ever: the answer is kept, and the page asking for the results and the filters at once asks once. Words already particular (`churro`) are searched as they are. If the machine is busy or off, the search goes ahead with your words. Your browser remembers the switch for new searches, and the page's address keeps it with the search.
 
 Type two letters of a person's name and pick them from the **People** list under the box to see only their clips.
 

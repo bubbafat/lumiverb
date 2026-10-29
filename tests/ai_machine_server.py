@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import ssl
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,24 +36,26 @@ WORKS = {
 
 class LocalMachine:
     """lists: the models GET /v1/models lists (None: that's answered as everything else is). answer: (status,
-    body: JSON or bytes, headers) for everything else. tls: (certificate, key) files to serve HTTPS with. asked:
-    [(method, path)] as they came."""
+    body: JSON or bytes, headers) for everything else, `delay` seconds after it's asked. tls: (certificate, key) files
+    to serve HTTPS with. asked: [(method, path)] as they came; sent: what each sent, in that order."""
 
     def __init__(self, answer: tuple[int, Any, dict[str, str]] = (200, WORKS, {}),
                  lists: tuple[str, ...] | None = (MODEL,), tls: tuple[Path, Path] | None = None) -> None:
         self.answer = answer
+        self.delay = 0.0
         self.asked: list[tuple[str, str]] = []
+        self.sent: list[bytes] = []
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
             def _answer(self) -> None:
                 length = int(self.headers.get("Content-Length") or 0)
-                if length:
-                    self.rfile.read(length)
+                outer.sent.append(self.rfile.read(length) if length else b"")
                 outer.asked.append((self.command, self.path))
                 if self.command == "GET" and self.path.endswith("/models") and lists is not None:
                     status, body, headers = 200, {"object": "list", "data": [{"id": m} for m in lists]}, {}
                 else:
+                    time.sleep(outer.delay)
                     status, body, headers = outer.answer
                 data = body if isinstance(body, bytes) else json.dumps(body).encode()
                 self.send_response(status)
