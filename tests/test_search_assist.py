@@ -37,7 +37,8 @@ def test_the_prompt_asks_for_things_of_the_kind_alone():
 
 
 def test_the_things_of_a_kind_match_as_the_words_do():
-    q = build(["snacks"], [["popcorn", "ice cream"]])
+    q = build(["snacks"], [{"snacks": ["popcorn", "ice cream"]}])
     assert "snacks" in q.params.values() and "popcorn" in q.params.values() and "ice cream" in q.params.values()
     assert q.exact.count("phraseto_tsquery") == 1  # a thing of two words, as a phrase
-    assert build(["snacks"]).exact == build(["snacks"], [[]]).exact  # nothing more: as it was
+    assert build(["snacks"]).exact == build(["snacks"], [{}]).exact  # nothing more: as it was
+    assert len(q.words) == 1  # the things of a kind are its word's: matching one is matching it

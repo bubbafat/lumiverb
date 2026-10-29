@@ -32,7 +32,15 @@ How words match:
 - A word of three letters or more also matches the start of longer words: `disney` finds "Disneyland".
 - Plurals and accents don't matter: `dogs` finds "dog", and `zurich` finds "Zürich".
 
-Results are ranked by how well they match: a description, tags or a note counts most, a file or folder name least. A search shows its 5,000 best matches at most.
+Results are ranked, each rule deciding before the next:
+
+1. A clip the search names comes first: its file name, with or without the extension (`DJI_20261025123119_0003_D`, `IMG_7616.JPG`), then the clips in a folder of that name (`Dockcase`).
+2. Then the clips matching more of the search, a rare word counting for more than a common one: in `dundee beach`, a clip that says Dundee beats one that only says beach, and one that says both beats either.
+3. Then by where it matched: your own words (a note, a description or tags you wrote) first, then where it was or who's in it for a search that names a place or a person, then its description, tags and scenes, the text read in it and what's said, a plug-in's facts, and its file and folder names last.
+4. Then how well: the words together and in order, and whole words over the start of longer ones.
+5. Then the newest first.
+
+A search shows its 5,000 best matches at most.
 
 ### Why a clip was found
 

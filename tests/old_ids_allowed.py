@@ -186,7 +186,8 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         'transcript': (
             'clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/ModelDecodingTests.swift',
             'clients/resolve/test/search.test.js', 'docs/cursor-api.md', 'src/server/api/routers/query.py',
-            'src/server/search/text_search.py', 'src/ui/web/src/api/types.ts', 'src/ui/web/src/lib/foundBy.test.ts',
+            'src/server/search/rank.py', 'src/server/search/text_search.py', 'src/ui/web/src/api/types.ts',
+            'src/ui/web/src/lib/foundBy.test.ts',
             'src/ui/web/src/lib/foundBy.ts', 'tests/test_changed_file_new_clip.py',
             'tests/test_public_search_cap.py', 'tests/test_restore_reindex_slow.py', 'tests/test_search_found_by.py',
             'tests/test_search_sync_real.py', 'tests/test_text_search.py', 'tests/test_transcription.py',

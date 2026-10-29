@@ -249,20 +249,21 @@ def test_a_word_matches_as_a_prefix_too_ranked_below_whole_words(env):
     assert _search(env, lib, "di") == []  # fewer: whole words only
 
 
-def test_descriptions_and_notes_weigh_more_than_text_read_or_paths(env):
+def test_a_folder_named_so_then_notes_and_descriptions_weigh_more_than_text_read_or_paths(env):
+    """src/server/search/rank.py: a folder named what was searched first; then a person's words, the
+    description, the text read in it, and a path's other words last."""
     lib = _library(env)
     described = _clip(env, lib, "x/1.jpg")
     noted = _clip(env, lib, "x/2.jpg")
     read = _clip(env, lib, "x/3.jpg")
     named = _clip(env, lib, "card/4.jpg")
+    pathed = _clip(env, lib, "old cards/5.jpg")
     _describe(env, described, "A christmas card on a table")
     _note(env, noted, "the card mum sent")
     _read(env, read, "CARD SALE 50% OFF")
     _sweep(env)
 
-    found = _search(env, lib, "card")
-    assert set(found[:2]) == {described, noted}
-    assert found[2:] == [read, named]
+    assert _search(env, lib, "card") == [named, noted, described, read, pathed]
 
 
 def test_every_search_term_must_match_each_anywhere(env):

@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -206,8 +207,25 @@ def _run_text_search(
                 understood.extend(part for u in read for part in u.said())
                 understood.extend({"kind": "also", "words": w, "label": ", ".join(t[:5]) + (", …" if len(t) > 5 else "")}
                                   for w, t in things.items())
-            return _understood_search(session, read, library_ids, limit, capped, things)
-    return _words_search(session, terms, library_ids, limit, public_cap_ms, public, capped)
+            return _ordered(session, terms, *_understood_search(session, read, library_ids, limit, capped, things),
+                            public=False)
+    return _ordered(session, terms, *_words_search(session, terms, library_ids, limit, public_cap_ms, public, capped),
+                    public=public or public_cap_ms is not None)
+
+
+def _ordered(session: Session, terms: list[str], ranks: dict, contexts: dict[str, SearchContext], source: str, *,
+             public: bool) -> tuple[dict[str, float], dict[str, SearchContext], str]:
+    """The clips found in their final order (src/server/search/rank.py): named by the search first (never on a
+    public page, which reads no paths), each context's score its rank's."""
+    from dataclasses import replace
+
+    from src.server.search import rank
+
+    if not public:
+        named = rank.named(session, terms, list(ranks))
+        ranks = {aid: replace(r, named=named[aid]) if aid in named else r for aid, r in ranks.items()}
+    contexts = {aid: c.model_copy(update={"score": ranks[aid].score}) for aid, c in contexts.items() if aid in ranks}
+    return rank.ordered(session, ranks), contexts, source
 
 
 def assisting(request: Request, session: Session, spec: QuerySpec) -> str | None:
@@ -225,58 +243,64 @@ def assisting(request: Request, session: Session, spec: QuerySpec) -> str | None
 
 def _understood_search(session: Session, read: list, library_ids: list[str] | None, limit: int,
                        capped: set[str] | None, things: dict[str, list[str]] | None = None,
-                       ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
+                       ) -> tuple[dict, dict[str, SearchContext], str]:
     """Understood searches (each an understand.Understood), every part of each to match: a person or a
-    place by who's recognised in a clip or where it was, or by its words; the kind asked for. Ranked by
-    the words left (each search's, added up); with none left, by how well the parts' words matched. things: the
-    things of a kind each word names, searched with it (an AI-assisted search's)."""
-    from src.server.search import assist, understand
+    place by who's recognised in a clip or where it was, or by its words; the kind asked for. Ranked
+    (src/server/search/rank.py) by the words left (each search's, combined); with none left, by the parts:
+    where it was or who's in it above a word naming them. things: the things of a kind each word names, searched
+    with it (an AI-assisted search's)."""
+    from src.server.search import assist, rank, understand
 
-    scores: dict[str, float] | None = None
+    ranks: dict[str, rank.Rank] | None = None
     contexts: dict[str, SearchContext] = {}
     for u in read:
-        found: dict[str, float] | None = None  # None: nothing has narrowed it yet
+        found: dict[str, rank.Rank] | None = None  # None: nothing has narrowed it yet
         if u.rest:
-            also = [t for w in assist.asked_about(u.rest) for t in (things or {}).get(w, [])]
+            also = {w: (things or {}).get(w, []) for w in assist.asked_about(u.rest)}
             found, said, _ = _words_search(session, [u.rest], library_ids, limit, None, False, capped, [also])
             for aid, c in said.items():
                 contexts.setdefault(aid, c)
         for part in u.parts:
             if part.kind == understand.KIND:
                 continue
-            known = (understand.clips_with(session, part.person_ids, library_ids) if part.kind == understand.PERSON
-                     else understand.clips_near(session, part.place, library_ids))
+            known = set(understand.clips_with(session, part.person_ids, library_ids)
+                        if part.kind == understand.PERSON else understand.clips_near(session, part.place, library_ids))
             by_words, said, _ = _words_search(session, [part.searched], library_ids, limit, None, False, capped)
-            matched = {aid: 1.0 + by_words.get(aid, 0.0) for aid in {*known, *by_words}}
-            # What found a clip by who's in it or where it was, when its words didn't say (they come first).
+            # Found by who's in it or where it was ranks above a word naming them.
             found_by = understand.PERSON if part.kind == understand.PERSON else understand.PLACE
+            matched = {aid: rank.Rank(field=max(rank.FIELD[found_by] if aid in known else 0,
+                                                by_words[aid].field if aid in by_words else 0),
+                                      quality=by_words[aid].quality if aid in by_words else 0.0)
+                       for aid in {*known, *by_words}}
+            # What found a clip by who's in it or where it was, when its words didn't say (they come first).
             for aid in known:
                 if aid not in said:
-                    said[aid] = SearchContext(score=matched[aid], matched_in=found_by, snippet=part.label)
+                    said[aid] = SearchContext(score=0.0, matched_in=found_by, snippet=part.label)
             if found is None:
                 found = matched
             elif u.rest:  # the words left rank what matches
-                found = {aid: s for aid, s in found.items() if aid in matched}
+                found = {aid: r for aid, r in found.items() if aid in matched}
             else:
-                found = {aid: s + matched[aid] for aid, s in found.items() if aid in matched}
+                found = {aid: r.plus(matched[aid]) for aid, r in found.items() if aid in matched}
             for aid, c in said.items():
                 contexts.setdefault(aid, c)
         for part in u.parts:
             if part.kind == understand.KIND:
                 kept = set(understand.of_kind(session, list(found or {}), part.media, library_ids))
-                found = {aid: s for aid, s in (found or {}).items() if aid in kept}
+                found = {aid: r for aid, r in (found or {}).items() if aid in kept}
         found = found or {}
-        scores = found if scores is None else {aid: s + found[aid] for aid, s in scores.items() if aid in found}
-    scores = scores or {}
-    return scores, {aid: c for aid, c in contexts.items() if aid in scores}, "postgres"
+        ranks = found if ranks is None else {aid: r.plus(found[aid]) for aid, r in ranks.items() if aid in found}
+    ranks = ranks or {}
+    return ranks, {aid: c for aid, c in contexts.items() if aid in ranks}, "postgres"
 
 
 def _words_search(session: Session, terms: list[str], library_ids: list[str] | None, limit: int,
                   public_cap_ms: int | None, public: bool, capped: set[str] | None,
-                  also: list[list[str]] | None = None) -> tuple[dict[str, float], dict[str, SearchContext], str]:
-    """The clips a search's words find (_run_text_search's, as it always was); also: other words matching as each
-    term's do (text_search.build)."""
-    from src.server.search import text_search
+                  also: Sequence[Mapping[str, Sequence[str]]] | None = None) -> tuple[dict, dict[str, SearchContext], str]:
+    """The clips a search's words find (_run_text_search's, as it always was), each with its rank
+    (src/server/search/rank.py: how much of the search it matches, rare words weighing more, where and how well);
+    also: other words matching as each term's words do, by word (text_search.build)."""
+    from src.server.search import rank, text_search
 
     try:
         q = text_search.build(terms, also)
@@ -288,14 +312,26 @@ def _words_search(session: Session, terms: list[str], library_ids: list[str] | N
 
     scores: dict[str, float] = {}
     contexts: dict[str, SearchContext] = {}
+    words: dict[str, list[bool]] = {}  # which of the search's words each clip matched, anywhere
+    field: dict[str, int] = {}  # where it matched, the most telling (rank.FIELD)
+    described: set[str] = set()  # matched in its description (a person's, if they wrote it)
 
     def full(name: str, hits: list, cap: int) -> list:
         if capped is not None and len(hits) >= cap:
             capped.add(name)
         return hits
 
+    def seen(hit) -> None:
+        had = words.setdefault(hit.asset_id, [False] * len(q.words))
+        for i, matched in enumerate(hit.words[:len(had)]):
+            had[i] = had[i] or matched
+        field[hit.asset_id] = max(field.get(hit.asset_id, 0), rank.FIELD.get(hit.matched_in or "", rank.SPLIT))
+        if hit.matched_in == "description":
+            described.add(hit.asset_id)
+
     for hit in full("assets", text_search.clips(session, q, library_ids, limit, public=public,
                                                 public_cap_ms=public_cap_ms), limit):
+        seen(hit)
         if hit.asset_id not in scores or hit.score > scores[hit.asset_id]:
             scores[hit.asset_id] = hit.score
             contexts[hit.asset_id] = SearchContext(score=hit.score, hit_type="asset", snippet=hit.snippet,
@@ -307,6 +343,7 @@ def _words_search(session: Session, terms: list[str], library_ids: list[str] | N
         plugins = searched_plugins(session)
         for hit in full("facts", text_search.facts(session, q, library_ids, limit,
                                                    {pid: where for pid, (where, _) in plugins.items()}), limit):
+            seen(hit)
             if hit.asset_id not in scores or hit.score > scores[hit.asset_id]:
                 scores[hit.asset_id] = hit.score
                 contexts[hit.asset_id] = SearchContext(score=hit.score, hit_type="asset", snippet=hit.snippet,
@@ -320,6 +357,7 @@ def _words_search(session: Session, terms: list[str], library_ids: list[str] | N
                        ("transcript", full("transcripts", text_search.segments(
                            session, q, library_ids, limit * 3, public_cap_ms=public_cap_ms), limit * 3))):
         for hit in hits:
+            seen(hit)
             aid = hit.asset_id
             ctx = SearchContext(score=hit.score, hit_type=kind, snippet=hit.snippet,
                                 start_ms=hit.start_ms, end_ms=hit.end_ms, matched_in=hit.matched_in)
@@ -328,7 +366,12 @@ def _words_search(session: Session, terms: list[str], library_ids: list[str] | N
                 contexts[aid] = ctx
             elif contexts[aid].hit_type == "asset":
                 contexts[aid] = ctx.model_copy(update={"score": scores[aid]})
-    return scores, contexts, "postgres"
+
+    for aid in rank.corrected(session, sorted(described)):  # a description a person wrote is their words
+        field[aid] = max(field[aid], rank.FIELD["corrected"])
+    covered = rank.coverage(words, len(q.words))
+    ranks = {aid: rank.Rank(covered=covered[aid], field=field[aid], quality=score) for aid, score in scores.items()}
+    return ranks, contexts, "postgres"
 
 
 # ---------------------------------------------------------------------------
