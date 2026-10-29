@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   restoreProjectClips: vi.fn(),
   updateProject: vi.fn(),
   getCurrentUser: vi.fn(),
+  getProjectVisits: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -251,5 +252,34 @@ describe("ProjectDetailPage visibility", () => {
     const body = api.updateProject.mock.calls[0][1];
     expect(body).toMatchObject({ name: "Renamed" });
     expect(body).not.toHaveProperty("visibility");
+  });
+});
+
+
+describe("ProjectDetailPage's visits (ADR-025)", () => {
+  const report = {
+    since: "2026-10-01", bots: 0, clips: [], sources: [],
+    days: [{ day: "2026-10-28", view: { visitors: 3, times: 4 }, open: { visitors: 1, times: 2 },
+             play: { visitors: 0, times: 0 }, export: { visitors: 0, times: 0 }, demo: { visitors: 0, times: 0 } }],
+    totals: { view: { visitors: 3, times: 4 }, open: { visitors: 1, times: 2 }, play: { visitors: 0, times: 0 },
+              export: { visitors: 1, times: 1 }, demo: { visitors: 0, times: 0 } },
+  };
+
+  it("are its owner's to open, from the header", async () => {
+    withProject({ visibility: "public" });
+    api.getProjectVisits.mockResolvedValue(report);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Visits" }));
+    const dialog = await screen.findByRole("dialog", { name: "Visits" });
+    await within(dialog).findByText("Page views");
+    expect(api.getProjectVisits).toHaveBeenCalledWith("prj_1", 30);
+    expect(within(dialog).getByText("Exports")).toBeTruthy();
+  });
+
+  it("aren't offered on a project shared with them", async () => {
+    withProject({ ownership: "shared", owner_user_id: "usr_2" });
+    renderPage();
+    await screen.findByRole("button", { name: "Export options" });
+    expect(screen.queryByRole("button", { name: "Visits" })).toBeNull();
   });
 });

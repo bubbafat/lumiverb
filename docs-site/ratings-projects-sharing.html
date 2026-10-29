@@ -198,7 +198,13 @@
 <p>They never see file names or folders, locations, camera details, notes, faces or people, or ratings, and they can't change anything.</p>
 <h2 id="visits">Visits<a class="anchor" href="#visits" aria-label="Link to this section">#</a></h2>
 <p>Lumiverb counts what visitors to a public page do: pages seen, clips opened and videos played. It also counts projects exported, and how many people tried a demo. It counts on its own server, with no cookies and no outside script, and keeps nobody's address: a visitor is one each day, told apart that day by a code that can't be turned back into who they were, and from the next day only the totals are kept. Opening the same thing again within half an hour counts once. Search engines' crawlers and link previews are counted apart from people.</p>
-<p>A project's visits are its owner's and the account's admins' to see, a public library's its admins', and the whole account's the account's admins'. For now, see them with the command line:</p>
+<p>Who sees them:</p>
+<ul>
+<li><strong>A project's</strong>: its owner and the account's admins, with <strong>Visits</strong> at the top of the project, beside <strong>Export</strong>: visitors, page views, clips opened, videos played and exports over the last 7, 30 or 90 days, a bar a day (hover one, or open <strong>Day by day</strong>), the clips most opened and played, and the sites visitors came from.</li>
+<li><strong>A public library's</strong>: its admins, in <strong>Library settings</strong> under <strong>Visits</strong>.</li>
+<li><strong>The whole account's</strong>: its admins, on the <strong>Admin</strong> page under <strong>Visits</strong>: every project and library visited in the last 30 days, and how many tried the demo.</li>
+</ul>
+<p>On a server whose admin pages can't be reached from elsewhere, such as a demo, the command line says the same on the server itself:</p>
 <pre><code>lumiverb visits
 lumiverb visits --project PROJECT_ID --days 7</code></pre>
 

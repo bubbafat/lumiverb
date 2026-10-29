@@ -97,3 +97,20 @@ describe("PublicProjectPage", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("after=c1")));
   });
 });
+
+
+describe("PublicProjectPage's visit (ADR-025)", () => {
+  it("says the site its visitor came from with its first request, and nothing for this site", async () => {
+    vi.spyOn(document, "referrer", "get").mockReturnValue("https://www.facebook.com/a/post");
+    renderPage();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const project = fetchMock.mock.calls.map(([u]) => String(u)).find((u) => !u.includes("/assets"));
+    expect(project).toBe("/v1/public/projects/prj_1?from=www.facebook.com");
+    cleanup();
+    fetchMock.mockClear();
+    vi.spyOn(document, "referrer", "get").mockReturnValue(`${window.location.origin}/projects/prj_1`);
+    renderPage();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(fetchMock.mock.calls.map(([u]) => String(u))).toContain("/v1/public/projects/prj_1");
+  });
+});

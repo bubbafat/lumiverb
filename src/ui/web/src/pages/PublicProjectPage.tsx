@@ -6,6 +6,7 @@ import { AssetCell } from "../components/AssetCell";
 import { Lightbox } from "../components/Lightbox";
 import type { AssetPageItem } from "../api/types";
 import { apiPath } from "../api/paths";
+import { cameFromQuery } from "../lib/cameFrom";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import type { VirtualRowKind } from "../lib/virtualRows";
@@ -40,7 +41,8 @@ interface PublicAssetsResponse {
 }
 
 async function fetchPublicProject(projectId: string): Promise<PublicProjectDetail> {
-  const res = await fetch(`/v1${apiPath`/public/projects/${projectId}`}`);
+  // Where the visitor came from goes with it (ADR-025).
+  const res = await fetch(`/v1${apiPath`/public/projects/${projectId}`}${cameFromQuery()}`);
   if (!res.ok) throw new Error("Project not found");
   return res.json();
 }
