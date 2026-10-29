@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from src.server.search import nicknames
-from src.server.search.understand import KIND, MOST_LOOKUPS, PERSON, PLACE, Person, Place, understand
+from src.server.search.understand import KIND, MOST_LOOKUPS, PERSON, PLACE, Person, Place, places_label, understand
 
 pytestmark = pytest.mark.fast
 
@@ -18,13 +18,13 @@ DCA = Place("California Adventure", 33.806, -117.921)
 class Places:
     """A place finder: these phrases name places the account's clips are around; it remembers what it was asked."""
 
-    def __init__(self, **known: Place):
-        self.known = {k.replace("_", " "): v for k, v in known.items()}
+    def __init__(self, **known: Place | list[Place]):
+        self.known = {k.replace("_", " "): v if isinstance(v, list) else [v] for k, v in known.items()}
         self.asked: list[str] = []
 
-    def __call__(self, phrase: str) -> Place | None:
+    def __call__(self, phrase: str) -> list[Place]:
         self.asked.append(phrase)
-        return self.known.get(phrase)
+        return self.known.get(phrase, [])
 
 
 def _parts(raw: str, places: Places | None = None) -> tuple[list[tuple[str, str, str]], str]:
@@ -39,7 +39,7 @@ def test_a_video_of_sue_dancing_at_california_adventure():
     assert rest == "dancing"  # what's left to look for: the words that join others go
     u = understand("a video of Sue dancing at California Adventure", PEOPLE, Places(california_adventure=DCA))
     assert [p.person_ids for p in u.parts if p.kind == PERSON] == [("sue",)]
-    assert [p.place for p in u.parts if p.kind == PLACE] == [DCA]
+    assert [p.places for p in u.parts if p.kind == PLACE] == [(DCA,)]
     assert [p.media for p in u.parts if p.kind == KIND] == ["video"]
     assert u.said()[-1] == {"kind": "words", "words": "dancing", "label": "dancing"}
     # In a clip's words a place is its name whole, a person any of their names.
@@ -96,6 +96,20 @@ def test_a_place_is_asked_for_after_at_or_in_first_then_the_longest_and_only_so_
     places = Places()
     _parts("one two three four five six seven eight nine ten", places)
     assert len(places.asked) == MOST_LOOKUPS
+
+
+def test_places_by_one_name_are_one_part_said_by_where_each_is():
+    oregon, maine = Place("Portland", 45.515, -122.678, "Oregon"), Place("Portland", 43.659, -70.257, "Maine")
+    u = understand("sunset in Portland", PEOPLE, Places(portland=[maine, oregon]))
+    assert [(p.kind, p.words, p.label, p.places) for p in u.parts] == [
+        (PLACE, "portland", "Portland (Maine or Oregon)", (maine, oregon))]
+    assert u.rest == "sunset"
+    assert places_label([oregon]) == "Portland"  # one: its name, as before
+    england = Place("Portland", 50.547, -2.444, "England")
+    assert places_label([maine, england, oregon]) == "Portland (Maine, England or Oregon)"
+    # Where can't tell them apart: each said whole.
+    assert places_label([oregon, Place("Portland", 45.6, -122.5, "Oregon")]) == "Portland, Oregon or Portland, Oregon"
+    assert places_label([oregon, Place("Portland", 1.0, 2.0)]) == "Portland, Oregon or Portland"
 
 
 def test_one_kind_is_asked_for_and_never_alone():

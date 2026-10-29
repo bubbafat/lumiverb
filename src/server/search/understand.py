@@ -6,8 +6,9 @@ within 5 km of California Adventure (its GPS nearer Disneyland), described as "a
   in order), a name that's one name with theirs (nicknames.py: Sue is Susan), a family ("the Tuttles").
 - Where: words naming a place a plug-in finds (Set location's places, src/server/plugin_lookups.py) with
   some of the account's clips within NEAR_KM of it: a place nobody's been to is no place to them, so
-  "beach" stays a word though there's a Beach in North Dakota. A clip is where it's shown to be, a
-  location guess applied too.
+  "beach" stays a word though there's a Beach in North Dakota. Of the places by that name, the MOST_PLACES
+  with the most clips around them (Robert, Oct 29: "portland" is every Portland you've been, Oregon's,
+  Maine's and England's). A clip is where it's shown to be, a location guess applied too.
 - What kind: video(s), photo(s) and the like, with someone or somewhere or something to look for (the
   kind alone is the media filter's).
 
@@ -20,6 +21,7 @@ understood runs as it always did (src/server/api/routers/query.py _run_text_sear
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from collections.abc import Callable, Sequence
@@ -34,7 +36,8 @@ from src.server.search.query_builder import pieces
 NEAR_KM = 5.0  # "at" a place: within 5 km of it (Robert, Oct 28)
 MOST_PLACE_WORDS = 4  # a place's name, at most ("Disney's Grand Californian Hotel")
 MOST_LOOKUPS = 8  # names asked of the places plug-ins in one search, at most
-PLACES_LOOKED_AT = 5  # of the places by one name, the one with the account's clips around it is meant
+PLACES_LOOKED_AT = 20  # of the places by one name, those whose clips around them are counted
+MOST_PLACES = 3  # of those, the ones meant: with the most of the account's clips around them (Robert, Oct 29)
 
 PERSON, PLACE, KIND = "person", "place", "kind"
 
@@ -80,18 +83,24 @@ class Place:
     name: str
     lat: float
     lon: float
+    where: str = ""  # its region, else its country: what tells it from others by its name ("Oregon")
+
+    @property
+    def shown(self) -> str:
+        return f"{self.name}, {self.where}" if self.where else self.name
 
 
 @dataclass(frozen=True)
 class Part:
-    """One thing a search asks for: who (person_ids), where (place) or what kind (media), with the words
-    it was understood from (they match a clip by its words too) and what they were taken for."""
+    """One thing a search asks for: who (person_ids), where (places: one, or several by one name) or what
+    kind (media), with the words it was understood from (they match a clip by its words too) and what they
+    were taken for."""
 
     kind: str
     words: str
     label: str
     person_ids: tuple[str, ...] = ()
-    place: Place | None = None
+    places: tuple[Place, ...] = ()
     media: str | None = None
     also: tuple[str, ...] = ()  # the words it matches a clip by too: a name's others ("susan" is "sue" too)
 
@@ -133,14 +142,27 @@ def _who(people: Sequence[Person], typed: str, then: str | None) -> tuple[list[P
     return one, False
 
 
+def _either(said: list[str]) -> str:
+    return said[0] if len(said) == 1 else ", ".join(said[:-1]) + " or " + said[-1]
+
+
 def _label(people: list[Person]) -> str:
-    names = sorted({p.name for p in people})
-    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+    return _either(sorted({p.name for p in people}))
 
 
-def understand(raw: str, people: Sequence[Person], find_place: Callable[[str], Place | None]) -> Understood:
-    """What a search's words ask for. people: those the searcher can see, by name; find_place: the place a
-    phrase names that the account's clips are around, or None."""
+def places_label(places: Sequence[Place]) -> str:
+    """What places by one name were taken for: "California Adventure"; "Portland (Oregon, Maine or England)"."""
+    wheres = [p.where for p in places]
+    if len(places) == 1:
+        return places[0].name
+    if len({p.name for p in places}) == 1 and all(wheres) and len(set(wheres)) == len(wheres):
+        return f"{places[0].name} ({_either(wheres)})"
+    return _either([p.shown for p in places])
+
+
+def understand(raw: str, people: Sequence[Person], find_place: Callable[[str], Sequence[Place]]) -> Understood:
+    """What a search's words ask for. people: those the searcher can see, by name; find_place: the places a
+    phrase names that the account's clips are around, those meant first (none: it names no place)."""
     typed = pieces(raw)
     free = [not p.quoted and len(p.words) == 1 for p in typed]
     word = [fold(p.words[0]) if f else "" for p, f in zip(typed, free, strict=True)]
@@ -190,13 +212,13 @@ def understand(raw: str, people: Sequence[Person], find_place: Callable[[str], P
     for _, minus_length, s in sorted(spans)[:MOST_LOOKUPS]:
         e = s - minus_length
         phrase = " ".join(word[s:e + 1])
-        place = find_place(phrase)
-        if place is not None:
+        places = tuple(find_place(phrase))
+        if places:
             for k in range(s, e + 1):
                 taken[k] = True
             if usable(s - 1) and word[s - 1] in BEFORE_A_PLACE:
                 taken[s - 1] = True  # "at": it said where, and it's said
-            parts.append((s, Part(PLACE, phrase, place.name, place=place)))
+            parts.append((s, Part(PLACE, phrase, places_label(places), places=places)))
             break
 
     # The words that join others go: the search reads past them anyway ("a video of ... dancing" is "dancing").
@@ -231,44 +253,76 @@ def people_in_sight(session: Session, library_ids: list[str] | None) -> list[Per
     return [Person(r.person_id, r.display_name) for r in rows]
 
 
-def _near_sql(lat: float, lon: float, params: dict) -> str:
-    """SQL on active_assets a (LOCATION_JOIN as loc): the clip is within NEAR_KM of the point, where it's
-    shown to be (a location guess applied counts)."""
+def _near_sql(places: Sequence[Place], params: dict) -> list[str]:
+    """SQL on active_assets a (LOCATION_JOIN as loc), one for each place: the clip is within NEAR_KM of it,
+    where it's shown to be (a location guess applied counts)."""
     from src.server.models.query_filter import INCLUDE_GUESSES_PARAM, NearLocation
 
     params[INCLUDE_GUESSES_PARAM] = True
-    return NearLocation(lat=lat, lon=lon, radius_km=NEAR_KM).to_sql(params, [0])
+    counter = [0]
+    return [NearLocation(lat=p.lat, lon=p.lon, radius_km=NEAR_KM).to_sql(params, counter) for p in places]
 
 
-def clips_near(session: Session, place: Place, library_ids: list[str] | None, *, most: int | None = None) -> list[str]:
+def clips_near(session: Session, places: Sequence[Place], library_ids: list[str] | None) -> dict[str, Place]:
+    """The searcher's clips within NEAR_KM of any of these places, each with the first of them it's near."""
     from src.server.models.query_filter import LOCATION_JOIN
 
+    if not places:
+        return {}
     params: dict = {}
-    where = _near_sql(place.lat, place.lon, params)
-    limit = ""
-    if most is not None:
-        params["most"] = most
-        limit = " LIMIT :most"
-    return [r[0] for r in session.execute(text(
-        f"SELECT a.asset_id FROM active_assets a {LOCATION_JOIN} WHERE {where}{_in(library_ids, params)}{limit}"),
-        params)]
+    near = _near_sql(places, params)
+    which = "CASE " + " ".join(f"WHEN {n} THEN {i}" for i, n in enumerate(near)) + " END"
+    rows = session.execute(text(
+        f"SELECT a.asset_id, {which} FROM active_assets a {LOCATION_JOIN}"
+        f" WHERE ({' OR '.join(near)}){_in(library_ids, params)}"), params)
+    return {r[0]: places[r[1]] for r in rows}
 
 
-def place_finder(session: Session, library_ids: list[str] | None) -> Callable[[str], Place | None]:
-    """The place a phrase names, as a plug-in that finds places names it (its own name, or the name that
-    matched), with the most of the searcher's clips within NEAR_KM of it; None when none has any."""
+def clips_around(session: Session, places: Sequence[Place], library_ids: list[str] | None) -> list[int]:
+    """How many of the searcher's clips are within NEAR_KM of each place: one look for them all."""
+    from src.server.models.query_filter import LOCATION_JOIN
+
+    if not places:
+        return []
+    params: dict = {}
+    near = _near_sql(places, params)
+    counts = ", ".join(f"count(*) FILTER (WHERE {n})" for n in near)
+    row = session.execute(text(
+        f"SELECT {counts} FROM active_assets a {LOCATION_JOIN}"
+        f" WHERE ({' OR '.join(near)}){_in(library_ids, params)}"), params).one()
+    return [int(n) for n in row]
+
+
+def _km(a: Place, b: Place) -> float:
+    """How far apart two places are, over the earth (haversine)."""
+    la, lb = math.radians(a.lat), math.radians(b.lat)
+    h = math.sin((lb - la) / 2) ** 2 + math.cos(la) * math.cos(lb) * math.sin(math.radians(b.lon - a.lon) / 2) ** 2
+    return 2 * 6371.0 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def _where(found: dict) -> str:
+    """What tells a place a plug-in found from others by its name: its region, else its country."""
+    region, country = found.get("region") or "", found.get("country") or ""
+    return region if region and region != found["name"] else country
+
+
+def place_finder(session: Session, library_ids: list[str] | None) -> Callable[[str], list[Place]]:
+    """The places a phrase names, as a plug-in that finds places names them (their own name, or the name that
+    matched), that the searcher means by it: those with some of their clips within NEAR_KM, the most first (ties
+    in the plug-in's order), MOST_PLACES at most. Two whose clips around them could be the same (within twice
+    NEAR_KM of each other) are one, the first. None when none has any clips around it."""
     from src.server.plugin_lookups import find_places
 
-    def find(phrase: str) -> Place | None:
+    def find(phrase: str) -> list[Place]:
         found, _credits, _unavailable = find_places(session, phrase, PLACES_LOOKED_AT)
-        named = [p for p in found if phrase in (fold(p["name"]), fold(p.get("matched") or ""))]
-        best: tuple[int, Place | None] = (0, None)
-        for p in named:
-            place = Place(p["name"], p["lat"], p["lon"])
-            around = len(clips_near(session, place, library_ids, most=1))
-            if around > best[0]:
-                best = (around, place)
-        return best[1]
+        named = [Place(p["name"], p["lat"], p["lon"], _where(p)) for p in found
+                 if phrase in (fold(p["name"]), fold(p.get("matched") or ""))]
+        counted = sorted(zip(clips_around(session, named, library_ids), named, strict=True), key=lambda c: -c[0])
+        meant: list[Place] = []
+        for around, place in counted:
+            if around and len(meant) < MOST_PLACES and all(_km(place, m) > 2 * NEAR_KM for m in meant):
+                meant.append(place)
+        return meant
 
     return find
 

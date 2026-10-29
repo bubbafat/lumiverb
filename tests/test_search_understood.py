@@ -23,12 +23,24 @@ DCA = {"name": "California Adventure", "lat": 33.8061, "lon": -117.9209}  # unde
 PARIS = (48.8566, 2.3522)
 
 
+# Places by one name, as the plug-in lists them: biggest first.
+PORTLANDS = [{"name": "Portland", "region": "Oregon", "lat": 45.5152, "lon": -122.6784},
+             {"name": "Portland", "region": "Maine", "lat": 43.6591, "lon": -70.2568},
+             {"name": "Portland", "region": "England", "lat": 50.5466, "lon": -2.4436},
+             {"name": "Portland", "region": "Victoria", "lat": -38.3433, "lon": 141.6046}]
+# A town and a landmark by its name, 3 km apart: one spot.
+SPRINGFIELDS = [{"name": "Springfield", "region": "Illinois", "lat": 39.7817, "lon": -89.6501},
+                {"name": "Springfield", "region": "Illinois", "lat": 39.8086, "lon": -89.6501}]
+
+
 @pytest.fixture
 def places(monkeypatch):
-    """The places plug-in: California Adventure, and a Beach in North Dakota nobody's been to."""
+    """The places plug-in: California Adventure, a Beach in North Dakota nobody's been to, four Portlands and
+    two Springfields."""
     from src.server import plugin_lookups
 
-    known = {"california adventure": [DCA], "beach": [{"name": "Beach", "lat": 46.918, "lon": -104.004}]}
+    known = {"california adventure": [DCA], "beach": [{"name": "Beach", "lat": 46.918, "lon": -104.004}],
+             "portland": PORTLANDS, "springfield": SPRINGFIELDS}
 
     def find(session, q, limit):
         return [{**p, "matched": None} for p in known.get(q, [])], [], []
@@ -165,3 +177,31 @@ def test_a_public_pages_search_reads_only_the_words(env, trip):
     assert said == []  # no people on a public page: its words, as they always were
     assert set(scores) == {clips[n] for n in ("sue_dancing", "someone_dancing", "sue_dancing_photo",
                                               "sue_in_paris", "noted")}
+
+
+def test_a_name_many_places_share_is_each_of_them_the_searcher_has_been_most(env, trip):
+    """Robert, Oct 29: "portland" is every Portland you've been, up to three, those with the most clips first;
+    not only the biggest with any (Oregon's, where there's one clip)."""
+    lib, _, _ = trip
+    been = {where: [_clip(env, lib, f"Trips/{where}_{n}.jpg", "image") for n in range(count)]
+            for where, count in (("Oregon", 1), ("Maine", 3), ("England", 2), ("Victoria", 1))}
+    for p in PORTLANDS:
+        for clip in been[p["region"]]:
+            _at(env, clip, (p["lat"] + 0.01, p["lon"]))
+    said = _search(env, lib, "portland")
+    assert said["understood"] == [{"kind": "place", "words": "portland", "label": "Portland (Maine, England or Oregon)"}]
+    # Victoria's one clip ties Oregon's, which the plug-in listed first: three places at most.
+    assert {i["asset_id"] for i in said["items"]} == {*been["Maine"], *been["England"], *been["Oregon"]}
+    # Each found by the Portland it's near.
+    near = {i["asset_id"]: (i["search_context"]["matched_in"], i["search_context"]["snippet"]) for i in said["items"]}
+    assert near[been["Maine"][0]] == ("place", "Portland, Maine")
+    assert near[been["Oregon"][0]] == ("place", "Portland, Oregon")
+
+
+def test_places_by_one_name_close_together_are_one(env, trip):
+    lib, _, _ = trip
+    clip = _clip(env, lib, "Trips/capitol.jpg", "image")
+    _at(env, clip, (39.795, -89.650))  # within 5 km of both
+    said = _search(env, lib, "springfield")
+    assert said["understood"] == [{"kind": "place", "words": "springfield", "label": "Springfield"}]
+    assert [i["search_context"]["snippet"] for i in said["items"]] == ["Springfield"]
