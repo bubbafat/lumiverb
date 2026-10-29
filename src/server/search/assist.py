@@ -44,9 +44,9 @@ def asked_about(raw: str) -> list[str]:
     """The words of a search that could name a kind of thing (outside quotes, not joining words, three letters or
     more, not a number), in order, each once."""
     out: list[str] = []
-    for tokens, quoted in pieces(raw):
-        w = fold(tokens[0])
-        if not quoted and w not in STOPWORDS and len(w) >= 3 and not w.isdigit() and w not in out:
+    for p in pieces(raw):
+        w = fold(p.words[0])
+        if not p.quoted and w not in STOPWORDS and len(w) >= 3 and not w.isdigit() and w not in out:
             out.append(w)
     return out
 

@@ -237,6 +237,41 @@ def test_a_hyphenated_word_is_its_parts_in_a_phrase_and_as_typed(env):
     assert _search(env, lib, "durham") == [raleigh]
 
 
+def test_words_typed_joined_are_one_thing_as_a_files_name_is(env):
+    # Robert, Oct 29: DJI_20261025123119_0003_D found its file, then everything with "dji" or a "d" in it.
+    lib = _library(env)
+    named = _clip(env, lib, "Cruise/DJI_20261025123119_0003_D.MP4", "video")
+    same_day = _clip(env, lib, "Cruise/DJI_20261025124500_0004_D.MP4", "video")
+    next_day = _clip(env, lib, "Cruise/DJI_20261026090000_0005_D.MP4", "video")
+    d_day = _clip(env, lib, "a.jpg")
+    _describe(env, d_day, "A D-Day memorial")
+    img = _clip(env, lib, "Trip/IMG_7616.JPG")
+    other_img = _clip(env, lib, "Trip/IMG_7617.JPG")
+    listed = _clip(env, lib, "b.jpg")
+    _read(env, listed, "Copied IMG_7616.JPG to the card")
+    _sweep(env)
+
+    assert _search(env, lib, "DJI_20261025123119_0003_D") == [named]
+    assert set(_search(env, lib, "DJI_20261025")) == {named, same_day}, "its last word a prefix too"
+    assert _search(env, lib, '"DJI_20261025"') == [], "quoted: those words, whole"
+    # In a path as its words, in text read as the search reads it there: one word.
+    assert set(_search(env, lib, "IMG_7616.JPG")) == {img, listed}
+    assert set(_search(env, lib, '"IMG_7616.JPG"')) == {img, listed}
+    assert set(_search(env, lib, "dji d")) == {named, same_day, next_day, d_day}, "apart, any of them, as before"
+    assert other_img not in _search(env, lib, "IMG_7616")
+
+
+def test_a_date_typed_with_hyphens_finds_its_folder(env):
+    lib = _library(env)
+    that_day = _clip(env, lib, "Trips/2026-10-25/beach.jpg")
+    _clip(env, lib, "Trips/2026-10-26/beach.jpg")
+    noted = _clip(env, lib, "c.jpg")
+    _note(env, noted, "Printed 2026-10-25")
+    _sweep(env)
+
+    assert set(_search(env, lib, "2026-10-25")) == {that_day, noted}
+
+
 def test_a_word_matches_as_a_prefix_too_ranked_below_whole_words(env):
     lib = _library(env)
     exact = _clip(env, lib, "a.jpg")

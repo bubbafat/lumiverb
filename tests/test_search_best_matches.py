@@ -95,4 +95,6 @@ def test_a_clip_the_search_names_is_among_the_best(env):
     _sweep(env)
     said = _query(env, lib, "DJI_20261025123119_0003_D", best=10)
     assert _ids(said["best"]["items"]) == [named] and said["best"]["total"] == 1
+    assert _ids(said["items"]) == [named], "its words joined, one thing: not the other by its DJI and D"
+    said = _query(env, lib, "DJI_20261025", best=10)  # the start of a name: that day's
     assert set(_ids(said["items"])) == {named, other}

@@ -24,8 +24,11 @@ round (what's shown keeps them); a hyphenated word as its parts, so a quoted
 configuration `lumiverb`, migration c7e1a9d3f5b2). Typed words are read the
 same way (src/server/search/query_builder.py parses what a person typed). Unquoted words: any of them
 matches, more of them ranks higher, and all of them in a row higher still.
-A quoted phrase must match, its words in order. Words of three letters or
-more match as a prefix too ("disney" finds "Disneyland"), ranked at half.
+A quoted phrase must match, its words in order, and so must words typed
+joined by `_` or `.` (a file's name: `IMG_7616.JPG`), in a row as a path
+keeps them or as typed. Words of three letters or more match as a prefix
+too ("disney" finds "Disneyland"), ranked at half, as does the last of
+words typed joined (`DJI_20261025` finds that day's DJI clips).
 Matches in a description, tags or a note weigh most, then a plug-in's
 facts, then the text read in a picture and a transcript, then a path. Several search terms (filters) must
 each match.
@@ -40,7 +43,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.server.search.query_builder import PREFIX_MIN_LENGTH, parse_query
+from src.server.search.query_builder import PREFIX_MIN_LENGTH, QueryTerm, parse_query
 
 CONFIG = "lumiverb"  # English's, accents aside and a hyphenated word by its parts
 # A prefix match ranks at half an exact one.
@@ -121,7 +124,12 @@ def build(terms: list[str], also: Sequence[Mapping[str, Sequence[str]]] | None =
         return f":{name}"
 
     def word(token: str) -> str:
-        return f"plainto_tsquery('{CONFIG}', {bind(token)})"
+        said = f"plainto_tsquery('{CONFIG}', {bind(token)})"
+        if "-" not in token:
+            return said
+        # Its parts in a row too, as a path keeps them: "2026-10-25" finds a folder of that name (read as typed,
+        # it's 2026, -10 and -25).
+        return f"({said} || {phrase(tuple(token.split('-')))})"
 
     def prefix(token: str) -> str:
         if len(token) < PREFIX_MIN_LENGTH or not _PREFIXABLE.fullmatch(token):
@@ -130,6 +138,16 @@ def build(terms: list[str], also: Sequence[Mapping[str, Sequence[str]]] | None =
 
     def phrase(tokens: tuple[str, ...]) -> str:
         return f"phraseto_tsquery('{CONFIG}', {bind(' '.join(tokens))})"
+
+    def quoted(term: QueryTerm) -> tuple[str, str]:
+        """A phrase's (exact, loose): its words in a row, or as typed when that reads otherwise (img_7616.jpg is
+        one word in a note, three in a path); words typed joined, their last also a prefix (DJI_20261025)."""
+        exact = phrase(term.tokens)
+        loose = f"({phrase(term.tokens[:-1])} <-> {prefix(term.tokens[-1])})" if term.joined else exact
+        if term.typed:
+            typed = f"phraseto_tsquery('{CONFIG}', {bind(term.typed)})"
+            exact, loose = f"({exact} || {typed})", f"({loose} || {typed})"
+        return exact, loose
 
     exact: list[str] = []
     loose: list[str] = []
@@ -143,9 +161,8 @@ def build(terms: list[str], also: Sequence[Mapping[str, Sequence[str]]] | None =
         if words > MAX_WORDS:
             raise SearchTooLongError(f"A search is at most {MAX_WORDS} words; this one has {words}. "
                                      "Leave some out.")
-        quoted = [t.tokens for t in parsed if t.is_phrase]
         free = [t.tokens[0] for t in parsed if not t.is_phrase]
-        required = [phrase(q) for q in quoted]
+        required = [quoted(t) for t in parsed if t.is_phrase]
         things = also[n] if also and n < len(also) else {}
         free_words: list[tuple[str, str]] = []
         for token in free:
@@ -156,7 +173,7 @@ def build(terms: list[str], also: Sequence[Mapping[str, Sequence[str]]] | None =
         each.extend(free_words)
         for clauses, i in ((exact, 0), (loose, 1)):
             group = [w[i] for w in free_words]
-            parts = required + ([f"({' || '.join(group)})"] if group else [])
+            parts = [r[i] for r in required] + ([f"({' || '.join(group)})"] if group else [])
             clauses.append("(" + " && ".join(parts) + ")")
         if len(free) > 1:
             phrases.append(phrase(tuple(free)))

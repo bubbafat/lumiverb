@@ -142,8 +142,8 @@ def understand(raw: str, people: Sequence[Person], find_place: Callable[[str], P
     """What a search's words ask for. people: those the searcher can see, by name; find_place: the place a
     phrase names that the account's clips are around, or None."""
     typed = pieces(raw)
-    free = [not quoted and len(tokens) == 1 for tokens, quoted in typed]
-    word = [fold(tokens[0]) if f else "" for (tokens, _), f in zip(typed, free, strict=True)]
+    free = [not p.quoted and len(p.words) == 1 for p in typed]
+    word = [fold(p.words[0]) if f else "" for p, f in zip(typed, free, strict=True)]
     taken = [False] * len(typed)
     parts: list[tuple[int, Part]] = []
 
@@ -200,9 +200,7 @@ def understand(raw: str, people: Sequence[Person], find_place: Callable[[str], P
             break
 
     # The words that join others go: the search reads past them anyway ("a video of ... dancing" is "dancing").
-    left = [(tokens, quoted) for i, (tokens, quoted) in enumerate(typed)
-            if not taken[i] and (quoted or fold(tokens[0]) not in STOPWORDS)]
-    rest = " ".join(f'"{" ".join(tokens)}"' if quoted else tokens[0] for tokens, quoted in left)
+    rest = " ".join(p.said for i, p in enumerate(typed) if not taken[i] and (p.quoted or fold(p.words[0]) not in STOPWORDS))
     if not parts or not rest and all(p.kind == KIND for _, p in parts):
         # Nothing understood, or "videos" alone (every one: the media filter's): the words as typed, as before.
         return Understood((), raw)
@@ -300,6 +298,6 @@ def of_kind(session: Session, asset_ids: Sequence[str] | None, media: str,
 def read(session: Session, raw: str, library_ids: list[str] | None) -> Understood:
     """What a signed-in search's words ask for, with what's known in the account (read only when a word
     outside quotes could ask for something)."""
-    if not any(not quoted and fold(tokens[0]) not in STOPWORDS for tokens, quoted in pieces(raw)):
+    if not any(not p.quoted and fold(p.words[0]) not in STOPWORDS for p in pieces(raw)):
         return Understood((), raw)
     return understand(raw, people_in_sight(session, library_ids), place_finder(session, library_ids))

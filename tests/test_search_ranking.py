@@ -37,10 +37,15 @@ def test_a_file_named_by_the_search_comes_first(env):
     osmo = _clip(env, lib, "Ship/IMG_0001.JPG")
     _describe(env, osmo, "A person holds a DJI Osmo Pocket camera on the deck")
     photo = _clip(env, lib, "Phone/IMG_7616.JPG")
+    listed = _clip(env, lib, "Phone/IMG_0003.PNG")
+    _read(env, listed, "Exported DJI_20261025123119_0003_D")
     _sweep(env)  # a clip's file name is searched once its search row is written
 
-    found = _search(env, lib, "DJI_20261025123119_0003_D")
-    assert found[0] == exact and {other, angkor, osmo} <= set(found[1:])
+    # Its words joined, one thing (src/server/search/query_builder.py): the file it names first, then the
+    # text read that says it; nothing by its "D" or "DJI" alone.
+    assert _search(env, lib, "DJI_20261025123119_0003_D") == [exact, listed]
+    found = _search(env, lib, "dji d")
+    assert {exact, other, angkor, osmo} <= set(found), "typed apart, any of them as ever"
     assert _search(env, lib, "IMG_7616.JPG")[0] == photo  # with its extension
     assert _search(env, lib, "img_7616")[0] == photo  # without, any case
 
