@@ -102,6 +102,14 @@ class QueryItem(BaseModel):
     search_context: SearchContext | None = None
 
 
+class UnderstoodPart(BaseModel):
+    """One thing a search was understood to ask for (src/server/search/understand.py)."""
+
+    kind: str  # person, place, kind (videos or photos), words (the rest, searched as words)
+    words: str  # what was typed for it
+    label: str  # what it was taken for: "Sue Horvick", "California Adventure", "videos"
+
+
 class QueryResponse(BaseModel):
     items: list[QueryItem]
     next_cursor: str | None = None
@@ -110,6 +118,9 @@ class QueryResponse(BaseModel):
     # full-text search, ADR-019), or "none" (search terms without a word
     # in them). None when no text search was run at all.
     search_source: str | None = None
+    # What the search was understood to ask for, in order; None when nothing
+    # was (its words searched as they always were).
+    understood: list[UnderstoodPart] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -134,10 +145,14 @@ def _run_text_search(
     public_cap_ms: int | None = None,
     public: bool = False,
     capped: set[str] | None = None,
+    understood: list[dict] | None = None,
 ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
     """The clips a text search finds, in the account's database
     (src/server/search/text_search.py): their own words, their scenes' and
-    their transcripts'.
+    their transcripts'; for a signed-in search, by who's in them, where they
+    were and what kind they are too, where its words say
+    (src/server/search/understand.py). `understood`: when given, gets what
+    each search was understood to ask for (nothing when none was).
 
     `capped`: when given, gets the name of each search that came back full
     (its limit): matches past it were left out. Each search is capped on
@@ -158,8 +173,73 @@ def _run_text_search(
     """
     from src.server.search import text_search
 
+    terms = [st.q for st in search_terms if st.q]
+    try:  # too many words or searches: refused before anything is read
+        has_words = text_search.build(terms) is not None
+    except text_search.SearchTooLongError as exc:  # said as the search box shows it
+        raise ApiError(400, "search_too_long", str(exc),
+                       {"max_words": text_search.MAX_WORDS, "max_searches": text_search.MAX_TERMS}) from None
+    if not has_words:
+        return {}, {}, "none"  # not a word in it: nothing is found, and nothing read
+    if not public and public_cap_ms is None:
+        from src.server.search import understand
+
+        read = [understand.read(session, t, library_ids) for t in terms]
+        if any(u.parts for u in read):
+            if understood is not None:
+                understood.extend(part for u in read for part in u.said())
+            return _understood_search(session, read, library_ids, limit, capped)
+    return _words_search(session, terms, library_ids, limit, public_cap_ms, public, capped)
+
+
+def _understood_search(session: Session, read: list, library_ids: list[str] | None, limit: int,
+                       capped: set[str] | None) -> tuple[dict[str, float], dict[str, SearchContext], str]:
+    """Understood searches (each an understand.Understood), every part of each to match: a person or a
+    place by who's recognised in a clip or where it was, or by its words; the kind asked for. Ranked by
+    the words left (each search's, added up); with none left, by how well the parts' words matched."""
+    from src.server.search import understand
+
+    scores: dict[str, float] | None = None
+    contexts: dict[str, SearchContext] = {}
+    for u in read:
+        found: dict[str, float] | None = None  # None: nothing has narrowed it yet
+        if u.rest:
+            found, said, _ = _words_search(session, [u.rest], library_ids, limit, None, False, capped)
+            for aid, c in said.items():
+                contexts.setdefault(aid, c)
+        for part in u.parts:
+            if part.kind == understand.KIND:
+                continue
+            known = (understand.clips_with(session, part.person_ids, library_ids) if part.kind == understand.PERSON
+                     else understand.clips_near(session, part.place, library_ids))
+            by_words, said, _ = _words_search(session, [part.searched], library_ids, limit, None, False, capped)
+            matched = {aid: 1.0 + by_words.get(aid, 0.0) for aid in {*known, *by_words}}
+            if found is None:
+                found = matched
+            elif u.rest:  # the words left rank what matches
+                found = {aid: s for aid, s in found.items() if aid in matched}
+            else:
+                found = {aid: s + matched[aid] for aid, s in found.items() if aid in matched}
+            for aid, c in said.items():
+                contexts.setdefault(aid, c)
+        for part in u.parts:
+            if part.kind == understand.KIND:
+                kept = set(understand.of_kind(session, list(found or {}), part.media, library_ids))
+                found = {aid: s for aid, s in (found or {}).items() if aid in kept}
+        found = found or {}
+        scores = found if scores is None else {aid: s + found[aid] for aid, s in scores.items() if aid in found}
+    scores = scores or {}
+    return scores, {aid: c for aid, c in contexts.items() if aid in scores}, "postgres"
+
+
+def _words_search(session: Session, terms: list[str], library_ids: list[str] | None, limit: int,
+                  public_cap_ms: int | None, public: bool,
+                  capped: set[str] | None) -> tuple[dict[str, float], dict[str, SearchContext], str]:
+    """The clips a search's words find (_run_text_search's, as it always was)."""
+    from src.server.search import text_search
+
     try:
-        q = text_search.build([st.q for st in search_terms if st.q])
+        q = text_search.build(terms)
     except text_search.SearchTooLongError as exc:  # said as the search box shows it
         raise ApiError(400, "search_too_long", str(exc),
                        {"max_words": text_search.MAX_WORDS, "max_searches": text_search.MAX_TERMS}) from None
@@ -351,15 +431,18 @@ def unified_query(
     search_source: str | None = None
 
     # --- Text search via candidate-set pattern ---
+    said: list[dict] = []
+    understood: list[UnderstoodPart] | None = None
     if search_terms:
         scores, contexts, search_source = _run_text_search(
             session, search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
-            public=getattr(request.state, "is_public_request", False),
+            public=getattr(request.state, "is_public_request", False), understood=said,
         )
+        understood = [UnderstoodPart(**part) for part in said] or None
 
         if not scores:
             return QueryResponse(
-                items=[], total_estimate=0, search_source=search_source,
+                items=[], total_estimate=0, search_source=search_source, understood=understood,
             )
 
         # Cap candidate set
@@ -446,4 +529,5 @@ def unified_query(
         next_cursor=next_cursor,
         total_estimate=total_estimate,
         search_source=search_source,
+        understood=understood,
     )

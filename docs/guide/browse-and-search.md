@@ -34,6 +34,18 @@ How words match:
 
 Results are ranked by how well they match: a description, tags or a note counts most, a file or folder name least. A search shows its 5,000 best matches at most.
 
+### Who, where and what kind
+
+A search also understands who, where and what kind of clip you ask for. `a video of Sue dancing at California Adventure` finds videos where Sue is recognised, taken within 5 km of California Adventure, that match "dancing":
+
+- **Who**: a name of someone you've named on the People page, their first name, last name or both (`Horvick` finds every Horvick, and `the Tuttles` every Tuttle). Common short forms count both ways: `Sue` finds Susan, and `Bob` finds Robert.
+- **Where**: the name of a place (with the Place names plug-in on) where some of your clips were taken. A clip within 5 km of it matches, wherever its GPS or its location guess put it.
+- **What kind**: `video`, `videos`, `photo`, `pictures` and the like.
+
+Each counts by its words too, as before: `Sue` also finds a clip whose note says "Sue". Everything you ask for must match, and the rest of the words rank the results.
+
+Under the box, **Searched for** shows what the search understood, a card each. Click × on a card to search those words as plain words: the search puts them in quotes, and quoted words are never understood. On a public page a search reads only the words.
+
 Type two letters of a person's name and pick them from the **People** list under the box to see only their clips.
 
 ## Filters and sorting

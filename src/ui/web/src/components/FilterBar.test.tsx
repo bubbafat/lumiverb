@@ -194,3 +194,39 @@ describe("FilterBar saving a search", () => {
     expect(screen.queryByRole("button", { name: "Save as project" })).toBeNull();
   });
 });
+
+describe("A search understood", () => {
+  const understood = [
+    { kind: "kind", words: "photos", label: "photos" },
+    { kind: "person", words: "art", label: "Arthur Tuttle" },
+    { kind: "place", words: "anaheim", label: "Anaheim" },
+  ] as const;
+
+  function renderUnderstood(onSetFilter: (type: string, value: string | null) => void) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <FilterBar filters={[{ type: "query", value: "photos of art in Anaheim" }]} sort="taken_at" dir="desc"
+            onSetFilter={onSetFilter} onSetSort={() => {}} onClearAll={() => {}} facets={facets}
+            understood={[...understood]} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("says what it was taken for, a card each", () => {
+    renderUnderstood(() => {});
+    const said = screen.getByLabelText("Searched for").textContent ?? "";
+    expect(said).toContain("Arthur Tuttle");
+    expect(said).toContain("Anaheim");
+    expect(said).toContain("photos");
+  });
+
+  it("dismissing a card searches its words as words", () => {
+    const onSetFilter = vi.fn();
+    renderUnderstood(onSetFilter);
+    fireEvent.click(screen.getByRole("button", { name: "Not Arthur Tuttle: search “art” as words" }));
+    expect(onSetFilter).toHaveBeenCalledWith("query", 'photos of "art" in Anaheim');
+  });
+});

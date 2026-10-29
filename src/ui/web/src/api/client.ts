@@ -1,3 +1,4 @@
+import type { UnderstoodPart } from "../lib/understood";
 import type {
   AccountItem,
   AccountMade,
@@ -631,6 +632,8 @@ export interface QueryResponse {
   items: QueryItem[];
   next_cursor: string | null;
   total_estimate: number | null;
+  /** What the search was understood to ask for, in order (lib/understood.ts); null when nothing was. */
+  understood?: UnderstoodPart[] | null;
 }
 
 /** Unified query using filter algebra: GET /v1/query?f=prefix:value&... */

@@ -70,5 +70,22 @@ def parse_query(raw: str) -> list[QueryTerm]:
     return terms
 
 
+def pieces(raw: str) -> list[tuple[tuple[str, ...], bool]]:
+    """What was typed in order, as parse_query reads it, each piece with whether it was quoted (one quoted
+    word too): a free word is ((word,), False), quoted text (its words, True). Quoted text is taken as it
+    is, never understood (src/server/search/understand.py)."""
+    lowered = raw.lower()
+    out: list[tuple[tuple[str, ...], bool]] = []
+    last = 0
+    for m in _QUOTED_RE.finditer(lowered):
+        out.extend(((tok,), False) for tok in _TOKEN_RE.findall(lowered[last : m.start()]))
+        quoted = tuple(_TOKEN_RE.findall(m.group(1)))
+        if quoted:
+            out.append((quoted, True))
+        last = m.end()
+    out.extend(((tok,), False) for tok in _TOKEN_RE.findall(lowered[last:]))
+    return out
+
+
 # The shortest word that also matches as a prefix: `a` would match almost everything.
 PREFIX_MIN_LENGTH = 3

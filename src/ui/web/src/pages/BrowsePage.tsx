@@ -736,6 +736,7 @@ export default function BrowsePage() {
         folder={pathPrefix}
         isPublic={isPublicMode}
         searchError={searchRefusal(error)}
+        understood={browseQuery.data?.pages[0]?.understood ?? null}
       />
 
       {showSaveAsProject && (

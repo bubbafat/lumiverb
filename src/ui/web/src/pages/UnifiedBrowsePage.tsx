@@ -531,6 +531,7 @@ export default function UnifiedBrowsePage() {
         facets={facetsQuery.data ?? null}
         onSaveAsProject={canEdit ? () => setShowSaveAsProject(true) : undefined}
         searchError={searchRefusal(browseQuery.error)}
+        understood={browseQuery.data?.pages[0]?.understood ?? null}
       />
 
       {showSaveAsProject && (
