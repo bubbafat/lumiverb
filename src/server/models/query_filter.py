@@ -947,6 +947,42 @@ LOCATION_FILTERS: tuple[type[LeafFilter], ...] = (HasGps, NearLocation, IncludeG
 
 
 @dataclass(frozen=True)
+class AssistedSearch(LeafFilter):
+    """The search's words may be asked about of the account's AI machine (src/server/search/assist.py), where the
+    account lets searches ask. A modifier: it matches every clip by itself, and a public page's search never asks."""
+    value: bool = True
+
+    @classmethod
+    def prefix(cls) -> str:
+        return "assist"
+
+    @classmethod
+    def type_name(cls) -> str:
+        return "assist"
+
+    @classmethod
+    def value_kind(cls) -> ValueKind:
+        return ValueKind.BOOLEAN
+
+    @classmethod
+    def display_label(cls) -> str:
+        return "AI-assisted"
+
+    def label(self) -> str:
+        return "AI-assisted" if self.value else "Not AI-assisted"
+
+    def to_sql(self, params: dict, counter: list[int]) -> str:
+        return "TRUE"  # a modifier, not a predicate
+
+    def to_url_value(self) -> str:
+        return "yes" if self.value else "no"
+
+    @classmethod
+    def from_url_value(cls, raw: str) -> AssistedSearch:
+        return cls(value=raw.lower() in ("yes", "true", "1"))
+
+
+@dataclass(frozen=True)
 class DateRange(LeafFilter):
     from_dt: datetime | None = None
     to_dt: datetime | None = None

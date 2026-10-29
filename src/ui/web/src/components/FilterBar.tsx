@@ -112,6 +112,19 @@ interface FilterBarProps {
   /** What the search was understood to ask for (GET /v1/query's understood): a card each, under the search
    * box; dismissing one searches its words as words (lib/understood.ts takenLiterally). */
   understood?: UnderstoodPart[] | null;
+  /** The account lets searches ask its AI machine (Settings › AI): the AI switch beside the search box, which this
+   * browser remembers for new searches (assist:yes; local search, free and without AI, when it's off). */
+  canAssist?: boolean;
+}
+
+const ASSIST_KEY = "lv_assist";
+
+function assistRemembered(): boolean {
+  try {
+    return localStorage.getItem(ASSIST_KEY) === "on";
+  } catch {
+    return false;
+  }
 }
 
 function PersonChiclet({ personId, onClear }: { personId: string; onClear: () => void }) {
@@ -211,6 +224,7 @@ export function FilterBar({
   isPublic = false,
   searchError = null,
   understood = null,
+  canAssist = false,
 }: FilterBarProps) {
   // --- Read individual values from filter array ---
   const q = getFilterValue(filters, "query") ?? null;
@@ -235,6 +249,7 @@ export function FilterBar({
   const favorite = favoriteVal === "yes" ? true : favoriteVal === "no" ? false : null;
   const starVal = parseRange(getFilterValue(filters, "stars"));
   const colorFilter = getFilterValue(filters, "color") ?? null;
+  const assisted = getFilterValue(filters, "assist") === "yes";
 
   const [inputValue, setInputValue] = useState(q ?? "");
   const [searchFocused, setSearchFocused] = useState(false);
@@ -294,6 +309,7 @@ export function FilterBar({
       const trimmed = value.trim();
       if (trimmed.length > 0) {
         onSetFilter("query", trimmed);
+        if (canAssist && !assisted && assistRemembered()) onSetFilter("assist", "yes");
       } else if (userTypingRef.current) {
         // User explicitly cleared the input — remove the filter
         onSetFilter("query", null);
@@ -301,8 +317,16 @@ export function FilterBar({
       // If userTypingRef is false, the input was cleared by the sync
       // effect (chiclet was created) — don't remove the filter.
     },
-    [onSetFilter],
+    [onSetFilter, canAssist, assisted],
   );
+
+  const toggleAssist = () => {
+    const next = !assisted;
+    onSetFilter("assist", next ? "yes" : null);
+    try {
+      localStorage.setItem(ASSIST_KEY, next ? "on" : "off");
+    } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -371,7 +395,7 @@ export function FilterBar({
   const hasDateFilter = Boolean(dateVal.from);
   // Filters excluding query/tag/date/library (those have their own chiclets or are scope)
   const structuralFilters = filters.filter(
-    (f) => !["query", "tag", "date", "library", "path"].includes(f.type),
+    (f) => !["query", "tag", "date", "library", "path", "assist"].includes(f.type),
   );
   const hasActiveFilters = structuralFilters.length > 0;
 
@@ -455,6 +479,23 @@ export function FilterBar({
             </div>
           )}
         </div>
+
+        {/* AI-assisted search: on, a search may ask the account's AI machine (it may cost); off, it's local */}
+        {canAssist && (
+          <button
+            type="button"
+            aria-pressed={assisted}
+            onClick={toggleAssist}
+            title={assisted
+              ? "AI-assisted: a word naming a kind of thing is searched with what the AI machine lists (it may cost)"
+              : "Local search: free, no AI. Click to let the AI machine help"}
+            className={`rounded-lg border px-2.5 py-2 text-xs font-medium ${assisted
+              ? "border-indigo-500 bg-indigo-600/30 text-indigo-200"
+              : "border-gray-700 bg-gray-800 text-gray-400 hover:text-gray-200"}`}
+          >
+            AI
+          </button>
+        )}
 
         {/* Media type toggle */}
         <div className="flex rounded-lg border border-gray-700 overflow-hidden text-xs">
@@ -622,13 +663,16 @@ export function FilterBar({
             ) : (
               <span
                 key={`${part.kind}:${part.words}`}
-                title={part.kind === "kind" ? `Only ${part.label}` : `${part.label}, or the words “${part.words}”`}
+                title={part.kind === "kind" ? `Only ${part.label}`
+                  : part.kind === "also" ? `“${part.words}”, or what the AI machine listed: ${part.label}`
+                  : `${part.label}, or the words “${part.words}”`}
                 className="inline-flex items-center gap-1 rounded-full border border-gray-600 bg-gray-800 px-2 py-0.5 text-gray-200"
               >
-                {part.label}
+                {part.kind === "also" ? `${part.words}: ${part.label}` : part.label}
                 <button
                   type="button"
-                  aria-label={`Not ${part.label}: search “${part.words}” as words`}
+                  aria-label={part.kind === "also" ? `Search “${part.words}” alone`
+                    : `Not ${part.label}: search “${part.words}” as words`}
                   title={`Search “${part.words}” as words`}
                   onClick={() => onSetFilter("query", takenLiterally(q, part.words))}
                   className="text-gray-500 hover:text-gray-200"

@@ -137,6 +137,8 @@ export function filterLabel(
       return filter.value === "yes" ? "Has location" : "No location";
     case "include_guesses":
       return "Includes guesses";
+    case "assist":
+      return "AI-assisted";
     case "has_faces":
       return filter.value === "yes" ? "Has faces" : "No faces";
     case "has_exposure":
@@ -193,6 +195,7 @@ const FALLBACK_LABELS: Record<string, string> = {
   has_exposure: "Has Exposure",
   has_gps: "Has location",
   include_guesses: "Includes guesses",
+  assist: "AI-assisted",
   near: "Near",
   date: "Date",
   favorite: "Favorite",

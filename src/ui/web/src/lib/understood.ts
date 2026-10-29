@@ -3,10 +3,11 @@
  * searches its words as words: quoted text is never understood. */
 
 export interface UnderstoodPart {
-  kind: "person" | "place" | "kind" | "words";
+  kind: "person" | "place" | "kind" | "also" | "words";
   /** What was typed for it, as the server read it (lowercase, accents aside). */
   words: string;
-  /** What it was taken for: "Susan Horvick", "California Adventure", "videos". */
+  /** What it was taken for: "Susan Horvick", "California Adventure", "videos"; for "also" (an AI-assisted search's
+   * word naming a kind of thing), the things of that kind it's searched with too. */
   label: string;
 }
 

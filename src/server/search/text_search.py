@@ -34,6 +34,7 @@ each match.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import text
@@ -78,10 +79,12 @@ class Query:
     params: dict[str, str]
 
 
-def build(terms: list[str]) -> Query | None:
+def build(terms: list[str], also: Sequence[Sequence[str]] | None = None) -> Query | None:
     """The tsquery for search terms (each what a person typed; all must
-    match), or None when none has a word. SearchTooLongError past
-    MAX_TERMS terms, or a term past MAX_WORDS words."""
+    match), or None when none has a word. also: for each term, other words or
+    phrases that match as its unquoted words do (an AI-assisted search's
+    things of a kind: src/server/search/assist.py), never counted against its
+    size. SearchTooLongError past MAX_TERMS terms, or a term past MAX_WORDS words."""
     if len(terms) > MAX_TERMS:
         raise SearchTooLongError(f"At most {MAX_TERMS} searches can be combined; this has {len(terms)}.")
     params: dict[str, str] = {}
@@ -105,7 +108,7 @@ def build(terms: list[str]) -> Query | None:
     exact: list[str] = []
     loose: list[str] = []
     phrases: list[str] = []
-    for raw in terms:
+    for n, raw in enumerate(terms):
         parsed = parse_query(raw)
         if not parsed:
             continue
@@ -116,8 +119,9 @@ def build(terms: list[str]) -> Query | None:
         quoted = [t.tokens for t in parsed if t.is_phrase]
         free = [t.tokens[0] for t in parsed if not t.is_phrase]
         required = [phrase(q) for q in quoted]
+        others = [tuple(t for p in parse_query(alt) for t in p.tokens) for alt in (also[n] if also else ())]
         for clauses, one in ((exact, word), (loose, prefix)):
-            group = [one(t) for t in free]
+            group = [one(t) for t in free] + [phrase(o) if len(o) > 1 else one(o[0]) for o in others if o]
             parts = required + ([f"({' || '.join(group)})"] if group else [])
             clauses.append("(" + " && ".join(parts) + ")")
         if len(free) > 1:

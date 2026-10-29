@@ -7,10 +7,12 @@ import {
   connectMachine,
   getAiSettings,
   getCurrentUser,
+  getTenantSettings,
   removeMachine,
   setJobModel,
   tryMachine,
   updateMachine,
+  updateTenantSettings,
   type AiJob,
   type AiMachine,
   type AiSettings,
@@ -142,8 +144,44 @@ export default function AiSection() {
           </p>
         )}
       </section>
+
+      <AssistedSearch admin={admin} />
       {!admin && <p className="text-sm text-gray-500">Only admins can change these.</p>}
     </div>
+  );
+}
+
+/** Whether searches may ask the machine describing photos about their words (AI-assisted search): off, every search
+ * is local, free and without AI; on, a search with its AI switch on may ask, once a word. */
+function AssistedSearch({ admin }: { admin: boolean }) {
+  const queryClient = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ["tenant-settings"], queryFn: getTenantSettings, staleTime: 60_000 });
+  const save = useMutation({
+    mutationFn: (on: boolean) => updateTenantSettings({ assisted_search: on }),
+    onSuccess: (saved) => queryClient.setQueryData(["tenant-settings"], saved),
+  });
+  return (
+    <section className="space-y-2" aria-labelledby="ai-search">
+      <h3 id="ai-search" className="text-sm font-semibold uppercase tracking-wide text-gray-400">
+        Search
+      </h3>
+      <label className="flex items-start gap-2 text-sm text-gray-300">
+        <input
+          type="checkbox"
+          className="mt-1"
+          checked={settings?.assisted_search === true}
+          disabled={!admin || !settings || save.isPending}
+          onChange={(e) => save.mutate(e.target.checked)}
+        />
+        <span>
+          Let searches use the machine that describes photos (AI-assisted search). With the <strong>AI</strong>{" "}
+          switch on beside the search box, a word naming a kind of thing is searched with the things of that kind
+          the machine lists: <em>snacks</em> finds popcorn, chips and churros. Each word is asked about once and the
+          answer kept, so a word costs one request. Off, every search is local: free, and no AI.
+        </span>
+      </label>
+      {save.isError && <p role="alert" className="text-sm text-red-400">{message(save.error)}</p>}
+    </section>
   );
 }
 

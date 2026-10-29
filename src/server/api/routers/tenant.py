@@ -14,10 +14,12 @@ from src.server.api import account_folders
 from src.server.api.dependencies import get_tenant_session, require_editor, require_tenant_admin
 from src.server.api.errors import DecisionRequiredError
 from src.server.tenant_settings import (
+    get_assisted_search,
     get_follow_moves,
     get_public_video_preview_max_seconds,
     get_trash_days,
     get_video_preview_max_seconds,
+    set_assisted_search,
     set_follow_moves,
     set_public_video_preview_max_seconds,
     set_trash_days,
@@ -58,6 +60,9 @@ class TenantSettingsResponse(BaseModel):
     # The folders on this server its libraries may be in, a server admin's to give
     # (src/server/api/account_folders.py); None: every folder the server reads. Read only here.
     folders: list[str] | None = None
+    # Whether a search may ask the account's AI machine about its words (assist:yes,
+    # src/server/search/assist.py); off until an admin turns it on.
+    assisted_search: bool = False
 
 
 class TenantSettingsUpdate(BaseModel):
@@ -74,6 +79,7 @@ class TenantSettingsUpdate(BaseModel):
     # Fewer key-idle days (or turning them on) ends, on the next upkeep, the
     # keys already unused for longer: say yes to that.
     confirm_end_keys: StrictBool = False
+    assisted_search: StrictBool = False
 
 
 class TenantFilterDefaultItem(BaseModel):
@@ -124,6 +130,7 @@ def _settings(session: Session, tenant_id: str) -> TenantSettingsResponse:
         trash_days=get_trash_days(session),
         key_idle_days=_key_idle_days(tenant_id),
         folders=account_folders.of(tenant_id),
+        assisted_search=get_assisted_search(session),
     )
 
 
@@ -155,6 +162,8 @@ def update_tenant_settings(
         set_follow_moves(session, body.follow_moves)
     if "trash_days" in body.model_fields_set:
         set_trash_days(session, body.trash_days)
+    if "assisted_search" in body.model_fields_set:
+        set_assisted_search(session, body.assisted_search)
     if "key_idle_days" in body.model_fields_set:
         from src.server.database import get_control_session
         from src.server.repository.control_plane import TenantRepository

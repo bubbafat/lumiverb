@@ -11,6 +11,7 @@ import {
   listDirectories,
   queryAssets,
   searchRefusal,
+  getTenantSettings,
 } from "../api/client";
 import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
@@ -324,6 +325,11 @@ export default function BrowsePage() {
     staleTime: 5 * 60_000, // 5 minutes
   });
   const facets: FacetsResponse | null = facetsQuery.data ?? null;
+
+  // The account lets searches ask its AI machine (Settings › AI): the search box's AI switch (a visitor's never).
+  const { data: tenantSettings } = useQuery({
+    queryKey: ["tenant-settings"], queryFn: getTenantSettings, staleTime: 60_000, enabled: isAuthenticated,
+  });
 
   // --- Unified query: one call for both browse and search ---
   const browseQuery = useInfiniteQuery({
@@ -737,6 +743,7 @@ export default function BrowsePage() {
         isPublic={isPublicMode}
         searchError={searchRefusal(error)}
         understood={browseQuery.data?.pages[0]?.understood ?? null}
+        canAssist={!isPublicMode && tenantSettings?.assisted_search === true}
       />
 
       {showSaveAsProject && (

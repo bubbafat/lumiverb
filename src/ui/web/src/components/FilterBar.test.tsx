@@ -230,3 +230,59 @@ describe("A search understood", () => {
     expect(onSetFilter).toHaveBeenCalledWith("query", 'photos of "art" in Anaheim');
   });
 });
+
+describe("AI-assisted search", () => {
+  function renderAssist(onSetFilter: (type: string, value: string | null) => void, filters = [
+    { type: "query", value: "snacks" },
+  ], understood: { kind: "also" | "words"; words: string; label: string }[] | null = null) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <FilterBar filters={filters} sort="taken_at" dir="desc" onSetFilter={onSetFilter} onSetSort={() => {}}
+            onClearAll={() => {}} facets={facets} canAssist understood={understood} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  afterEach(() => {
+    try {
+      localStorage.removeItem("lv_assist");
+    } catch { /* ignore */ }
+  });
+
+  it("has no AI switch where the account doesn't let searches ask", () => {
+    renderBar(false);
+    expect(screen.queryByRole("button", { name: "AI" })).toBeNull();
+  });
+
+  it("the AI switch asks for assistance, and the browser remembers it", () => {
+    const onSetFilter = vi.fn();
+    renderAssist(onSetFilter);
+    const toggle = screen.getByRole("button", { name: "AI" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    expect(onSetFilter).toHaveBeenCalledWith("assist", "yes");
+    expect(localStorage.getItem("lv_assist")).toBe("on");
+  });
+
+  it("is on when the search says so, and off takes it away", () => {
+    const onSetFilter = vi.fn();
+    renderAssist(onSetFilter, [{ type: "query", value: "snacks" }, { type: "assist", value: "yes" }]);
+    const toggle = screen.getByRole("button", { name: "AI" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(toggle);
+    expect(onSetFilter).toHaveBeenCalledWith("assist", null);
+    expect(localStorage.getItem("lv_assist")).toBe("off");
+  });
+
+  it("says what a word was searched with, and its × searches the word alone", () => {
+    const onSetFilter = vi.fn();
+    renderAssist(onSetFilter, [{ type: "query", value: "snacks" }, { type: "assist", value: "yes" }],
+      [{ kind: "also", words: "snacks", label: "popcorn, chips, churros" }]);
+    expect(screen.getByLabelText("Searched for").textContent).toContain("snacks: popcorn, chips, churros");
+    fireEvent.click(screen.getByRole("button", { name: "Search “snacks” alone" }));
+    expect(onSetFilter).toHaveBeenCalledWith("query", '"snacks"');
+  });
+});

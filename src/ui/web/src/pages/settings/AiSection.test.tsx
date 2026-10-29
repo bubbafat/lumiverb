@@ -62,6 +62,8 @@ function err(status: number, code: string, message: string, details: unknown = {
   return json({ error: { code, message, details } }, status);
 }
 
+let assisted = false; // the account lets searches ask its AI machine (Settings › AI › Search)
+
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -70,6 +72,10 @@ beforeEach(() => {
     sent.push({ method, url, body });
     const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
     if (path === "/me") return json({ email: "a@b.c", role });
+    if (path === "/tenant/settings") {
+      if (method === "PATCH") assisted = body.assisted_search;
+      return json({ video_preview_max_seconds: null, public_video_preview_max_seconds: 10, assisted_search: assisted });
+    }
     if (path === "/ai" && method === "GET") return json(settings());
     if (path === "/ai/connect") {
       const models = offers[body.api_url.replace(/\/+$/, "")];
@@ -134,6 +140,7 @@ afterEach(() => {
   made = 0;
   more = [];
   sent.length = 0;
+  assisted = false;
 });
 
 function renderSection() {
@@ -686,5 +693,21 @@ describe("ago", () => {
     expect(ago("2026-10-08T11:57:00Z", now)).toBe("3 minutes ago");
     expect(ago("2026-10-08T10:00:00Z", now)).toBe("2 hours ago");
     expect(ago(null, now)).toBe("");
+  });
+
+  it("an admin lets searches use the machine; anyone else sees whether they may", async () => {
+    renderSection();
+    const box = await screen.findByRole("checkbox", { name: /AI-assisted search/ });
+    await waitFor(() => expect((box as HTMLInputElement).disabled).toBe(false));
+    expect((box as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(box);
+    await waitFor(() => expect(lastSent("PATCH", "/tenant/settings")?.body).toEqual({ assisted_search: true }));
+    await waitFor(() => expect((box as HTMLInputElement).checked).toBe(true));
+    cleanup();
+    role = "viewer";
+    renderSection();
+    const seen = await screen.findByRole("checkbox", { name: /AI-assisted search/ });
+    await waitFor(() => expect((seen as HTMLInputElement).checked).toBe(true));
+    expect((seen as HTMLInputElement).disabled).toBe(true);
   });
 });

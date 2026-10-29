@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   createSavedView,
   getFilteredFacets,
+  getTenantSettings,
   listLibraries,
   queryAssets,
   searchRefusal,
@@ -204,6 +205,8 @@ export default function UnifiedBrowsePage() {
   const browseFavorite = filters.some((f) => f.type === "favorite" && f.value === "yes");
 
   // --- Unified query: one call for both browse and search ---
+  // The account lets searches ask its AI machine (Settings › AI): the search box's AI switch.
+  const { data: tenantSettings } = useQuery({ queryKey: ["tenant-settings"], queryFn: getTenantSettings, staleTime: 60_000 });
   const browseQuery = useInfiniteQuery({
     queryKey: ["unified-query", filters, browseSort, browseDir],
     queryFn: ({ pageParam }) =>
@@ -532,6 +535,7 @@ export default function UnifiedBrowsePage() {
         onSaveAsProject={canEdit ? () => setShowSaveAsProject(true) : undefined}
         searchError={searchRefusal(browseQuery.error)}
         understood={browseQuery.data?.pages[0]?.understood ?? null}
+        canAssist={tenantSettings?.assisted_search === true}
       />
 
       {showSaveAsProject && (

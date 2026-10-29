@@ -75,6 +75,19 @@ def set_follow_moves(session: Session, value: bool) -> None:
     _put(session, FOLLOW_MOVES, None if value else "off")
 
 
+ASSISTED_SEARCH = "assisted_search"
+
+
+def get_assisted_search(session: Session) -> bool:
+    """Whether a search may ask the account's AI machine about its words when it says so (assist:yes,
+    src/server/search/assist.py); off until an admin turns it on, as each answer may cost."""
+    return _get(session, ASSISTED_SEARCH) == "on"
+
+
+def set_assisted_search(session: Session, value: bool) -> None:
+    _put(session, ASSISTED_SEARCH, "on" if value else None)
+
+
 TRASH_DAYS = "trash_days"
 # What's in the trash is deleted for good after this many days, until an admin says otherwise.
 DEFAULT_TRASH_DAYS = 30

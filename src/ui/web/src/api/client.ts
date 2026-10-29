@@ -949,6 +949,9 @@ export interface TenantSettings {
   /** The folders on this server its libraries may be in, a server admin's to give (Admin › Accounts); null, or left
    * out by an older server: every folder the server reads. */
   folders?: string[] | null;
+  /** Whether a search may ask the account's AI machine about its words (AI-assisted search, assist:yes); off until
+   * an admin turns it on. Older servers leave it out. */
+  assisted_search?: boolean;
 }
 
 export async function getTenantSettings(): Promise<TenantSettings> {
