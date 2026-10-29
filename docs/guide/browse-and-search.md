@@ -46,6 +46,12 @@ Each counts by its words too, as before: `Sue` also finds a clip whose note says
 
 Under the box, **Searched for** shows what the search understood, a card each. Click × on a card to search those words as plain words: the search puts them in quotes, and quoted words are never understood. On a public page a search reads only the words.
 
+### AI-assisted search
+
+A search is local unless you ask for help: free, and no AI machine is asked anything. Where an admin has turned on **Let searches use the machine that describes photos** (Settings › AI › Search), an **AI** switch shows beside the search box. With it on, a word that names a kind of thing is also searched with the particular things of that kind, as your AI machine lists them: `snacks` finds a scene described as "a basket of tortilla chips" or "a bag of popcorn". **Searched for** shows them as a card, `snacks: popcorn, chips, …`; click its × to search the word alone.
+
+Each word is asked about once and the answer kept, so a word costs one request to the machine, ever. A word that's already particular (`churro`) is kept as it is. If the machine is busy or off, the search goes ahead with your words. Your browser remembers the switch for new searches, and the page's address keeps it with the search.
+
 Type two letters of a person's name and pick them from the **People** list under the box to see only their clips.
 
 ## Filters and sorting

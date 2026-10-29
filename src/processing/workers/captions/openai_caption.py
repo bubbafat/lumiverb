@@ -554,6 +554,12 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         return {"reply": self._strip_thinking(content), "finish": finish,
                 "tokens": {"prompt": used[0], "answer": used[1]} if all(isinstance(n, int) for n in used) else None}
 
+    def answer(self, prompt: str, *, max_tokens: int, timeout: float) -> str:
+        """A question in words alone, and the reply's text (an AI-assisted search's: src/server/search/assist.py).
+        Raises what the request raises."""
+        return self._asked([{"type": "text", "text": prompt}], {"max_tokens": max_tokens, "temperature": 0.0},
+                           timeout=timeout)["reply"]
+
     def tried(self, what: str, *, image: bytes | None = None, text: str = "", timeout: float = 45) -> dict:
         """One request as a job's work makes it, tried once (Settings › AI's Test): what is "describe" (an image's
         description and tags, this provider's settings), "read" (its text, the OCR settings) or "describe_text"

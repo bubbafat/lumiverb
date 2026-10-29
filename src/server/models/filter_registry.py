@@ -13,6 +13,7 @@ import logging
 
 from src.server.models.query_filter import (
     ApertureRange,
+    AssistedSearch,
     CameraMake,
     CameraModel,
     ColorLabel,
@@ -52,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 _ALL_FILTER_TYPES: list[type[LeafFilter]] = [
     SearchTerm,
+    AssistedSearch,
     LibraryScope,
     PathPrefix,
     MediaType,

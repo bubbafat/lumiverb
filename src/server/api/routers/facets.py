@@ -57,11 +57,11 @@ def get_facets(
     # --- Candidate set from text search ---
     candidate_ids: list[str] | None = None
     if spec.search_terms:
-        from src.server.api.routers.query import MAX_CANDIDATE_IDS, _run_text_search
+        from src.server.api.routers.query import MAX_CANDIDATE_IDS, _run_text_search, assisting
 
         scores, _contexts, _source = _run_text_search(
             session, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
-            public=getattr(request.state, "is_public_request", False),
+            public=getattr(request.state, "is_public_request", False), assist_for=assisting(request, session, spec),
         )
         if not scores:
             return _empty_facets()

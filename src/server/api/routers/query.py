@@ -146,6 +146,7 @@ def _run_text_search(
     public: bool = False,
     capped: set[str] | None = None,
     understood: list[dict] | None = None,
+    assist_for: str | None = None,
 ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
     """The clips a text search finds, in the account's database
     (src/server/search/text_search.py): their own words, their scenes' and
@@ -153,6 +154,8 @@ def _run_text_search(
     were and what kind they are too, where its words say
     (src/server/search/understand.py). `understood`: when given, gets what
     each search was understood to ask for (nothing when none was).
+    `assist_for`: the account whose AI machine may be asked about the words
+    (an AI-assisted search, `assisting`: src/server/search/assist.py).
 
     `capped`: when given, gets the name of each search that came back full
     (its limit): matches past it were left out. Each search is capped on
@@ -185,26 +188,51 @@ def _run_text_search(
         from src.server.search import understand
 
         read = [understand.read(session, t, library_ids) for t in terms]
-        if any(u.parts for u in read):
+        things: dict[str, list[str]] = {}
+        if assist_for:
+            from src.server.search import assist
+
+            model, ask = assist.asker(assist_for)
+            words = list(dict.fromkeys(w for u in read for w in assist.asked_about(u.rest)))
+            things = assist.also(session, words, model, ask) if model else {}
+        if any(u.parts for u in read) or things:
             if understood is not None:
                 understood.extend(part for u in read for part in u.said())
-            return _understood_search(session, read, library_ids, limit, capped)
+                understood.extend({"kind": "also", "words": w, "label": ", ".join(t[:5]) + (", …" if len(t) > 5 else "")}
+                                  for w, t in things.items())
+            return _understood_search(session, read, library_ids, limit, capped, things)
     return _words_search(session, terms, library_ids, limit, public_cap_ms, public, capped)
 
 
+def assisting(request: Request, session: Session, spec: QuerySpec) -> str | None:
+    """The account whose AI machine a search may ask about its words: when it says so (assist:yes) and the account
+    lets searches ask (Settings › AI); never a public page's."""
+    from src.server.models.query_filter import AssistedSearch
+    from src.server.tenant_settings import get_assisted_search
+
+    if getattr(request.state, "is_public_request", False):
+        return None
+    if not any(isinstance(leaf, AssistedSearch) and leaf.value for leaf in spec.leaves):
+        return None
+    return request.state.tenant_id if get_assisted_search(session) else None
+
+
 def _understood_search(session: Session, read: list, library_ids: list[str] | None, limit: int,
-                       capped: set[str] | None) -> tuple[dict[str, float], dict[str, SearchContext], str]:
+                       capped: set[str] | None, things: dict[str, list[str]] | None = None,
+                       ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
     """Understood searches (each an understand.Understood), every part of each to match: a person or a
     place by who's recognised in a clip or where it was, or by its words; the kind asked for. Ranked by
-    the words left (each search's, added up); with none left, by how well the parts' words matched."""
-    from src.server.search import understand
+    the words left (each search's, added up); with none left, by how well the parts' words matched. things: the
+    things of a kind each word names, searched with it (an AI-assisted search's)."""
+    from src.server.search import assist, understand
 
     scores: dict[str, float] | None = None
     contexts: dict[str, SearchContext] = {}
     for u in read:
         found: dict[str, float] | None = None  # None: nothing has narrowed it yet
         if u.rest:
-            found, said, _ = _words_search(session, [u.rest], library_ids, limit, None, False, capped)
+            also = [t for w in assist.asked_about(u.rest) for t in (things or {}).get(w, [])]
+            found, said, _ = _words_search(session, [u.rest], library_ids, limit, None, False, capped, [also])
             for aid, c in said.items():
                 contexts.setdefault(aid, c)
         for part in u.parts:
@@ -233,13 +261,14 @@ def _understood_search(session: Session, read: list, library_ids: list[str] | No
 
 
 def _words_search(session: Session, terms: list[str], library_ids: list[str] | None, limit: int,
-                  public_cap_ms: int | None, public: bool,
-                  capped: set[str] | None) -> tuple[dict[str, float], dict[str, SearchContext], str]:
-    """The clips a search's words find (_run_text_search's, as it always was)."""
+                  public_cap_ms: int | None, public: bool, capped: set[str] | None,
+                  also: list[list[str]] | None = None) -> tuple[dict[str, float], dict[str, SearchContext], str]:
+    """The clips a search's words find (_run_text_search's, as it always was); also: other words matching as each
+    term's do (text_search.build)."""
     from src.server.search import text_search
 
     try:
-        q = text_search.build(terms)
+        q = text_search.build(terms, also)
     except text_search.SearchTooLongError as exc:  # said as the search box shows it
         raise ApiError(400, "search_too_long", str(exc),
                        {"max_words": text_search.MAX_WORDS, "max_searches": text_search.MAX_TERMS}) from None
@@ -437,6 +466,7 @@ def unified_query(
         scores, contexts, search_source = _run_text_search(
             session, search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
             public=getattr(request.state, "is_public_request", False), understood=said,
+            assist_for=assisting(request, session, spec),
         )
         understood = [UnderstoodPart(**part) for part in said] or None
 

@@ -624,6 +624,7 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
         SORT_COLUMNS,
         _encode_cursor,
         _run_text_search,
+        assisting,
         in_sight_spec,
     )
     from src.server.models.filter_registry import from_json
@@ -654,6 +655,7 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
         capped: set[str] = set()  # each search (clips, scenes, transcripts) is capped on its own
         scores, _contexts, _source = _run_text_search(
             session, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, capped=capped,
+            assist_for=assisting(request, session, spec),
         )
         if capped:  # some matches were left out: refused, never cut
             raise too_big(MAX_CANDIDATE_IDS, text_search=True)
