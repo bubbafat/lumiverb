@@ -29,6 +29,8 @@ How words match:
 
 - With several words, a clip matching any of them is found. Clips matching more of them, or all of them in a row, come first.
 - Quotes make a phrase: `"birthday cake"` finds only those words, in that order.
+- Words joined by `_` or `.`, as in a file's name, are one thing, as if quoted: `IMG_7616.JPG` finds that file (and a photo of a screen that shows its name), not everything with "IMG" or "JPG" in it. The start of a name finds every file it starts: `DJI_20261025` finds that day's DJI clips.
+- A date typed with hyphens finds a folder named so: `2026-10-25`.
 - A word of three letters or more also matches the start of longer words: `disney` finds "Disneyland".
 - Plurals and accents don't matter: `dogs` finds "dog", and `zurich` finds "Zürich".
 

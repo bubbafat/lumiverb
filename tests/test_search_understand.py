@@ -74,6 +74,16 @@ def test_quoted_text_is_never_understood():
     assert _parts('"Sue Horvick"')[0] == []
 
 
+def test_words_typed_joined_are_taken_as_quoted_and_left_as_typed():
+    # A file's name: one thing, never a name or a place, searched as it was typed (src/server/search
+    # /query_builder.py: a phrase, its last word a prefix too, which quotes would lose).
+    parts, rest = _parts("Sue IMG_7616.JPG", Places(img=DCA))
+    assert parts == [(PERSON, "sue", "Susan Horvick")] and rest == "img_7616.jpg"
+    assert _parts("sue_dancing.mov")[0] == []
+    parts, rest = _parts('Sue "img_7616.jpg beach"')
+    assert rest == '"img_7616.jpg beach"', "quoted text with a joined word, quoted again as typed"
+
+
 def test_a_place_is_asked_for_after_at_or_in_first_then_the_longest_and_only_so_many():
     places = Places(california_adventure=DCA)
     assert _parts("dancing at California Adventure", places)[0] == [(PLACE, "california adventure",
