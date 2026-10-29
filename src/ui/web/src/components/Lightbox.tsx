@@ -16,6 +16,7 @@ import { LiveMotion } from "./LiveMotion";
 import type { AssetPageItem, AssetRating, FaceItem, RatingColor, SimilarHit } from "../api/types";
 import { FaceCropImage } from "./FaceCropImage";
 import { momentLabel, moments } from "../lib/faceMoments";
+import { foundBy } from "../lib/foundBy";
 import { HeartButton, StarPicker, ColorPicker } from "./RatingControls";
 import { basename, formatFileSize, formatDate, formatExposure } from "../lib/format";
 import { PREVIEW, THUMBNAIL } from "../lib/names";
@@ -902,6 +903,8 @@ export function Lightbox({
   }, [handleKeyDown]);
 
   const filename = basename(asset.rel_path);
+  // In a search: what found it, and where in a video (a scene, or where it's said) it opens.
+  const found = foundBy(asset.search_context, isVideo);
   // A person's location: clear it, or take a suggestion (editors only).
   const [locationBusy, setLocationBusy] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -1002,7 +1005,7 @@ export function Lightbox({
                 onRenew={playback.renew}
                 failed={playback.failed}
                 fill={isFullscreen}
-                startAt={startAt}
+                startAt={startAt ?? found?.startAt ?? undefined}
               />
             ) : mediaUrl ? (
               <div className="relative inline-block">
@@ -1239,6 +1242,15 @@ export function Lightbox({
                     : null}
                   {detail?.media_type ?? asset.media_type}
                 </div>
+                {found?.flagged && (
+                  <section className="mt-2 rounded-md bg-gray-800/70 px-2 py-1.5 text-xs" aria-label="Found by">
+                    <div className="font-medium uppercase tracking-wide text-gray-500">Found by</div>
+                    <div className="mt-0.5 text-gray-300">
+                      <span className="font-medium text-indigo-300">{found.label}</span>
+                      {found.detail && <span className="text-gray-400">: “{found.detail}”</span>}
+                    </div>
+                  </section>
+                )}
               </div>
 
               <hr className="border-gray-700" />

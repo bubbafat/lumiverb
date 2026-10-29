@@ -28,6 +28,7 @@ import type {
   LibraryRevision,
   LibraryRole,
   ReaderCheckIn,
+  SearchContext,
   SimilarityResponse,
   UserItem,
   RatingResponse,
@@ -619,13 +620,7 @@ export interface QueryItem {
   created_at: string | null;
   /** Its last modified time: the most recent of every time related to it (sort "changed_at"). */
   changed_at?: string | null;
-  search_context: {
-    score: number;
-    hit_type: string;
-    snippet: string | null;
-    start_ms: number | null;
-    end_ms: number | null;
-  } | null;
+  search_context: SearchContext | null;
 }
 
 export interface QueryResponse {

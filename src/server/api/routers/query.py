@@ -69,6 +69,12 @@ class SearchContext(BaseModel):
     snippet: str | None = None
     start_ms: int | None = None
     end_ms: int | None = None
+    # What found it: its description, note, text (read in it), transcript (a segment's has its times), path
+    # (its folder or file name), fact (a plug-in's: from_plugin its title), scene (with its times); a signed-in
+    # search's place (where it was: snippet the place) or person (who's recognised in it: snippet their name).
+    # None when no one field says (a search's words split between them). The snippet is an excerpt of it.
+    matched_in: str | None = None
+    from_plugin: str | None = None
 
 
 class QueryItem(BaseModel):
@@ -242,6 +248,11 @@ def _understood_search(session: Session, read: list, library_ids: list[str] | No
                      else understand.clips_near(session, part.place, library_ids))
             by_words, said, _ = _words_search(session, [part.searched], library_ids, limit, None, False, capped)
             matched = {aid: 1.0 + by_words.get(aid, 0.0) for aid in {*known, *by_words}}
+            # What found a clip by who's in it or where it was, when its words didn't say (they come first).
+            found_by = understand.PERSON if part.kind == understand.PERSON else understand.PLACE
+            for aid in known:
+                if aid not in said:
+                    said[aid] = SearchContext(score=matched[aid], matched_in=found_by, snippet=part.label)
             if found is None:
                 found = matched
             elif u.rest:  # the words left rank what matches
@@ -287,16 +298,20 @@ def _words_search(session: Session, terms: list[str], library_ids: list[str] | N
                                                 public_cap_ms=public_cap_ms), limit):
         if hit.asset_id not in scores or hit.score > scores[hit.asset_id]:
             scores[hit.asset_id] = hit.score
-            contexts[hit.asset_id] = SearchContext(score=hit.score, hit_type="asset", snippet=hit.snippet)
+            contexts[hit.asset_id] = SearchContext(score=hit.score, hit_type="asset", snippet=hit.snippet,
+                                                   matched_in=hit.matched_in)
     if not public and public_cap_ms is None:
         from src.server.repository.plugin_outputs import searched_plugins
 
         # A plug-in's facts are the clip's own words too, shown as what matched when they score higher.
-        for hit in full("facts", text_search.facts(session, q, library_ids, limit, searched_plugins(session)),
-                        limit):
+        plugins = searched_plugins(session)
+        for hit in full("facts", text_search.facts(session, q, library_ids, limit,
+                                                   {pid: where for pid, (where, _) in plugins.items()}), limit):
             if hit.asset_id not in scores or hit.score > scores[hit.asset_id]:
                 scores[hit.asset_id] = hit.score
-                contexts[hit.asset_id] = SearchContext(score=hit.score, hit_type="asset", snippet=hit.snippet)
+                contexts[hit.asset_id] = SearchContext(score=hit.score, hit_type="asset", snippet=hit.snippet,
+                                                       matched_in=hit.matched_in,
+                                                       from_plugin=plugins[hit.source][1] if hit.source else None)
 
     # A scene or transcript segment: kept for its richer context (where in
     # the video) even when the clip's own words scored higher.
@@ -307,7 +322,7 @@ def _words_search(session: Session, terms: list[str], library_ids: list[str] | N
         for hit in hits:
             aid = hit.asset_id
             ctx = SearchContext(score=hit.score, hit_type=kind, snippet=hit.snippet,
-                                start_ms=hit.start_ms, end_ms=hit.end_ms)
+                                start_ms=hit.start_ms, end_ms=hit.end_ms, matched_in=hit.matched_in)
             if aid not in scores or hit.score > scores[aid]:
                 scores[aid] = hit.score
                 contexts[aid] = ctx
