@@ -250,6 +250,23 @@ export interface AssetPageItem {
   created_at: string | null;
   /** Its last modified time: the most recent of every time related to it (sort "changed_at"). */
   changed_at?: string | null;
+  /** In a search: what found it (lib/foundBy.ts). */
+  search_context?: SearchContext | null;
+}
+
+/** What found a clip a search found (GET /v1/query). */
+export interface SearchContext {
+  score: number;
+  /** asset (its own words), scene or transcript (a segment of it, with its times). */
+  hit_type: string;
+  /** An excerpt of what matched. */
+  snippet: string | null;
+  start_ms: number | null;
+  end_ms: number | null;
+  /** description, note, text, transcript, path, fact, scene, place or person; null when no one field says. */
+  matched_in?: string | null;
+  /** A fact's plug-in, by its title. */
+  from_plugin?: string | null;
 }
 
 export interface AssetPageResponse {

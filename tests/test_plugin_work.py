@@ -640,6 +640,9 @@ def test_its_facts_show_with_the_clip_and_are_found_by_search_while_it_is_on(fac
     assert _found(f, "zanzibar") == {a, b}, "its searchable fact (when) finds them"
     r = f.client.get(f"/v1/query?f=query:zanzibar&f=library:{f.library_id}", headers=f.robert)
     assert {i["search_context"]["snippet"] for i in r.json()["items"]} == {"Zanzibar 2024-05-01T12:00:00Z"}
+    # Said as found by a plug-in's fact, the plug-in by its title.
+    assert {(i["search_context"]["matched_in"], i["search_context"]["from_plugin"])
+            for i in r.json()["items"]} == {("fact", "Facts")}
     assert _found(f, "file") == set(), "a fact that isn't searchable (where) finds nothing"
 
     assert f.client.put("/v1/plugins/facts", json={"enabled": False}, headers=f.robert).status_code == 200

@@ -91,8 +91,13 @@ def test_a_clip_is_found_by_every_word_a_person_sees(env):
                                                     "lineage": _want(lib, "lumiverb.image.text", None)}, headers=headers))
     _ok(client.put(f"/v1/assets/{clip}/note", json={"text": "ask about the zephyrine print"}, headers=headers))
 
-    for words in ("quoddy", "coast", "marblehead", "zephyrine", "beach"):  # description, tags, OCR, note, path
-        assert _hit(lib, clip, words) == ("asset", None, None, "a quoddy lighthouse in fog"), words
+    # Each says what it matched in, with an excerpt of that (the description for a description, tags or path).
+    for words, matched_in, snippet in (
+            ("quoddy", "description", "a quoddy lighthouse in fog"), ("coast", "description", "a quoddy lighthouse in fog"),
+            ("marblehead", "text", "WELCOME TO MARBLEHEAD"), ("zephyrine", "note", "ask about the zephyrine print"),
+            ("beach", "path", "a quoddy lighthouse in fog")):
+        assert _hit(lib, clip, words) == ("asset", None, None, snippet), words
+        assert _found(lib, words)[clip]["matched_in"] == matched_in, words
     assert clip not in _found(lib, "rocky"), "the machine's description, replaced, is still found"
 
 

@@ -3,6 +3,7 @@ import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import type { AssetPageItem, AssetRating } from "../api/types";
 import { RatingBadges } from "./RatingControls";
 import { THUMBNAIL, VIDEO_PREVIEW } from "../lib/names";
+import { foundBy, foundByLine } from "../lib/foundBy";
 
 interface AssetCellProps {
   asset: AssetPageItem;
@@ -58,6 +59,8 @@ function AssetCellInner({
   const isVideo = asset.media_type === "video" || asset.media_type.startsWith("video/");
   const effectiveAspectRatio = aspectRatio ?? 4 / 3;
   const isFavorite = rating?.favorite ?? false;
+  // In a search: what found it, flagged when it isn't its description (the text read in it, a note, …).
+  const found = foundBy(asset.search_context, isVideo);
 
   const { url: videoUrl } = useAuthenticatedImage(
     asset.asset_id,
@@ -151,6 +154,17 @@ function AssetCellInner({
         </div>
       )}
 
+      {/* What found it in a search — top-left, giving way to the checkbox and the full line on hover */}
+      {found?.flagged && (
+        <div
+          className={`pointer-events-none absolute left-1.5 top-1.5 max-w-[calc(100%-4.5rem)] truncate rounded-full bg-black/60 px-1.5 py-0.5 text-[11px] font-medium text-white transition-opacity duration-150 group-hover:opacity-0 ${
+            selectionActive ? "opacity-0" : ""
+          }`}
+        >
+          {found.label}
+        </div>
+      )}
+
       {/* Hover overlay */}
       <div
         className="pointer-events-none absolute inset-0 bg-linear-to-t from-black/70 via-transparent to-transparent opacity-0 transition-opacity duration-150 group-hover:opacity-100"
@@ -169,6 +183,9 @@ function AssetCellInner({
         </div>
         {libraryName && (
           <div className="mt-0.5 truncate text-xs text-gray-400">{libraryName}</div>
+        )}
+        {found?.flagged && (
+          <div className="mt-0.5 line-clamp-2 text-xs text-gray-200">{foundByLine(found)}</div>
         )}
       </div>
 

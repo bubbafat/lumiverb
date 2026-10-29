@@ -117,8 +117,10 @@ def hidden(env):
                                   face["c"], face["c2"], face["c3"], face["c4"], face["c5"], cluster_id_of(groups[1])))
 
 
-def _says_nothing_of(r, marks) -> None:
-    body = r.text
+def _says_nothing_of(r, marks, *, theirs: str = "") -> None:
+    """Nothing in the answer names the library they can't see. theirs: words of what they can see, left out first
+    (their own clip's note, its search snippet: the same words as C's, whose clip would still show by its id)."""
+    body = r.text.replace(theirs, "") if theirs else r.text
     found = [m for m in marks if m in body]
     assert not found, (r.request.method, str(r.request.url), found, body[:500])
 
@@ -149,9 +151,10 @@ def test_search_finds_only_what_they_can_see(env, hidden):
                   [f"camera_make:Cam{hidden.word}"]):
             r = env.client.get(path, params={"f": f}, headers=hidden.key)
             assert r.status_code == 200, (path, f, r.text)
-            _says_nothing_of(r, hidden.marks)
+            _says_nothing_of(r, hidden.marks, theirs=f"{hidden.word} seen at the shoot")
     found = _ok(env.client.get("/v1/query", params={"f": [f"query:{hidden.word}"]}, headers=hidden.key))
     assert [i["asset_id"] for i in found["items"]] == [hidden.a1], "their own library's clip, found by the word"
+    assert found["items"][0]["search_context"]["snippet"] == f"{hidden.word} seen at the shoot", "by its own note"
     everyone = _ok(env.client.get("/v1/query", params={"f": [f"query:{hidden.word}"]}, headers=env.admin))
     assert hidden.c_clips[0] in {i["asset_id"] for i in everyone["items"]}, "an account admin's search finds it"
 

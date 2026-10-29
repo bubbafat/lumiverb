@@ -65,6 +65,23 @@ class Hit:
     snippet: str | None = None
     start_ms: int | None = None
     end_ms: int | None = None
+    # What matched (MATCHED_IN), and for a plug-in's fact, the plug-in's id.
+    matched_in: str | None = None
+    source: str | None = None
+
+
+# What a hit's words matched in: a clip's description (and tags), its note, the text read in it, its transcript,
+# its folder or file name; a plug-in's fact; a scene's description; a transcript's segment (with its times).
+MATCHED_IN = ("description", "note", "text", "transcript", "path", "fact", "scene")
+# An excerpt of the field that matched, around the match, as plain text: a short one whole (an excerpt would
+# drop its first words), a longer one the words around the match.
+_EXCERPT = 'StartSel="", StopSel="", MaxWords=14, MinWords=6, MaxFragments=1, FragmentDelimiter=" … "'
+_WHOLE_UP_TO = 100  # characters
+
+
+def _excerpt_sql(field: str, q: Query) -> str:
+    return (f"(CASE WHEN length({field}) <= {_WHOLE_UP_TO} THEN {field}"
+            f" ELSE ts_headline('{CONFIG}', {field}, {q.loose}, :excerpt) END)")
 
 
 @dataclass
@@ -152,18 +169,55 @@ def _in(library_ids: list[str] | None, params: dict) -> str:
 
 def clips(session: Session, q: Query, library_ids: list[str] | None, limit: int, *,
           public: bool = False, public_cap_ms: int | None = None) -> list[Hit]:
-    """The clips in sight whose own words match (best first), each with
-    its description as the snippet. A public page never reads notes or
-    paths, and one that plays only the start of a video no transcript."""
+    """The clips in sight whose own words match (best first), each with what
+    they matched in (_matched_in) and as its snippet an excerpt of that (the
+    description when it's that, or the path). A public page never reads
+    notes or paths, and one that plays only the start of a video no
+    transcript."""
     column = "s." + ("shown_capped" if public_cap_ms is not None else "shown" if public else "everything")
-    params = {**q.params, "limit": limit}
+    params = {**q.params, "limit": limit, "excerpt": _EXCERPT}
     rows = session.execute(text(f"""
-        SELECT s.asset_id, s.snippet, {_score(column, q, loose=True)} AS score
+        SELECT s.asset_id, m.matched_in, {_score(column, q, loose=True)} AS score,
+               CASE m.matched_in
+                   WHEN 'text' THEN {_excerpt_sql('s.ocr_text', q)}
+                   WHEN 'note' THEN {_excerpt_sql('s.note', q)}
+                   WHEN 'transcript' THEN {_excerpt_sql('s.transcript_text', q)}
+                   ELSE s.snippet END AS snippet
         FROM asset_search s JOIN active_assets a ON a.asset_id = s.asset_id
+        CROSS JOIN LATERAL (SELECT {_matched_in(column, q)} AS matched_in) m
         WHERE {column} @@ ({q.loose}){_in(library_ids, params)}
         ORDER BY score DESC, s.asset_id LIMIT :limit
     """), params).all()
-    return [Hit(r.asset_id, float(r.score), r.snippet or None) for r in rows]
+    return [Hit(r.asset_id, float(r.score), _excerpt(r.snippet) if r.matched_in in _EXCERPTED else r.snippet or None,
+                matched_in=r.matched_in) for r in rows]
+
+
+_EXCERPTED = ("text", "note", "transcript")
+
+
+def _excerpt(said: str | None) -> str | None:
+    """An excerpt on one line (what's read in a picture keeps its lines)."""
+    return " ".join((said or "").split()) or None
+
+
+def _matched_in(column: str, q: Query) -> str:
+    """SQL: which of a clip's fields its words matched in, read from the weights its search document gives
+    them (the description and note A, the text read in it and its transcript C, its path D: tenant migration
+    c7e1a9d3f5b2), a field's own words read only to tell two of one weight apart; the highest weight first, as
+    it ranks. NULL when no one weight matches (a search's words split between them). Only what the column holds
+    is ever said: a public page's never hold the note or the path, nor a capped one's the transcript."""
+    def has(weight: str) -> str:
+        return f"ts_filter({column}, '{{{weight}}}') @@ ({q.loose})"
+
+    def own(field: str) -> str:
+        return f"to_tsvector('{CONFIG}', s.{field}) @@ ({q.loose})"
+
+    everything, capped = column == "s.everything", column == "s.shown_capped"
+    described = (f"(CASE WHEN s.note = '' OR {own('described')} THEN 'description' ELSE 'note' END)"
+                 if everything else "'description'")
+    read = "'text'" if capped else f"(CASE WHEN {own('ocr_text')} THEN 'text' ELSE 'transcript' END)"
+    return (f"CASE WHEN {has('a')} THEN {described} WHEN {has('c')} THEN {read}"
+            + (f" WHEN {has('d')} THEN 'path'" if everything else "") + " END")
 
 
 def facts(session: Session, q: Query, library_ids: list[str] | None, limit: int,
@@ -179,12 +233,13 @@ def facts(session: Session, q: Query, library_ids: list[str] | None, limit: int,
         params[f"plugin{n}"] = plugin_id
         shown.append(f"(po.plugin_id = :plugin{n} AND {where})")
     rows = session.execute(text(f"""
-        SELECT po.asset_id, po.search_text, {_score('po.words', q, loose=True)} AS score
+        SELECT po.asset_id, po.plugin_id, po.search_text, {_score('po.words', q, loose=True)} AS score
         FROM plugin_outputs po JOIN active_assets a ON a.asset_id = po.asset_id
         WHERE ({' OR '.join(shown)}) AND po.words @@ ({q.loose}){_in(library_ids, params)}
         ORDER BY score DESC, po.asset_id LIMIT :limit
     """), params).all()
-    return [Hit(r.asset_id, float(r.score), r.search_text or None) for r in rows]
+    return [Hit(r.asset_id, float(r.score), r.search_text or None, matched_in="fact", source=r.plugin_id)
+            for r in rows]
 
 
 def scenes(session: Session, q: Query, library_ids: list[str] | None, limit: int, *,
@@ -203,7 +258,7 @@ def scenes(session: Session, q: Query, library_ids: list[str] | None, limit: int
         WHERE v.words @@ ({q.loose}) AND v.staged IS NULL AND v.description IS NOT NULL{capped}{_in(library_ids, params)}
         ORDER BY score DESC, v.scene_id LIMIT :limit
     """), params).all()
-    return [Hit(r.asset_id, float(r.score), r.description, r.start_ms, r.end_ms) for r in rows]
+    return [Hit(r.asset_id, float(r.score), r.description, r.start_ms, r.end_ms, matched_in="scene") for r in rows]
 
 
 def segments(session: Session, q: Query, library_ids: list[str] | None, limit: int, *,
@@ -223,4 +278,5 @@ def segments(session: Session, q: Query, library_ids: list[str] | None, limit: i
         WHERE t.words @@ ({q.exact}){capped}{_in(library_ids, params)}
         ORDER BY score DESC, t.asset_id, t.seq LIMIT :limit
     """), params).all()
-    return [Hit(r.asset_id, float(r.score), r.text, r.start_ms, r.end_ms) for r in rows]
+    return [Hit(r.asset_id, float(r.score), r.text, r.start_ms, r.end_ms, matched_in="transcript")
+            for r in rows]

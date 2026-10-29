@@ -377,6 +377,7 @@ export default function BrowsePage() {
         face_count: item.face_count,
         created_at: item.created_at,
         changed_at: item.changed_at ?? null,
+        search_context: item.search_context,
       })),
     );
   }, [browseQuery.data]);

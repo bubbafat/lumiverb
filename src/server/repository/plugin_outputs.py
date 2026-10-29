@@ -137,8 +137,9 @@ def facts_of(session: Session, asset_id: str) -> list[dict[str, Any]]:
     return out
 
 
-def searched_plugins(session: Session) -> dict[str, str]:
+def searched_plugins(session: Session) -> dict[str, tuple[str, str]]:
     """The plug-ins whose facts a search in this account reads (on here, with a searchable output), each with
-    the SQL on active_assets a for the clips whose facts are shown (shown_sql)."""
-    return {p.manifest.plugin_id: shown_sql(p.manifest.work) for p, _removed in _on_with_work(session)
-            if any(o.searchable for o in p.manifest.work.outputs)}
+    the SQL on active_assets a for the clips whose facts are shown (shown_sql) and its title (what a search
+    says found a clip by its facts)."""
+    return {p.manifest.plugin_id: (shown_sql(p.manifest.work), p.manifest.title)
+            for p, _removed in _on_with_work(session) if any(o.searchable for o in p.manifest.work.outputs)}

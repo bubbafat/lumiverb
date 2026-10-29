@@ -34,6 +34,10 @@ How words match:
 
 Results are ranked by how well they match: a description, tags or a note counts most, a file or folder name least. A search shows its 5,000 best matches at most.
 
+### Why a clip was found
+
+A clip found by something other than its description says so in the corner of its thumbnail: **Text in photo**, **Note**, **Folder or file name**, **Said at 1:23**, **Scene at 0:42**, a plug-in's name (**Place names**), and for a search understood, **Near** a place or **Recognised** and a name. Hover over it for the words that matched, as `Text in photo: Dundee Diner Kitchen`; open it and **Found by** says the same at the top of the panel. A video found by a scene or by what's said in it opens at that moment.
+
 ### Who, where and what kind
 
 A search also understands who, where and what kind of clip you ask for. `a video of Sue dancing at California Adventure` finds videos where Sue is recognised, taken within 5 km of California Adventure, that match "dancing":

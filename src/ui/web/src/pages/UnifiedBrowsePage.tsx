@@ -276,6 +276,7 @@ export default function UnifiedBrowsePage() {
         gps_lon: item.gps_lon,
         created_at: item.created_at,
         changed_at: item.changed_at ?? null,
+        search_context: item.search_context,
       })),
     );
   }, [browseQuery.data]);
