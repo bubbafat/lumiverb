@@ -32,7 +32,7 @@ class UnifiedBrowseRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def query_page(
+    def page_ids(
         self,
         *,
         spec: "QuerySpec",
@@ -41,8 +41,8 @@ class UnifiedBrowseRepository:
         rating_user_id: str | None = None,
         after: str | None = None,
         limit: int = 500,
-    ) -> list[Asset]:
-        """Keyset pagination using the QueryFilter algebra.
+    ) -> list[str]:
+        """A page's clips' ids, in order: keyset pagination using the QueryFilter algebra.
 
         If candidate_ids is provided (from the text search), an
         additional ``a.asset_id = ANY(:candidate_ids)`` filter is
@@ -187,7 +187,24 @@ class UnifiedBrowseRepository:
             LIMIT :limit
         """
         result = self._session.execute(text(id_sql).bindparams(**params))
-        asset_ids = [row[0] for row in result.all()]
+        return [row[0] for row in result.all()]
+
+    def query_page(
+        self,
+        *,
+        spec: "QuerySpec",
+        candidate_ids: list[str] | None = None,
+        candidate_scores: dict[str, float] | None = None,
+        rating_user_id: str | None = None,
+        after: str | None = None,
+        limit: int = 500,
+    ) -> list[Asset]:
+        """The clips of page_ids' page, in its order."""
+        return self.in_order(self.page_ids(spec=spec, candidate_ids=candidate_ids, candidate_scores=candidate_scores,
+                                           rating_user_id=rating_user_id, after=after, limit=limit))
+
+    def in_order(self, asset_ids: list[str]) -> list[Asset]:
+        """These clips, in this order (any in the trash left out)."""
         if not asset_ids:
             return []
         stmt = (
