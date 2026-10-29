@@ -279,8 +279,13 @@ def _understood_search(session: Session, read: list, library_ids: list[str] | No
         for part in u.parts:
             if part.kind == understand.KIND:
                 continue
-            known = set(understand.clips_with(session, part.person_ids, library_ids)
-                        if part.kind == understand.PERSON else understand.clips_near(session, part.place, library_ids))
+            # Each clip found by who's in it or where it was, with what found it: their name, or the place it's
+            # near (of several by one name, which).
+            if part.kind == understand.PERSON:
+                known = dict.fromkeys(understand.clips_with(session, part.person_ids, library_ids), part.label)
+            else:
+                near = understand.clips_near(session, part.places, library_ids)
+                known = {aid: p.shown if len(part.places) > 1 else part.label for aid, p in near.items()}
             by_words, said, _ = _words_search(session, [part.searched], library_ids, limit, None, False, capped)
             # Found by who's in it or where it was ranks above a word naming them.
             found_by = understand.PERSON if part.kind == understand.PERSON else understand.PLACE
@@ -289,9 +294,9 @@ def _understood_search(session: Session, read: list, library_ids: list[str] | No
                                       quality=by_words[aid].quality if aid in by_words else 0.0)
                        for aid in {*known, *by_words}}
             # What found a clip by who's in it or where it was, when its words didn't say (they come first).
-            for aid in known:
+            for aid, by in known.items():
                 if aid not in said:
-                    said[aid] = SearchContext(score=0.0, matched_in=found_by, snippet=part.label)
+                    said[aid] = SearchContext(score=0.0, matched_in=found_by, snippet=by)
             if found is None:
                 found = matched
             elif u.rest:  # the words left rank what matches
