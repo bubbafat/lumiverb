@@ -629,6 +629,8 @@ export interface QueryResponse {
   total_estimate: number | null;
   /** What the search was understood to ask for, in order (lib/understood.ts); null when nothing was. */
   understood?: UnderstoodPart[] | null;
+  /** Asked for (best), on a search's first page: its best matches by relevance, and how many there are. */
+  best?: { items: QueryItem[]; total: number } | null;
 }
 
 /** Unified query using filter algebra: GET /v1/query?f=prefix:value&... */
@@ -639,6 +641,8 @@ export async function queryAssets(
     dir?: "asc" | "desc";
     after?: string;
     limit?: number;
+    /** A search's: its results by `sort`, and its first page with this many of its best matches. */
+    best?: number;
   },
 ): Promise<QueryResponse> {
   const params = new URLSearchParams();
@@ -649,6 +653,7 @@ export async function queryAssets(
   if (opts?.dir) params.set("dir", opts.dir);
   if (opts?.after) params.set("after", opts.after);
   if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.best) params.set("best", String(opts.best));
   return apiFetch<QueryResponse>(`/query?${params}`);
 }
 

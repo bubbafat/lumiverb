@@ -422,6 +422,8 @@ export default function ProjectDetailPage() {
                 );
               }
 
+              if (vr.type !== "images") return null; // a search page's More, never here
+
               const group = groups[vr.groupIndex];
               if (!group) return null;
               const { justifiedRow } = vr;

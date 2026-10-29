@@ -42,6 +42,10 @@ Results are ranked, each rule deciding before the next:
 
 A search shows its 5,000 best matches at most.
 
+### Best matches
+
+A search shows its **Best matches** first, with how many there are: the clips it names, or that match everything you typed. A desktop shows one row of them, and **More** adds more, by how well they match. A phone shows two rows, the last tile saying how many more (**+192**), which shows them. Below them is everything the search found, day by day, in the page's sort: the best matches are among them too, and each says what found it. A clip opened from the best matches steps through them; one opened below steps through the days.
+
 ### Why a clip was found
 
 A clip found by something other than its description says so in the corner of its thumbnail: **Text in photo**, **Note**, **Folder or file name**, **Said at 1:23**, **Scene at 0:42**, a plug-in's name (**Place names**), and for a search understood, **Near** a place or **Recognised** and a name. Hover over it for the words that matched, as `Text in photo: Dundee Diner Kitchen`; open it and **Found by** says the same at the top of the panel. A video found by a scene or by what's said in it opens at that moment.

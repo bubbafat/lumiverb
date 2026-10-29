@@ -5,14 +5,26 @@ import { computeJustifiedRows } from "./justifiedLayout";
 export const HEADER_HEIGHT = 40;
 
 export type VirtualRowKind =
-  | { type: "header"; label: string; dateIso: string | null; height: number; groupIndex: number }
+  | {
+      type: "header";
+      label: string;
+      dateIso: string | null;
+      height: number;
+      groupIndex: number;
+      /** How many it says it has, when not its clips shown (a search's best matches: all of them). */
+      count?: number;
+    }
   | {
       type: "images";
       groupIndex: number;
       rowIndex: number;
       justifiedRow: JustifiedRow;
       height: number;
-    };
+      /** Its last tile says how many more there are (+N) and shows them (a search's best matches, on a phone). */
+      more?: number;
+    }
+  /** A button showing more of the group above (a search's best matches): `hidden` not shown yet. */
+  | { type: "more"; groupIndex: number; height: number; hidden: number };
 
 export function buildVirtualRows(
   groups: DateGroup[],
