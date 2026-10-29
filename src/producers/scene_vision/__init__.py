@@ -3,7 +3,7 @@
 from src.producers import names
 from src.producers.contract import VIDEO, Data, Field, ProducerSpec
 from src.producers.pools import VISION
-from src.producers.prompts import VISION_PROMPT, ai_settings
+from src.producers.prompts import SCENE_PROMPT, ai_settings
 
 # The scheduler describes scenes with the vision machines and these settings, which aren't offered yet.
 NOT_OFFERED = "Scenes are described with these settings; changing them isn't offered yet."
@@ -26,7 +26,8 @@ PRODUCER = ProducerSpec(
              " AND s.staged IS DISTINCT FROM 'finding')"),
     made=("NOT EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id AND s.description IS NULL"
           " AND s.staged IS DISTINCT FROM 'finding')"),
-    settings=ai_settings(VISION_PROMPT, fixed=NOT_OFFERED),
+    # A frame of a video, not a photo: its own prompt (SCENE_PROMPT).
+    settings=ai_settings(SCENE_PROMPT, fixed=NOT_OFFERED),
     redo_on_source_change=False,
     # The video's own description is written from them.
     redo_also=(names.VIDEO_DESCRIPTION,),

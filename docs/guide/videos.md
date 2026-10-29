@@ -39,7 +39,7 @@ How much plays is the account's choice, in **Settings › Playback**. Everyone s
 
 Lumiverb cuts each video into scenes where the picture changes, then joins neighbouring scenes that look alike, so a talking head is one scene. How finely is the **Detail** of the **Scene descriptions** row in **Settings › Processing**: **Low**, **Normal** (the default) or **High**. An admin changes it. A new Detail applies to videos from then on; the row then counts the videos made at a lower one, and an admin can click **Redo** for them.
 
-An AI machine describes each scene and tags it. Once every scene of a video is described, it writes the video's own description and tags from them, in order. That's what the viewer shows as the video's **Description** and **Tags**, and editors and admins correct it the same way as a photo's (**Edit**, marked **Edited**).
+An AI machine describes each scene and tags it: plainly, what's in its picture, any words on a sign or menu copied as written, and a place named only when its name is in view. Once every scene of a video is described, it writes the video's own description and tags from them, in order: first what the video is of (a walk through somewhere, a meal, a ride), then 3 to 5 things to find it by. That's what the viewer shows as the video's **Description** and **Tags**, and editors and admins correct it the same way as a photo's (**Edit**, marked **Edited**).
 
 The web app doesn't list a video's scenes. Their descriptions are what search reads, and what the video's description is written from.
 

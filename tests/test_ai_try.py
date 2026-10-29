@@ -86,19 +86,21 @@ def test_a_machine_is_sent_what_the_work_sends_and_says_what_came_back(env, none
     out = r.json()
     assert (out["machine"], out["model"]) == ("Gaming PC", QWEN) and "OPEN 9 TO 5" in out["sent"]
     tries = {", ".join(t["titles"]): t for t in out["tries"]}
-    # Descriptions and scene descriptions have the same settings: one request for both.
-    assert set(tries) == {"Scene descriptions, Descriptions and tags", "Video descriptions", "Text in images (OCR)"}
-    described = tries["Scene descriptions, Descriptions and tags"]
+    # Each producer's own settings, a request each (scenes have their own prompt since Oct 29; the same settings
+    # would be one request).
+    assert set(tries) == {"Descriptions and tags", "Scene descriptions", "Video descriptions", "Text in images (OCR)"}
+    assert tries["Scene descriptions"]["result"] == DESCRIBED
+    described = tries["Descriptions and tags"]
     assert described["result"] == DESCRIBED and described["problem"] == "" and described["finish"] == "stop"
     assert described["tokens"] == {"prompt": 1200, "answer": 64} and described["limit"] == 500
     assert tries["Text in images (OCR)"]["result"] == "OPEN 9 TO 5"
     assert tries["Video descriptions"]["limit"] == 900 and tries["Video descriptions"]["result"] == DESCRIBED
 
-    assert len(asked) == 3 and {a["url"] for a in asked} == {GAMING_PC + "/chat/completions"}
+    assert len(asked) == 4 and {a["url"] for a in asked} == {GAMING_PC + "/chat/completions"}
     assert all(a["json"]["model"] == QWEN and a["timeout"] == 45 for a in asked)
     pictures = [part["image_url"]["url"] for a in asked for part in a["json"]["messages"][0]["content"]
                 if part["type"] == "image_url"]
-    assert len(pictures) == 2, "the scenes go as text"
+    assert len(pictures) == 3, "the video's scenes go as text"
     with Image.open(io.BytesIO(base64.b64decode(pictures[0].split(",", 1)[1]))) as img:
         assert (img.format, img.size) == ("JPEG", (1280, 800)), "the picture Lumiverb draws, at the work's size"
     scenes = next(a for a in asked if len(a["json"]["messages"][0]["content"]) == 1)

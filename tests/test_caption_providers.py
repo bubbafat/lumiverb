@@ -256,6 +256,17 @@ def test_a_whole_reply_is_read(raw):
 
 
 @pytest.mark.fast
+def test_a_videos_gist_and_details_are_its_description():
+    # The video's prompt (VIDEO_PROMPT) asks what it is first, then what to find it by.
+    raw = ('{"gist": "A walk through the Nassau cruise port", "details": ["A kiosk sells tours to \'Atlantis\'.", '
+           '"A woman walks past the \'DUTY FREE\' store", 7, " "], "tags": ["nassau", "port"]}')
+    assert _parse(raw) == {"description": "A walk through the Nassau cruise port. A kiosk sells tours to 'Atlantis'. "
+                                          "A woman walks past the 'DUTY FREE' store.", "tags": ["nassau", "port"]}
+    # A description said is the description (a prompt a person wrote).
+    assert _parse('{"description": "A buffet.", "gist": "x", "tags": []}')["description"] == "A buffet."
+
+
+@pytest.mark.fast
 def test_a_stray_quote_doesnt_lose_the_reply():
     # One unescaped quote leaves the brace count inside a string to the end.
     raw = '{"description": "A 12" pizza on a table.", "tags": ["pizza", "food"]}'

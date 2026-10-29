@@ -82,6 +82,11 @@ def test_the_prompts_are_the_ones_the_worker_sends():
     source = open(openai_caption.__file__).read()
     assert "Describe this image in 2-3 sentences" in P.VISION_PROMPT
     assert "What text is visible in this image?" in P.OCR_PROMPT
+    # A video's frames and the video have their own (Robert, Oct 29): no mood, names only when written.
+    from src.producers.prompts import SCENE_PROMPT
+
+    assert P.effective_settings("lumiverb.video.scene_descriptions")["prompt"] == SCENE_PROMPT
+    assert "only when its name is written in the frame" in SCENE_PROMPT and "mood" in SCENE_PROMPT
     # The worker takes its prompts from the registry, not copies of its own.
     assert "Describe this image in 2-3 sentences" not in source
 

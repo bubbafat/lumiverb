@@ -171,7 +171,7 @@ def test_a_machine_is_tested_from_here_too(env, none, cli):
         tested = cli("machines", "test", "PC")
     assert tested.exit_code == 0, tested.output
     assert "Sent a picture Lumiverb draws" in tested.output and "answered as the work needs it" in tested.output
-    assert "64 of 500 tokens" in tested.output and len(asked) == 3
+    assert "64 of 500 tokens" in tested.output and len(asked) == 4
     thinking, _ = _answering(finish="length")
     with thinking, patch("src.shared.vision_endpoint._blocked", return_value=False):
         ran_out = cli("machines", "test", "PC")
