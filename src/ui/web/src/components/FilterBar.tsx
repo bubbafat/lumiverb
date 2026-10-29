@@ -431,21 +431,22 @@ export function FilterBar({
           </span>
           <input
             type="search"
-            className="w-full rounded-lg border border-gray-700 bg-gray-800 pl-9 pr-8 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+            className="w-full rounded-lg border border-gray-700 bg-gray-800 pl-9 pr-8 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 [&::-webkit-search-cancel-button]:appearance-none"
             placeholder="Search ..."
             value={inputValue}
             onChange={(e) => { userTypingRef.current = true; setInputValue(e.target.value); }}
             onKeyDown={handleKeyDown}
             onFocus={() => setSearchFocused(true)}
           />
+          {/* Its own clear: the browser's (a search box's) is hidden above, so there's one */}
           {inputValue && (
             <button
               type="button"
               onClick={handleClear}
-              className="absolute inset-y-0 right-2 flex items-center text-gray-500 hover:text-gray-200"
+              className="absolute inset-y-0 right-2 flex items-center text-lg leading-none text-gray-500 hover:text-gray-200"
               aria-label="Clear search"
             >
-              x
+              ×
             </button>
           )}
           {personSuggestions.length > 0 && (
