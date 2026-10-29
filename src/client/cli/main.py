@@ -25,6 +25,7 @@ from src.client.cli.commands.plugins import plugins_app
 from src.client.cli.commands.settings import settings_app
 from src.client.cli.commands.trash import trash_app
 from src.client.cli.commands.users import user_app
+from src.client.cli.commands.visits import visits as visits_command
 from src.client.cli.decisions import in_projects, send_until_decided
 from src.client.cli.hidden import key_typed
 from src.shared.io_utils import normalize_path_prefix
@@ -50,6 +51,7 @@ app.add_typer(producers_app, name="producers")
 app.add_typer(device_app, name="device")
 app.add_typer(plugins_app, name="plugins")
 app.add_typer(ai_app, name="ai")
+app.command("visits")(visits_command)
 
 from src.client.cli.commands.enrich import register as _register_enrich  # noqa: E402
 from src.client.cli.commands.pausing import register as _register_pausing  # noqa: E402

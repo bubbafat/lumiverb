@@ -637,6 +637,16 @@ Projects are transient, many-to-many sets of clips for one job (ADR-016), across
 - **GET /v1/public/projects/{id}/assets** — Query: `after` (cursor), `limit` (1–500, default 200). Returns privacy-stripped asset list: `{ "items": [{ "asset_id", "media_type", "width", "height", "taken_at", "duration_sec" }], "next_cursor" }`. No rel_path, no camera info, no GPS.
 - Asset thumbnails, proxies and video previews served via `/v1/assets/{id}/artifacts/{type}?public_project_id={id}` — verifies asset membership in the public project.
 
+## Visits API
+
+What public pages' visitors do, counted on the server without keeping who they are (ADR-025, `src/server/visits.py`). Counted where it happens, for a visitor (not signed in) only: a public project's `GET /v1/public/projects/{id}` and a public library's `GET /v1/libraries/{id}` are a page seen (`view`; a `from` query parameter, the site the page was opened from as its host, `www.` left off and anything else ignored, is kept with a visitor's first view of the day), `GET /v1/assets/{id}` and a video's `GET /v1/assets/{id}/playback` with `public_project_id` or `public_library_id` a clip opened there (`open`) and a video played (`play`); signed in, `GET /v1/projects/{id}/export` a project exported (`export`), and `POST /v1/auth/demo` a demo started (`demo`, in the account of the demo's viewer). A visitor is one each day: a hash of the address and user agent (an exporter's, their user id) keyed with the day's salt, deleted when upkeep adds the day up. The same visitor doing the same thing to the same place or clip within 30 minutes counts once; an export or a demo every time. A user agent saying it's a crawler or a script counts as a bot, apart. Counting never fails a request. Days before today are kept as totals only (`POST /v1/upkeep`'s `visits.added_up`). A total's visitors are each day's added up. `days` (1–366, default 30): today and the days before it.
+
+- **GET /v1/visits** — Account admins. Every place with visits in those days, most visited first: `{ "since", "places": [{ "place": "project"|"library"|"account", "place_id", "name" (null for one deleted since), "view", "open", "play", "export", "demo", "bots" }] }`, each action `{ "visitors", "times" }`; the account's own row is its demos.
+- **GET /v1/projects/{id}/visits** — Its owner and account admins (one nobody owns, account admins only); 403 for anyone else who sees it, 404 for one they don't. `{ "since", "days": [{ "day", "view", "open", "play", "export", "demo" }], "totals": {...}, "clips": [{ "asset_id", "opened", "played" }] (most first, 20 at most, those still in it the caller sees), "sources": [{ "site", "visitors" }] (most first, 20 at most), "bots" }`.
+- **GET /v1/libraries/{id}/visits** — Its admins (`library_admin_required`). The same, for a public library.
+
+A project's or library's visits are deleted with it for good. CLI: `lumiverb visits [--days N] [--project ID | --library ID]`.
+
 ## Unified Query API
 
 One endpoint for browsing and searching, across all libraries the caller can see. `/v1/browse` and `/v1/search` were removed in its favor.

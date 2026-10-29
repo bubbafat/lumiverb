@@ -87,3 +87,14 @@ Visitors see:
 - descriptions, tags, the text in photos, and a video's transcript as far as it plays.
 
 They never see file names or folders, locations, camera details, notes, faces or people, or ratings, and they can't change anything.
+
+## Visits
+
+Lumiverb counts what visitors to a public page do: pages seen, clips opened and videos played. It also counts projects exported, and how many people tried a demo. It counts on its own server, with no cookies and no outside script, and keeps nobody's address: a visitor is one each day, told apart that day by a code that can't be turned back into who they were, and from the next day only the totals are kept. Opening the same thing again within half an hour counts once. Search engines' crawlers and link previews are counted apart from people.
+
+A project's visits are its owner's and the account's admins' to see, a public library's its admins', and the whole account's the account's admins'. For now, see them with the command line:
+
+```
+lumiverb visits
+lumiverb visits --project PROJECT_ID --days 7
+```
