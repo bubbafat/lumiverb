@@ -11,7 +11,8 @@ deciding first and the next only breaking its ties:
 4. How well: the text search's own score (words together and in order, whole words over their starts).
 5. Newest first.
 
-`Rank.score` is what the search shows; `ordered` puts in the final order, newest breaking the ties."""
+`Rank.score` is what the search shows; `ordered` puts in the final order, newest breaking the ties; `best` are the
+best matches, those named or matching all of the search (a page shows them apart, the rest by date)."""
 
 from __future__ import annotations
 
@@ -30,6 +31,7 @@ FIELD = {"note": 6, "corrected": 6, "person": 5, "place": 5, "description": 4, "
          "transcript": 3, "fact": 2, "path": 1}
 SPLIT = 2  # a search's words matched across fields: no one field says
 FILE, FOLDER = 2, 1  # named: its file's name, a folder's
+ALL = 0.999  # a coverage of all the search (its sums rounded)
 
 
 @dataclass(frozen=True)
@@ -111,3 +113,9 @@ def ordered(session: Session, ranks: Mapping[str, Rank]) -> dict[str, float]:
     order = sorted(ranks, key=lambda aid: (-ranks[aid].score, -(taken[aid].timestamp()) if taken.get(aid) else 0.0,
                                            aid))
     return {aid: float(len(order) - i) for i, aid in enumerate(order)}
+
+
+def best(ranks: Mapping[str, Rank], order: Mapping[str, float]) -> list[str]:
+    """A search's best matches, in order (`ordered`'s): named by it, or matching all of it (each word that matched
+    anything). The first of the order, since tiers 1 and 2 decide first."""
+    return sorted((aid for aid, r in ranks.items() if r.named or r.coverage >= ALL), key=lambda aid: -order[aid])

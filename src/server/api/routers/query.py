@@ -58,6 +58,7 @@ SORT_COLUMNS = {
 PUBLIC_SORTS = {"taken_at", "asset_id"}
 
 MAX_CANDIDATE_IDS = 5000
+MAX_BEST = 50  # a search's best matches on its first page, at most (best=N)
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +118,14 @@ class UnderstoodPart(BaseModel):
     label: str  # what it was taken for: "Sue Horvick", "California Adventure", "videos"
 
 
+class BestMatches(BaseModel):
+    """A search's best matches (src/server/search/rank.py `best`: named by it, or matching all of it), the first
+    by relevance, and how many there are with the page's filters."""
+
+    items: list[QueryItem]
+    total: int
+
+
 class QueryResponse(BaseModel):
     items: list[QueryItem]
     next_cursor: str | None = None
@@ -128,6 +137,8 @@ class QueryResponse(BaseModel):
     # What the search was understood to ask for, in order; None when nothing
     # was (its words searched as they always were).
     understood: list[UnderstoodPart] | None = None
+    # Asked for (best=N), on a search's first page: its best matches.
+    best: BestMatches | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +165,7 @@ def _run_text_search(
     capped: set[str] | None = None,
     understood: list[dict] | None = None,
     assist_for: str | None = None,
+    best: list[str] | None = None,
 ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
     """The clips a text search finds, in the account's database
     (src/server/search/text_search.py): their own words, their scenes' and
@@ -163,6 +175,7 @@ def _run_text_search(
     each search was understood to ask for (nothing when none was).
     `assist_for`: the account whose AI machine may be asked about the words
     (an AI-assisted search, `assisting`: src/server/search/assist.py).
+    `best`: when given, gets the best matches' ids in order (rank.best).
 
     `capped`: when given, gets the name of each search that came back full
     (its limit): matches past it were left out. Each search is capped on
@@ -208,15 +221,15 @@ def _run_text_search(
                 understood.extend({"kind": "also", "words": w, "label": ", ".join(t[:5]) + (", …" if len(t) > 5 else "")}
                                   for w, t in things.items())
             return _ordered(session, terms, *_understood_search(session, read, library_ids, limit, capped, things),
-                            public=False)
+                            public=False, best=best)
     return _ordered(session, terms, *_words_search(session, terms, library_ids, limit, public_cap_ms, public, capped),
-                    public=public or public_cap_ms is not None)
+                    public=public or public_cap_ms is not None, best=best)
 
 
 def _ordered(session: Session, terms: list[str], ranks: dict, contexts: dict[str, SearchContext], source: str, *,
-             public: bool) -> tuple[dict[str, float], dict[str, SearchContext], str]:
+             public: bool, best: list[str] | None = None) -> tuple[dict[str, float], dict[str, SearchContext], str]:
     """The clips found in their final order (src/server/search/rank.py): named by the search first (never on a
-    public page, which reads no paths), each context's score its rank's."""
+    public page, which reads no paths), each context's score its rank's; best gets the best matches."""
     from dataclasses import replace
 
     from src.server.search import rank
@@ -225,7 +238,10 @@ def _ordered(session: Session, terms: list[str], ranks: dict, contexts: dict[str
         named = rank.named(session, terms, list(ranks))
         ranks = {aid: replace(r, named=named[aid]) if aid in named else r for aid, r in ranks.items()}
     contexts = {aid: c.model_copy(update={"score": ranks[aid].score}) for aid, c in contexts.items() if aid in ranks}
-    return rank.ordered(session, ranks), contexts, source
+    order = rank.ordered(session, ranks)
+    if best is not None:
+        best.extend(rank.best(ranks, order))
+    return order, contexts, source
 
 
 def assisting(request: Request, session: Session, spec: QuerySpec) -> str | None:
@@ -486,13 +502,16 @@ def unified_query(
     dir: str = "desc",
     after: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_PAGE),
+    best: int | None = Query(default=None, ge=1, le=MAX_BEST),
 ) -> QueryResponse:
     """Unified query endpoint — all filters via ?f=prefix:value params.
 
     When a ``f=query:...`` filter is present, the text search finds the
     candidates (candidate-set pattern) and the structured filters are applied
-    to them. When no text search filter is present, runs pure SQL browse.
-    """
+    to them, in relevance order. When no text search filter is present, runs
+    pure SQL browse. `best` (a search's): its results follow `sort` instead,
+    and its first page carries that many of its best matches by relevance,
+    and how many there are (a page shows them apart, the rest by date)."""
     spec = parsed_filters(f, sort=sort, direction=dir)
 
     # --- Public-request guard ---
@@ -520,11 +539,12 @@ def unified_query(
     # --- Text search via candidate-set pattern ---
     said: list[dict] = []
     understood: list[UnderstoodPart] | None = None
+    best_ids: list[str] = []
     if search_terms:
         scores, contexts, search_source = _run_text_search(
             session, search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
             public=getattr(request.state, "is_public_request", False), understood=said,
-            assist_for=assisting(request, session, spec),
+            assist_for=assisting(request, session, spec), best=best_ids,
         )
         understood = [UnderstoodPart(**part) for part in said] or None
 
@@ -546,26 +566,56 @@ def unified_query(
 
     # --- Run query through repository ---
     browse_repo = UnifiedBrowseRepository(session)
+    rating_user = user_id if spec.needs_rating_join else None
+    best_matches: BestMatches | None = None
+    if best is not None and candidate_scores is not None:
+        if after is None:
+            # The best matches with the page's filters, by relevance: the first of them, and how many.
+            kept = browse_repo.page_ids(spec=spec, candidate_ids=[aid for aid in best_ids if aid in candidate_scores],
+                                        candidate_scores=candidate_scores, rating_user_id=rating_user,
+                                        limit=MAX_CANDIDATE_IDS)
+            best_matches = BestMatches(items=_items(request, session, browse_repo, browse_repo.in_order(kept[:best]),
+                                                    search_contexts), total=len(kept))
+        candidate_scores = None  # the rest by the page's sort
     assets = browse_repo.query_page(
         spec=spec,
         candidate_ids=candidate_ids,
         candidate_scores=candidate_scores,
-        rating_user_id=user_id if spec.needs_rating_join else None,
+        rating_user_id=rating_user,
         after=after,
         limit=limit,
     )
+    items = _items(request, session, browse_repo, assets, search_contexts)
 
-    # --- Resolve library names ---
+    sort_col = spec.sort if spec.sort in SORT_COLUMNS else "taken_at"
+    changed = browse_repo.changed_at_of([assets[-1].asset_id]) if assets and sort_col == "changed_at" else {}
+    next_cursor: str | None = None
+    if len(assets) == limit:
+        last = assets[-1]
+        sort_value = changed.get(last.asset_id) if sort_col == "changed_at" else getattr(last, sort_col, None)
+        if sort_value is not None and hasattr(sort_value, "isoformat"):
+            sort_value = sort_value.isoformat()
+        next_cursor = _encode_cursor(sort_col, sort_value, last.asset_id)
+
+    return QueryResponse(
+        items=items,
+        next_cursor=next_cursor,
+        total_estimate=total_estimate,
+        search_source=search_source,
+        understood=understood,
+        best=best_matches,
+    )
+
+
+def _items(request: Request, session: Session, browse_repo: UnifiedBrowseRepository, assets: list,
+           search_contexts: dict[str, SearchContext]) -> list[QueryItem]:
+    """The clips as a query answers them (a public library's visitor, as they see them)."""
     lib_repo = LibraryRepository(session)
-    lib_ids = list({a.library_id for a in assets})
     libs_by_id: dict[str, str] = {}
-    for lid in lib_ids:
+    for lid in {a.library_id for a in assets}:
         lib = lib_repo.get_by_id(lid)
         if lib:
             libs_by_id[lid] = lib.name
-
-    # --- Build response ---
-    sort_col = spec.sort if spec.sort in SORT_COLUMNS else "taken_at"
     changed = browse_repo.changed_at_of([a.asset_id for a in assets])
 
     items = [
@@ -603,19 +653,4 @@ def unified_query(
 
     if getattr(request.state, "is_public_request", False):
         items = [_visitor_view(i) for i in items]
-
-    next_cursor: str | None = None
-    if len(assets) == limit:
-        last = assets[-1]
-        sort_value = changed.get(last.asset_id) if sort_col == "changed_at" else getattr(last, sort_col, None)
-        if sort_value is not None and hasattr(sort_value, "isoformat"):
-            sort_value = sort_value.isoformat()
-        next_cursor = _encode_cursor(sort_col, sort_value, last.asset_id)
-
-    return QueryResponse(
-        items=items,
-        next_cursor=next_cursor,
-        total_estimate=total_estimate,
-        search_source=search_source,
-        understood=understood,
-    )
+    return items
