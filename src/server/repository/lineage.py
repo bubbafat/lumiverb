@@ -809,13 +809,16 @@ def made_from(artifact: str) -> tuple[str, ...]:
     return tuple(out)
 
 
-def start_over(session: Session, asset_ids: list[str], artifact: str) -> None:
+def start_over(session: Session, asset_ids: list[str], artifact: str, *, itself: bool = True) -> None:
     """The clips' artifact is made again from the start: its lineage goes, with
-    that of what's made from it (made_from), so each is missing again. Doesn't
-    commit (the caller drops the artifacts themselves in the same transaction)."""
-    if asset_ids:
+    that of what's made from it (made_from), so each is missing again; with
+    itself False, only what's made from it (the artifact stands as it is).
+    Doesn't commit (the caller drops the artifacts themselves in the same
+    transaction)."""
+    artifacts = list(made_from(artifact)) if itself else list(made_from(artifact))[1:]
+    if asset_ids and artifacts:
         session.execute(text("DELETE FROM artifact_lineage WHERE asset_id = ANY(:ids) AND artifact = ANY(:artifacts)"),
-                        {"ids": list(asset_ids), "artifacts": list(made_from(artifact))})
+                        {"ids": list(asset_ids), "artifacts": artifacts})
 
 
 def record_failure(session: Session, asset_id: str, artifact: str, error: str, *, commit: bool = True) -> None:

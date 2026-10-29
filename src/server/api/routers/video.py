@@ -95,14 +95,19 @@ def _now_current(session: Session, made: dict) -> None:
                             {"settings_hash": want["settings_hash"]})
 
 
-def _described_here(request: Request) -> bool:
-    """Whether the account has a model describing scenes. Without one nothing
-    would describe a redo's scenes, so they're shown as soon as they're found."""
+def _described_as(request: Request, session: Session) -> dict | None:
+    """How the account's model describing scenes would record a scene's
+    description now (a scene's lineage), or None when it has none: then
+    nothing would describe a redo's scenes, so they're shown as soon as
+    they're found."""
     from src.server.api.routers.producers import tenant_ai
+    from src.server.repository import lineage
     from src.shared.producers import PRODUCERS
 
     models, _ = tenant_ai(request)
-    return bool(models.get(PRODUCERS[SCENE_DESCRIPTIONS].job))
+    if not models.get(PRODUCERS[SCENE_DESCRIPTIONS].job):
+        return None
+    return _scene_lineage(lineage.desired(session, SCENE_DESCRIPTIONS, models))
 
 
 def _swap_in(request: Request, session: Session, asset_id: str, described: dict | None) -> bool:
@@ -238,6 +243,8 @@ def complete_chunk(
     asset_id = chunk.asset_id
     all_done = chunk_repo.all_chunks_complete(asset_id)
     show_now = False
+    shown_described: dict | None = None  # how the scenes shown now were described, recorded with them
+    then_remade = False  # what's made from the scene descriptions (the video's own) made again after
 
     if all_done and asset_id:
         from src.producers.scenes.detail import detail, name_of
@@ -250,16 +257,33 @@ def complete_chunk(
         # How they were found lands with them: a redo in between sees both or neither.
         record_lineage(session, asset_id, SCENES, made, commit=False)
         if staged:
-            # Found: described next, while the clip still shows its old ones,
-            # then swapped in by the last description (update_scene_vision).
-            VideoSceneRepository(session).mark_found(asset_id)
-            lineage.start_over(session, [asset_id], SCENE_DESCRIPTIONS)
-            show_now = not _described_here(request)
+            scenes = VideoSceneRepository(session)
+            scenes.mark_found(asset_id)
+            # A scene on a frame the clip's scenes have described keeps that description.
+            same_frame = scenes.keep_descriptions(asset_id)
+            described = _described_as(request, session)
+            if described is None:
+                # Nothing would describe them: shown as soon as they're found.
+                lineage.start_over(session, [asset_id], SCENE_DESCRIPTIONS)
+                show_now = True
+            elif not scenes.undescribed_found(asset_id, described):
+                # Every one described as it would be now: shown now, and the
+                # video's own description made again unless they're the scenes it shows.
+                show_now, shown_described = True, described
+                then_remade = not scenes.found_as_shown(asset_id)
+            else:
+                # Found: described next, while the clip still shows its old ones,
+                # then swapped in by the last description (update_scene_vision).
+                lineage.start_over(session, [asset_id], SCENE_DESCRIPTIONS)
+            _log.info("Scenes of %s found again: %d on a frame already described", asset_id, same_frame)
         else:
             AssetRepository(session).set_video_indexed(asset_id)
     session.commit()
-    if show_now:
-        _swap_in(request, session, asset_id, None)
+    # Swapped in first, then what's made from them started over: nothing is
+    # made from the old ones in between.
+    if show_now and _swap_in(request, session, asset_id, shown_described) and then_remade:
+        lineage.start_over(session, [asset_id], SCENE_DESCRIPTIONS, itself=False)
+        session.commit()
     if all_done and asset_id and not staged:
         asset_repo = AssetRepository(session)
         # Inline search sync (best-effort)

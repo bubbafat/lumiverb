@@ -9,19 +9,24 @@ from __future__ import annotations
 import contextlib
 from unittest.mock import MagicMock, patch
 
+import imagehash
 import numpy as np
 import pytest
+from PIL import Image
 
 import src.processing.video.video_scanner as vs_module
-from src.processing.video.scene_segmenter import CUT, WINDOW, SceneSegmenter, spread
+from src.processing.video.scene_segmenter import CUT, WINDOW, SceneSegmenter, _frame_to_phash, spread
 from src.processing.video.video_scanner import RawFrame, VideoScanner
 from src.producers.scenes import PRODUCER as SCENES
 from src.producers.scenes.detail import (
     CHUNK_TARGET_SEC,
+    CUT_BITS,
     CUT_MIN_SEC,
     DETAILS,
+    HASH_SIZE,
     LEVELS,
     SAMPLES,
+    STEADY_BITS,
     chunk_grid,
     detail,
     hamming,
@@ -38,7 +43,7 @@ _rng = np.random.default_rng(7)
 
 
 def _picture(seed: int) -> np.ndarray:
-    """A smooth picture of its own (unrelated pictures' hashes are ~128 bits apart)."""
+    """A smooth picture of its own (unrelated pictures' hashes are ~32 of 64 bits apart)."""
     rng = np.random.default_rng(seed)
     coarse = rng.integers(0, 256, size=(6, 8, 3)).astype(np.float32)
     return np.kron(coarse, np.ones((H // 6 + 1, W // 8, 1)))[:H, :W].astype(np.uint8)
@@ -46,9 +51,7 @@ def _picture(seed: int) -> np.ndarray:
 
 def _talking(t: float) -> np.ndarray:
     """A person talking to camera: one set-up, a mouth that moves, the light
-    shifting a little, sensor noise. Keyframes 2 s apart come out about 0 to
-    20 bits apart, within what real talking heads measured (median 10, 90th
-    percentile about 30)."""
+    shifting a little, sensor noise: keyframes 2 s apart hash alike."""
     img = _picture(99).astype(int)  # the room behind them
     yy, xx = np.ogrid[:H, :W]
     img[(xx - W // 2) ** 2 / 14**2 + (yy - H // 2) ** 2 / 18**2 <= 1] = (200, 160, 140)  # the head
@@ -104,6 +107,12 @@ def test_the_levels_are_as_decided():
     assert SAMPLES == 5
 
 
+def test_a_cut_is_a_stronger_change_than_anything_merged():
+    assert HASH_SIZE == 8  # 64-bit hashes
+    assert all(d.same_within < CUT_BITS for d in LEVELS.values())
+    assert STEADY_BITS < CUT_BITS
+
+
 def test_the_length_asked_is_clamped_then_evened_out_to_whole_windows():
     assert scene_length(22, "normal") == 5.0  # 22 / 8 = 2.75, at least 5
     assert window_sec(22, "normal") == pytest.approx(22 / 4)  # four windows of 5.5, not four of 5 and a 2 s scrap
@@ -127,8 +136,8 @@ def test_chunks_are_whole_windows_so_no_scene_is_cut_short_at_a_chunks_end(level
 
 
 def _bits(n: int) -> str:
-    """A 256-bit hash with its n lowest bits set: n bits from _bits(0)."""
-    return f"{(1 << n) - 1:064x}"
+    """A 64-bit hash with its n lowest bits set: n bits from _bits(0)."""
+    return f"{(1 << n) - 1:016x}"
 
 
 def _segment(pts_hash: dict[float, str], *, start=0.0, end=30.0, window=5.0, sharp=None, last=True):
@@ -146,7 +155,7 @@ def test_each_window_is_a_scene_and_they_cover_the_chunk_end_to_end():
 
 
 def test_frames_outside_the_chunk_are_left_out():
-    scenes, _ = _segment({28.0: _bits(200), 30.0: _bits(0), 32.0: _bits(0), 34.0: _bits(0), 35.0: _bits(0)},
+    scenes, _ = _segment({28.0: _bits(60), 30.0: _bits(0), 32.0: _bits(0), 34.0: _bits(0), 35.0: _bits(0)},
                          start=30, end=35, window=5, last=False)
     assert len(scenes) == 1 and scenes[0].rep_frame_ms >= 30000
 
@@ -169,23 +178,23 @@ def test_the_scenes_hash_is_its_pictures():
 
 def test_a_cut_whose_picture_holds_splits_a_window():
     # One 30 s window: shot A to 12 s, then shot B, which holds.
-    pts = {float(t): (_bits(0) if t < 12 else _bits(200)) for t in range(0, 30, 2)}
+    pts = {float(t): (_bits(0) if t < 12 else _bits(60)) for t in range(0, 30, 2)}
     scenes, _ = _segment(pts, end=30, window=30)
     assert [(s.start_ms, s.end_ms, s.keep_reason) for s in scenes] == [(0, 12000, CUT), (12000, 30000, WINDOW)]
 
 
 def test_a_moving_camera_isnt_a_cut():
     # Every keyframe far from the one before (handheld, 2 s apart): no picture holds.
-    rng = np.random.default_rng(3)
-    pts = {float(t): f"{int.from_bytes(rng.bytes(32), 'big'):064x}" for t in range(0, 30, 2)}
-    assert all(hamming(pts[t], pts[t + 2]) > 76 for t in range(0, 28, 2)), "the frames move"
+    rng = np.random.default_rng(6)
+    pts = {float(t): f"{int.from_bytes(rng.bytes(8), 'big'):016x}" for t in range(0, 30, 2)}
+    assert all(hamming(pts[t], pts[t + 2]) > CUT_BITS for t in range(0, 28, 2)), "the frames move"
     scenes, _ = _segment(pts, end=30, window=30)
     assert len(scenes) == 1
 
 
 def test_no_sliver_either_side_of_a_cut():
     # Shot B starts 1 s before the window ends: too close, no cut (the window's end is near enough).
-    pts = {0.0: _bits(0), 2.0: _bits(0), 4.0: _bits(0), 6.0: _bits(200), 6.5: _bits(200)}
+    pts = {0.0: _bits(0), 2.0: _bits(0), 4.0: _bits(0), 6.0: _bits(60), 6.5: _bits(60)}
     scenes, _ = _segment(pts, end=7, window=7)
     assert len(scenes) == 1 and CUT_MIN_SEC == 2.0
 
@@ -204,24 +213,64 @@ def test_a_chunk_without_keyframes_has_no_scenes():
 
 
 def test_scenes_alike_merge_into_the_first():
-    assert merge_runs([_bits(0), _bits(10), _bits(20), _bits(200), _bits(205)], 40) == [(0, 2), (3, 4)]
+    assert merge_runs([_bits(0), _bits(5), _bits(10), _bits(50), _bits(55)], 14) == [(0, 2), (3, 4)]
 
 
 def test_a_slow_drift_isnt_chained_into_one_scene():
-    # Each scene 12 bits from its neighbour, so neighbour by neighbour it's all one;
+    # Each scene 5 bits from its neighbour, so neighbour by neighbour it's all one;
     # against the kept scene, a run ends once it's drifted past the level's bound.
-    drift = [_bits(12 * i) for i in range(10)]
-    assert all(hamming(a, b) == 12 for a, b in zip(drift, drift[1:]))
-    assert merge_runs(drift, LEVELS["normal"].same_within) == [(0, 3), (4, 7), (8, 9)]
+    drift = [_bits(5 * i) for i in range(10)]
+    assert all(hamming(a, b) == 5 for a, b in zip(drift, drift[1:]))
+    assert merge_runs(drift, LEVELS["normal"].same_within) == [(0, 2), (3, 5), (6, 8), (9, 9)]
     assert len(merge_runs(drift, LEVELS["high"].same_within)) > len(merge_runs(drift, LEVELS["low"].same_within))
 
 
 def test_a_scene_without_a_hash_is_never_merged():
-    assert merge_runs([_bits(0), None, _bits(0)], 40) == [(0, 0), (1, 1), (2, 2)]
-    assert merge_runs([], 40) == []
+    assert merge_runs([_bits(0), None, _bits(0)], 14) == [(0, 0), (1, 1), (2, 2)]
+    assert merge_runs([], 14) == []
 
 
 # ── Scenarios, with real pictures ─────────────────────────────────────────
+
+
+VW, VH = 480, 270  # a keyframe as the scanner hands it over (FRAME_WIDTH wide)
+
+
+def _view(seed: int) -> np.ndarray:
+    """A view of its own: soft shapes and light, as a scene's picture is at its coarsest."""
+    rng = np.random.default_rng(seed)
+    coarse = np.kron(rng.integers(0, 256, size=(9, 16, 3)), np.ones((30, 30, 1)))[:VH, :VW].astype(np.uint8)
+    small = Image.fromarray(coarse).resize((VW // 6, VH // 6))
+    return np.asarray(small.resize((VW, VH), Image.Resampling.BICUBIC)).astype(np.float32)
+
+
+def _with_a_hand(img: np.ndarray) -> np.ndarray:
+    """The same view with a hand in front of the camera, low on the right."""
+    out = img.copy()
+    yy, xx = np.ogrid[:VH, :VW]
+    out[((xx - 400) / 70) ** 2 + ((yy - 230) / 60) ** 2 <= 1] = (205, 160, 135)
+    return out
+
+
+def _hash(img: np.ndarray) -> str | None:
+    pixels = np.clip(img, 0, 255).astype(np.uint8)
+    return _frame_to_phash(RawFrame(bytes=pixels.tobytes(), pts=0.0, width=VW, height=VH))
+
+
+def test_a_pictures_hash_is_its_8_by_8_wavelet_hash():
+    view = np.clip(_view(1), 0, 255).astype(np.uint8)
+    assert _hash(view) == str(imagehash.whash(Image.fromarray(view), hash_size=8))
+    assert len(_hash(view)) == 16
+
+
+@pytest.mark.parametrize("seed", range(1, 9))
+def test_a_hand_in_front_and_the_light_going_down_leave_the_view_alike(seed):
+    # What filled Robert's videos with scenes alike (a meal filmed from the
+    # table: hands, forks, the camera re-exposing) is merged at every level;
+    # another view is kept apart at every level.
+    view = _view(seed)
+    assert hamming(_hash(view), _hash(_with_a_hand(view) * 0.8)) <= LEVELS["high"].same_within
+    assert hamming(_hash(view), _hash(_view(seed + 100))) > LEVELS["low"].same_within
 
 
 @pytest.mark.parametrize("level", DETAILS)

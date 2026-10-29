@@ -110,6 +110,35 @@ class VideoSceneRepository:
         self._session.execute(text("UPDATE video_scenes SET staged = 'found' WHERE asset_id = :a AND staged = 'finding'"),
                               {"a": asset_id})
 
+    def keep_descriptions(self, asset_id: str) -> int:
+        """A redo's found scenes whose picture is the frame of a scene the clip
+        shows, described, take that scene's description, tags and how it was
+        made (its lineage: one made another way than now is described again),
+        and its image: a scene is described from its one frame alone, so the
+        same frame would be described the same way. How many took one (not
+        committed)."""
+        return self._session.execute(text(
+            "UPDATE video_scenes n SET description = o.description, tags = o.tags, lineage = o.lineage,"
+            " rep_frame_sha256 = o.rep_frame_sha256, proxy_key = o.proxy_key, thumbnail_key = o.thumbnail_key"
+            " FROM video_scenes o WHERE n.asset_id = :a AND n.staged = 'found'"
+            " AND o.asset_id = :a AND o.staged IS NULL AND o.rep_frame_ms = n.rep_frame_ms"
+            " AND o.description IS NOT NULL"), {"a": asset_id}).rowcount
+
+    def undescribed_found(self, asset_id: str, scene_lineage: dict) -> int:
+        """How many of a redo's found scenes aren't described as scene_lineage says."""
+        return self._session.execute(text(
+            "SELECT count(*) FROM video_scenes WHERE asset_id = :a AND staged = 'found'"
+            " AND (description IS NULL OR lineage IS DISTINCT FROM CAST(:l AS jsonb))"
+        ), {"a": asset_id, "l": json.dumps(scene_lineage)}).scalar() or 0
+
+    def found_as_shown(self, asset_id: str) -> bool:
+        """Whether a redo found the scenes the clip shows: the same spans, on the same frames."""
+        def spans(where: str) -> list[tuple]:
+            return [tuple(r) for r in self._session.execute(text(
+                f"SELECT start_ms, end_ms, rep_frame_ms FROM video_scenes WHERE asset_id = :a AND {where}"
+                " ORDER BY start_ms"), {"a": asset_id})]
+        return spans("staged = 'found'") == spans("staged IS NULL")
+
     def swap_in(self, asset_id: str, described: dict | None) -> Swap | None:
         """A redo's found scenes become the ones the clip shows, in one step: the
         old ones go (and with them what search found of them). described: how
