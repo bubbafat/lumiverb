@@ -16,6 +16,7 @@ import LibraryPeopleSection from "./LibraryPeopleSection";
 import LibraryPreviewsSection from "./LibraryPreviewsSection";
 import LibraryReaderSection from "./LibraryReaderSection";
 import LibraryScansSection from "./LibraryScansSection";
+import LibraryVisitsSection from "./LibraryVisitsSection";
 import { ProjectUsageList, clipCount } from "../components/ProjectUsageList";
 import { editsIt, roleOn } from "../lib/libraryRoles";
 import { useRole } from "../lib/useCanEdit";
@@ -483,6 +484,8 @@ export default function LibrarySettingsPage() {
         {libraryId && <LibraryPeopleSection libraryId={libraryId} />}
 
         {libraryId && <LibraryPreviewsSection libraryId={libraryId} />}
+
+        {libraryId && <LibraryVisitsSection libraryId={libraryId} />}
       </div>
     </div>
   );

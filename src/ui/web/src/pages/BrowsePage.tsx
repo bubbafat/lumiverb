@@ -43,6 +43,7 @@ import { useLocalStorage } from "../lib/useLocalStorage";
 // parseSearchQuery available for future prefix query support
 import type { VirtualRowKind } from "../lib/virtualRows";
 import { mediaCount } from "../lib/format";
+import { cameFromQuery } from "../lib/cameFrom";
 
 const PAGE_SIZE = 100;
 const ROW_GAP = 4;
@@ -298,7 +299,8 @@ export default function BrowsePage() {
     isError: libraryIsError,
   } = useQuery({
     queryKey: ["library", libraryId],
-    queryFn: () => getLibrary(libraryId!),
+    // A visitor's first request says where they came from (ADR-025).
+    queryFn: () => getLibrary(libraryId!, isAuthenticated ? "" : cameFromQuery()),
     enabled: !!libraryId,
     retry: false,
   });

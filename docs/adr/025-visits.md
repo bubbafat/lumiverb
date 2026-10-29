@@ -2,14 +2,14 @@
 
 ## Status
 
-Accepted (2026-10-29). Robert, after asking for analytics with Google Analytics as a plug-in: "I agree with your reasoning. I think downloads/exports are also an important metric (especially for public projects). Put GA aside for now", then "Let's build the metrics on what exists today - as we add new features we can figure out how/if metrics apply."
+Accepted and built (2026-10-29; parts 1 and 2). Robert, after asking for analytics with Google Analytics as a plug-in: "I agree with your reasoning. I think downloads/exports are also an important metric (especially for public projects). Put GA aside for now", then "Let's build the metrics on what exists today - as we add new features we can figure out how/if metrics apply."
 
 ## Progress
 
 | Part | Description | Status |
 |------|-------------|--------|
 | 1 | Counting, daily totals and the reports: the server, its API and `lumiverb visits` | Built |
-| 2 | The web app: a project's and a library's visits, the account's, and where visitors came from | Not started |
+| 2 | The web app: a project's and a library's visits, the account's, and where visitors came from | Built: `components/VisitsPanel.tsx` (totals, a bar a day with its day on hover or focus, Day by day as a table, clips most opened, sites, bots), a project's Visits beside Export (`ProjectDetailPage`), Library settings › Visits (`LibraryVisitsSection`), Admin › Visits (`AdminPage`), a public page's first request saying where its visitor came from (`lib/cameFrom.ts`) |
 
 ## Overview
 

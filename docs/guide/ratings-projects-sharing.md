@@ -92,7 +92,13 @@ They never see file names or folders, locations, camera details, notes, faces or
 
 Lumiverb counts what visitors to a public page do: pages seen, clips opened and videos played. It also counts projects exported, and how many people tried a demo. It counts on its own server, with no cookies and no outside script, and keeps nobody's address: a visitor is one each day, told apart that day by a code that can't be turned back into who they were, and from the next day only the totals are kept. Opening the same thing again within half an hour counts once. Search engines' crawlers and link previews are counted apart from people.
 
-A project's visits are its owner's and the account's admins' to see, a public library's its admins', and the whole account's the account's admins'. For now, see them with the command line:
+Who sees them:
+
+- **A project's**: its owner and the account's admins, with **Visits** at the top of the project, beside **Export**: visitors, page views, clips opened, videos played and exports over the last 7, 30 or 90 days, a bar a day (hover one, or open **Day by day**), the clips most opened and played, and the sites visitors came from.
+- **A public library's**: its admins, in **Library settings** under **Visits**.
+- **The whole account's**: its admins, on the **Admin** page under **Visits**: every project and library visited in the last 30 days, and how many tried the demo.
+
+On a server whose admin pages can't be reached from elsewhere, such as a demo, the command line says the same on the server itself:
 
 ```
 lumiverb visits

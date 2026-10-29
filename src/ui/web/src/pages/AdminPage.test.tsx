@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   getSetupProgress: vi.fn(),
   setSetupProgress: vi.fn(),
   getCurrentUser: vi.fn(),
+  getAccountVisits: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -46,6 +47,7 @@ function health(over: Partial<SystemHealth> = {}): SystemHealth {
 const STEPS = ["storage", "network", "find", "ai", "people", "library"];
 
 beforeEach(() => {
+  api.getAccountVisits.mockResolvedValue({ since: "2026-10-01", places: [] });
   api.getCurrentUser.mockResolvedValue({ user_id: "usr_1", email: "a@b.c", role: "admin", server_admin: true });
   api.getSetupProgress.mockResolvedValue({ steps: STEPS, done: STEPS, dismissed: false, finished: true });
   api.getSystemHealth.mockResolvedValue(health());
@@ -208,5 +210,31 @@ describe("AdminPage setting up", () => {
     renderPage();
     await screen.findByRole("list", { name: "System health" });
     expect(screen.queryByRole("region", { name: "Setting up" })).toBeNull();
+  });
+});
+
+
+describe("AdminPage's visits (ADR-025)", () => {
+  const none = { visitors: 0, times: 0 };
+  it("lists every place with visits and the demos, each linked to its page", async () => {
+    api.getAccountVisits.mockResolvedValue({ since: "2026-10-01", places: [
+      { place: "project", place_id: "prj_1", name: "Beach day", bots: 0, view: { visitors: 3, times: 4 },
+        open: { visitors: 2, times: 5 }, play: none, export: none, demo: none },
+      { place: "account", place_id: "ten_1", name: null, bots: 0, view: none, open: none, play: none, export: none,
+        demo: { visitors: 2, times: 2 } },
+    ] });
+    renderPage();
+    const list = await screen.findByRole("list", { name: "Visits" });
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows[0].textContent).toContain("Beach day");
+    expect(rows[0].textContent).toContain("3 visitors, 4 views · 5 opened");
+    expect(within(rows[0]).getByRole("link").getAttribute("href")).toBe("/projects/prj_1");
+    expect(rows[1].textContent).toContain("Demo");
+    expect(rows[1].textContent).toContain("2 demos started");
+  });
+
+  it("says when there are none", async () => {
+    renderPage();
+    expect(await screen.findByText("No visits in the last 30 days.")).toBeTruthy();
   });
 });

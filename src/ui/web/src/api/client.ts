@@ -319,8 +319,9 @@ export async function restoreLibrary(libraryId: string): Promise<LibraryResponse
   return apiFetch<LibraryResponse>(apiPath`/libraries/${libraryId}/restore`, { method: "POST" });
 }
 
-export async function getLibrary(libraryId: string): Promise<LibraryResponse> {
-  return apiFetch<LibraryResponse>(apiPath`/libraries/${libraryId}`);
+/** A library. `query`: a public page's own (where its visitor came from, lib/cameFrom.ts). */
+export async function getLibrary(libraryId: string, query = ""): Promise<LibraryResponse> {
+  return apiFetch<LibraryResponse>(apiPath`/libraries/${libraryId}` + query);
 }
 
 /** Who can see and edit a library: everyone in the account with their role on it (its admin's). */
@@ -2254,6 +2255,50 @@ function filenameFromDisposition(header: string | null): string | null {
 
 /** Export a project as a bin of master clips for an editor: videos, and photos as
  * stills, pointing at the originals as the libraries know them (relinked in the editor). */
+/** Visits (ADR-025): visitors (each day's added up) and times. */
+export interface VisitCount {
+  visitors: number;
+  times: number;
+}
+
+/** What visitors did: a public page seen, a clip opened and a video played there; a project exported; a demo started. */
+export interface VisitCounts {
+  view: VisitCount;
+  open: VisitCount;
+  play: VisitCount;
+  export: VisitCount;
+  demo: VisitCount;
+}
+
+export interface PlaceVisits {
+  since: string;
+  days: (VisitCounts & { day: string })[];
+  totals: VisitCounts;
+  clips: { asset_id: string; opened: number; played: number }[];
+  sources: { site: string; visitors: number }[];
+  bots: number;
+}
+
+export interface AccountVisits {
+  since: string;
+  places: (VisitCounts & { place: "project" | "library" | "account"; place_id: string; name: string | null; bots: number })[];
+}
+
+/** A project's visits: its owner's and an account admin's. */
+export async function getProjectVisits(projectId: string, days: number): Promise<PlaceVisits> {
+  return apiFetch<PlaceVisits>(apiPath`/projects/${projectId}/visits` + `?days=${days}`);
+}
+
+/** A public library's visits: its admins'. */
+export async function getLibraryVisits(libraryId: string, days: number): Promise<PlaceVisits> {
+  return apiFetch<PlaceVisits>(apiPath`/libraries/${libraryId}/visits` + `?days=${days}`);
+}
+
+/** Every place's visits, and the demos: an account admin's. */
+export async function getAccountVisits(days: number): Promise<AccountVisits> {
+  return apiFetch<AccountVisits>(`/visits?days=${days}`);
+}
+
 export async function exportProject(projectId: string, format: string): Promise<ProjectExportFile> {
   const qs = new URLSearchParams({ format });
   const res = await authFetch(apiPath`/projects/${projectId}/export` + `?${qs.toString()}`);

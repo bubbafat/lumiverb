@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import {
   ApiError,
+  getAccountVisits,
   getCurrentUser,
   getSetupProgress,
   listLibraries,
@@ -221,7 +222,63 @@ export default function AdminPage() {
           </ul>
         )}
       </section>
+
+      <VisitsSection />
     </div>
+  );
+}
+
+const VISIT_DAYS = 30;
+
+/** Every place's visits in the last 30 days, and the demos started (ADR-025): each a row, its own page linked. */
+function VisitsSection() {
+  const { data, error } = useQuery({ queryKey: ["account-visits", VISIT_DAYS], queryFn: () => getAccountVisits(VISIT_DAYS) });
+  return (
+    <section>
+      <SectionHeader title="Visits"
+        subtitle={`What public pages' visitors did in the last ${VISIT_DAYS} days, counted on this server; nobody's address is kept`} />
+      {error ? (
+        <p role="alert" className="text-sm text-red-300">
+          {error instanceof ApiError ? error.message : "Couldn't reach the server. Try again."}
+        </p>
+      ) : !data ? (
+        <div className="h-16 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />
+      ) : data.places.length === 0 ? (
+        <p className="text-sm text-gray-500 italic">No visits in the last {VISIT_DAYS} days.</p>
+      ) : (
+        <ul aria-label="Visits" className="space-y-3">
+          {data.places.map((p) => {
+            const said = [
+              p.view.times ? `${p.view.visitors.toLocaleString()} ${p.view.visitors === 1 ? "visitor" : "visitors"}, ${p.view.times.toLocaleString()} ${p.view.times === 1 ? "view" : "views"}` : "",
+              p.open.times ? `${p.open.times.toLocaleString()} opened` : "",
+              p.play.times ? `${p.play.times.toLocaleString()} played` : "",
+              p.export.times ? `${p.export.times.toLocaleString()} ${p.export.times === 1 ? "export" : "exports"}` : "",
+              p.demo.times ? `${p.demo.times.toLocaleString()} ${p.demo.times === 1 ? "demo" : "demos"} started` : "",
+            ].filter(Boolean).join(" · ");
+            const title = p.place === "account" ? "Demo" : p.name ?? "Deleted";
+            const link = p.place === "project" && p.name ? `/projects/${encodeURIComponent(p.place_id)}`
+              : p.place === "library" && p.name ? `/libraries/${encodeURIComponent(p.place_id)}/settings` : null;
+            return (
+              <li key={`${p.place}:${p.place_id}`}
+                  className="flex items-center gap-3 rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate font-medium text-gray-100">{title}</span>
+                    <span className="shrink-0 text-xs text-gray-500">
+                      {p.place === "project" ? "Project" : p.place === "library" ? "Library" : "Try it as a viewer"}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-sm text-gray-400">{said}</p>
+                </div>
+                {link && (
+                  <Link to={link} className="shrink-0 text-sm text-indigo-400 hover:text-indigo-300">Open →</Link>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 

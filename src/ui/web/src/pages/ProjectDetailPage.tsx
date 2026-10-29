@@ -9,11 +9,13 @@ import {
   trashProject,
   restoreProjectClips,
   removeAssetsFromProject,
+  getProjectVisits,
   ApiError,
 } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { ProjectPicker } from "../components/ProjectPicker";
 import { ExportButton } from "../components/ExportButton";
+import { VisitsPanel } from "../components/VisitsPanel";
 import { Lightbox } from "../components/Lightbox";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
@@ -59,6 +61,7 @@ export default function ProjectDetailPage() {
   const [editDesc, setEditDesc] = useState("");
   const [editSort, setEditSort] = useState("manual");
   const [editVisibility, setEditVisibility] = useState("private");
+  const [visitsOpen, setVisitsOpen] = useState(false);
   const [settingsError, setSettingsError] = useState("");
 
 
@@ -314,6 +317,15 @@ export default function ProjectDetailPage() {
         <div className="flex items-center gap-2">
           <ZoomControl value={zoomLevel} onChange={setZoomLevel} />
           <ExportButton projectId={project.project_id} />
+          {(isOwner || isAdmin) && (
+            <button
+              type="button"
+              onClick={() => setVisitsOpen(true)}
+              className="rounded-lg border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-800/50"
+            >
+              Visits
+            </button>
+          )}
           <button
             type="button"
             onClick={openSettings}
@@ -643,6 +655,28 @@ export default function ProjectDetailPage() {
               </div>
             </form>
 
+          </div>
+        </div>
+      )}
+
+      {/* Its visits (ADR-025): its owner's and an account admin's */}
+      {visitsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+             onClick={(e) => { if (e.target === e.currentTarget) setVisitsOpen(false); }}>
+          <div role="dialog" aria-label="Visits"
+               className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-gray-700 bg-gray-900 p-5 text-gray-200">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Visits</h2>
+              <button type="button" onClick={() => setVisitsOpen(false)} aria-label="Close"
+                      className="text-xl leading-none text-gray-400 hover:text-gray-200">×</button>
+            </div>
+            {project.visibility !== "public" && (
+              <p className="mb-3 text-sm text-gray-400">
+                This project isn't public now: only what was counted while it was, and its exports, show here.
+              </p>
+            )}
+            <VisitsPanel queryKey={["project-visits", project.project_id]}
+                         load={(days) => getProjectVisits(project.project_id, days)} exports />
           </div>
         </div>
       )}
