@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
+from src.producers.clip import CLIP_MODEL_ID
 from src.server import images
 from src.server.api.dependencies import get_tenant_session
 from src.server.api.errors import ApiError
@@ -25,6 +26,8 @@ router = APIRouter(prefix="/v1/similar", tags=["similarity"])
 
 # The longest embedding a client sends (CLIP is 512 or 768; Apple's feature print up to 2048).
 MAX_VECTOR = 4096
+# A video's scenes compared, at most (spread over it): a long walk-around has hundreds.
+MOST_SOURCE_SCENES = 12
 
 
 def _decode_image(image_b64: str) -> bytes:
@@ -54,6 +57,8 @@ class SimilarHit(BaseModel):
     file_size: int | None = None
     width: int | None = None
     height: int | None = None
+    # A video found by its scenes: where the scene most like it starts.
+    at_ms: int | None = None
 
 
 class SimilarityResponse(BaseModel):
@@ -197,45 +202,48 @@ def find_similar(
     # Fetch top-(limit*3) candidates for re-ranking pool
     K = min(limit * 3, 100)
 
-    # Auto-detect embedding model from source asset when not specified
-    if model_id and model_version:
-        source_emb = emb_repo.get(asset_id, model_id, model_version)
-    elif model_id:
-        # model_id given but no version — find any embedding with that model
-        source_emb = emb_repo.get_any(asset_id)
-        if source_emb and source_emb.model_id != model_id:
-            source_emb = None
+    if (source.media_type or "").startswith("video"):
+        # A video by its scenes' pictures (src/producers/scene_likeness): clips like any of them.
+        shown = emb_repo.scene_vectors(asset_id, MOST_SOURCE_SCENES)
+        if shown is None:
+            return SimilarityResponse(source_asset_id=asset_id, hits=[], total=0, embedding_available=False)
+        resolved_model_id, (resolved_model_version, vectors) = CLIP_MODEL_ID, shown
     else:
-        # No model specified — use whatever embedding the asset has
-        source_emb = emb_repo.get_any(asset_id)
+        # Auto-detect embedding model from source asset when not specified
+        if model_id and model_version:
+            source_emb = emb_repo.get(asset_id, model_id, model_version)
+        elif model_id:
+            # model_id given but no version — find any embedding with that model
+            source_emb = emb_repo.get_any(asset_id)
+            if source_emb and source_emb.model_id != model_id:
+                source_emb = None
+        else:
+            # No model specified — use whatever embedding the asset has
+            source_emb = emb_repo.get_any(asset_id)
 
-    if source_emb is not None:
+        if source_emb is None:
+            return SimilarityResponse(
+                source_asset_id=asset_id,
+                hits=[],
+                total=0,
+                embedding_available=False,
+            )
         resolved_model_id = source_emb.model_id
         resolved_model_version = source_emb.model_version
-    else:
-        resolved_model_id = model_id or "clip"
-        resolved_model_version = model_version or "unknown"
+        vectors = [[float(x) for x in source_emb.embedding_vector]]
 
-    clip_emb = source_emb
-
-    if clip_emb is None:
-        return SimilarityResponse(
-            source_asset_id=asset_id,
-            hits=[],
-            total=0,
-            embedding_available=False,
-        )
-
-    clip_candidates = emb_repo.find_similar(
+    # Photos by their vectors, videos by their scenes' (find_alike).
+    alike = emb_repo.find_alike(
         library_id=library_id,
         model_id=resolved_model_id,
         model_version=resolved_model_version,
-        vector=[float(x) for x in clip_emb.embedding_vector],
+        vectors=vectors,
         limit=K,
         exclude_asset_id=asset_id,
         scope=scope,
     )
-    scores: dict[str, float] = {cand_id: dist for cand_id, dist in clip_candidates}
+    scores: dict[str, float] = {a.asset_id: a.distance for a in alike}
+    moments = {a.asset_id: a.at_ms for a in alike}
 
     # Person-based rerank: boost candidates that share a named person with source
     if scores:
@@ -274,6 +282,7 @@ def find_similar(
                 file_size=asset.file_size,
                 width=asset.width,
                 height=asset.height,
+                at_ms=moments.get(cand_id),
             )
         )
     if getattr(request.state, "is_public_request", False):
@@ -437,16 +446,17 @@ def _search_by_vector(
     scene_pool_size = max(limit * 5, 100) if image_bytes else limit
     scene_offset = 0 if image_bytes else offset
 
-    scene_candidates = emb_repo.find_similar(
+    # Photos by their vectors, videos by their scenes' (find_alike).
+    alike = emb_repo.find_alike(
         library_id=library_id,
         model_id=model_id,
         model_version=model_version,
-        vector=vector,
-        limit=scene_pool_size,
-        offset=scene_offset,
-        exclude_asset_id=None,
+        vectors=[vector],
+        limit=scene_pool_size + scene_offset,
         scope=scope,
-    )
+    )[scene_offset:]
+    scene_candidates = [(a.asset_id, a.distance) for a in alike]
+    moments = {a.asset_id: a.at_ms for a in alike}
 
     # ── Identity path: only runs when the client uploaded image bytes ──
     # We could surface face errors to the caller, but the failure mode
@@ -521,6 +531,7 @@ def _search_by_vector(
             file_size=asset.file_size,
             width=asset.width,
             height=asset.height,
+            at_ms=moments.get(cand_id),
         )
         for cand_id, dist in ranked
         if (asset := assets_by_id.get(cand_id)) is not None

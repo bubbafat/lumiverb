@@ -5,7 +5,8 @@ it, a machine's description and tags, its vectors. What each producer still need
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import and_, bindparam, column, text
@@ -25,6 +26,7 @@ from src.server.models.tenant import (
     AssetMetadata,
     Library,
     VideoFacetRow,
+    VideoScene,
 )
 from ulid import ULID
 # Canonical view for non-trashed assets. Use in raw SQL (e.g. FROM active_assets).
@@ -1379,6 +1381,69 @@ class AssetMetadataRepository:
         return list(self._session.exec(stmt).all())
 
 
+def _scope_conditions(scope: SimilarityScope | None, params: dict) -> list[str]:
+    """The conditions a similarity scope puts on the clips found (active_assets, as a), its values put in params."""
+    conditions: list[str] = []
+    if scope is None:
+        return conditions
+    if scope.date_range:
+        dr = scope.date_range
+        if dr.from_ts is not None:
+            conditions.append(
+                "a.taken_at IS NOT NULL AND a.taken_at >= to_timestamp(:from_ts) AT TIME ZONE 'UTC'"
+            )
+            params["from_ts"] = dr.from_ts
+        if dr.to_ts is not None:
+            conditions.append(
+                "a.taken_at IS NOT NULL AND a.taken_at <= to_timestamp(:to_ts) AT TIME ZONE 'UTC'"
+            )
+            params["to_ts"] = dr.to_ts
+    if scope.asset_types and scope.asset_types != "all":
+        # scope.asset_types is list["image" | "video"]; match media_type by prefix
+        type_patterns = [f"{t}%" for t in scope.asset_types]
+        placeholders = [f"a.media_type LIKE :asset_type_pat_{i}" for i in range(len(type_patterns))]
+        conditions.append("(" + " OR ".join(placeholders) + ")")
+        for i, pat in enumerate(type_patterns):
+            params[f"asset_type_pat_{i}"] = pat
+    if scope.cameras:
+        # OR across (make, model) pairs; within each pair AND
+        cam_clauses = []
+        for i, c in enumerate(scope.cameras):
+            if c.make is not None and c.model is not None:
+                cam_clauses.append(
+                    "(a.camera_make = :cam_make_{i} AND a.camera_model = :cam_model_{i})".format(i=i)
+                )
+                params[f"cam_make_{i}"] = c.make
+                params[f"cam_model_{i}"] = c.model
+            elif c.make is not None:
+                cam_clauses.append("a.camera_make = :cam_make_{i}".format(i=i))
+                params[f"cam_make_{i}"] = c.make
+            elif c.model is not None:
+                cam_clauses.append("a.camera_model = :cam_model_{i}".format(i=i))
+                params[f"cam_model_{i}"] = c.model
+        if cam_clauses:
+            conditions.append("(" + " OR ".join(cam_clauses) + ")")
+    return conditions
+
+
+# The vectors a similarity search asks about, as a table (asked: vec), each cast once.
+_ASKED = "WITH asked AS MATERIALIZED (SELECT CAST(t AS vector) AS vec FROM unnest(CAST(:vecs AS text[])) t)"
+
+
+def _vector_texts(vectors: Sequence[Sequence[float]]) -> list[str]:
+    return [str([float(x) for x in v]) for v in vectors]
+
+
+@dataclass(frozen=True)
+class Alike:
+    """A clip found like a picture: its cosine distance (lower is more alike) and, for a video found by its
+    scenes, where the scene most like it starts."""
+
+    asset_id: str
+    distance: float
+    at_ms: int | None = None
+
+
 class AssetEmbeddingRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -1468,43 +1533,7 @@ class AssetEmbeddingRepository:
         if exclude_asset_id is not None:
             conditions.append("ae.asset_id != :exclude_id")
             params["exclude_id"] = exclude_asset_id
-        if scope and scope.date_range:
-            dr = scope.date_range
-            if dr.from_ts is not None:
-                conditions.append(
-                    "a.taken_at IS NOT NULL AND a.taken_at >= to_timestamp(:from_ts) AT TIME ZONE 'UTC'"
-                )
-                params["from_ts"] = dr.from_ts
-            if dr.to_ts is not None:
-                conditions.append(
-                    "a.taken_at IS NOT NULL AND a.taken_at <= to_timestamp(:to_ts) AT TIME ZONE 'UTC'"
-                )
-                params["to_ts"] = dr.to_ts
-        if scope and scope.asset_types and scope.asset_types != "all":
-            # scope.asset_types is list["image" | "video"]; match media_type by prefix
-            type_patterns = [f"{t}%" for t in scope.asset_types]
-            placeholders = [f"a.media_type LIKE :asset_type_pat_{i}" for i in range(len(type_patterns))]
-            conditions.append("(" + " OR ".join(placeholders) + ")")
-            for i, pat in enumerate(type_patterns):
-                params[f"asset_type_pat_{i}"] = pat
-        if scope and scope.cameras:
-            # OR across (make, model) pairs; within each pair AND
-            cam_clauses = []
-            for i, c in enumerate(scope.cameras):
-                if c.make is not None and c.model is not None:
-                    cam_clauses.append(
-                        "(a.camera_make = :cam_make_{i} AND a.camera_model = :cam_model_{i})".format(i=i)
-                    )
-                    params[f"cam_make_{i}"] = c.make
-                    params[f"cam_model_{i}"] = c.model
-                elif c.make is not None:
-                    cam_clauses.append("a.camera_make = :cam_make_{i}".format(i=i))
-                    params[f"cam_make_{i}"] = c.make
-                elif c.model is not None:
-                    cam_clauses.append("a.camera_model = :cam_model_{i}".format(i=i))
-                    params[f"cam_model_{i}"] = c.model
-            if cam_clauses:
-                conditions.append("(" + " OR ".join(cam_clauses) + ")")
+        conditions += _scope_conditions(scope, params)
         where = " AND ".join(conditions)
         sql = f"""
                 SELECT ae.asset_id,
@@ -1517,3 +1546,131 @@ class AssetEmbeddingRepository:
             """
         rows = self._session.execute(text(sql), params).fetchall()
         return [(r.asset_id, float(r.distance)) for r in rows]
+
+    def nearest_scenes(
+        self,
+        library_id: str,
+        model_version: str,
+        vectors: Sequence[Sequence[float]],
+        limit: int,
+        exclude_asset_id: str | None = None,
+        scope: SimilarityScope | None = None,
+    ) -> list[Alike]:
+        """Videos by their scenes' pictures (video_scenes.likeness, CLIP's: src/producers/scene_likeness) nearest
+        any of the vectors, each video once, by its scene shown nearest one (at_ms its start), nearest first; the
+        scenes' vectors made with model_version, as a photo's model_version says (only those are as long)."""
+        conditions = [
+            "a.library_id = :library_id",
+            "a.availability = 'online'",
+            "s.staged IS NULL",
+            "s.likeness IS NOT NULL",
+            "s.likeness_model = :model_version",
+        ]
+        params: dict = {"vecs": _vector_texts(vectors), "library_id": library_id, "model_version": model_version,
+                        "limit": limit}
+        if exclude_asset_id is not None:
+            conditions.append("s.asset_id != :exclude_id")
+            params["exclude_id"] = exclude_asset_id
+        conditions += _scope_conditions(scope, params)
+        rows = self._session.execute(text(f"""
+                {_ASKED}
+                SELECT asset_id, start_ms, distance FROM (
+                    SELECT DISTINCT ON (s.asset_id) s.asset_id, s.start_ms, s.likeness <=> q.vec AS distance
+                    FROM video_scenes s
+                    JOIN active_assets a ON a.asset_id = s.asset_id
+                    CROSS JOIN asked q
+                    WHERE {" AND ".join(conditions)}
+                    ORDER BY s.asset_id, distance
+                ) nearest
+                ORDER BY distance
+                LIMIT :limit
+            """), params).fetchall()
+        return [Alike(r.asset_id, float(r.distance), int(r.start_ms)) for r in rows]
+
+    def photos_near_any(
+        self,
+        library_id: str,
+        model_id: str,
+        model_version: str,
+        vectors: Sequence[Sequence[float]],
+        limit: int,
+        exclude_asset_id: str | None = None,
+        scope: SimilarityScope | None = None,
+    ) -> list[Alike]:
+        """find_similar for several vectors at once (a video's scenes'): each clip by the one it's nearest, nearest
+        first. One pass over the vectors kept, not one a vector."""
+        conditions = [
+            "a.library_id = :library_id",
+            "a.availability = 'online'",
+            "ae.model_id = :model_id",
+            "ae.model_version = :model_version",
+        ]
+        params: dict = {"vecs": _vector_texts(vectors), "library_id": library_id, "model_id": model_id,
+                        "model_version": model_version, "limit": limit}
+        if exclude_asset_id is not None:
+            conditions.append("ae.asset_id != :exclude_id")
+            params["exclude_id"] = exclude_asset_id
+        conditions += _scope_conditions(scope, params)
+        rows = self._session.execute(text(f"""
+                {_ASKED}
+                SELECT ae.asset_id, min(ae.embedding_vector <=> q.vec) AS distance
+                FROM asset_embeddings ae
+                JOIN active_assets a ON a.asset_id = ae.asset_id
+                CROSS JOIN asked q
+                WHERE {" AND ".join(conditions)}
+                GROUP BY ae.asset_id
+                ORDER BY distance
+                LIMIT :limit
+            """), params).fetchall()
+        return [Alike(r.asset_id, float(r.distance)) for r in rows]
+
+    def scene_vectors(self, asset_id: str, most: int) -> tuple[str, list[list[float]]] | None:
+        """A video's scenes' pictures' vectors as it shows them (their model, and the vectors in order, `most` at
+        most, spread over the video), of the model most of them are from; None when none has one."""
+        rows = self._session.exec(
+            select(VideoScene.likeness_model, VideoScene.likeness)
+            .where(VideoScene.asset_id == asset_id, VideoScene.staged.is_(None),  # type: ignore[union-attr]
+                   VideoScene.likeness.is_not(None))  # type: ignore[union-attr]
+            .order_by(VideoScene.start_ms)
+        ).all()
+        if not rows:
+            return None
+        models = [m for m, _ in rows]
+        model = max(dict.fromkeys(models), key=models.count)  # the first of the most common
+        vectors = [[float(x) for x in v] for m, v in rows if m == model]
+        if len(vectors) > most > 1:  # spread from its first scene to its last
+            vectors = [vectors[round(i * (len(vectors) - 1) / (most - 1))] for i in range(most)]
+        return model, vectors
+
+    def find_alike(
+        self,
+        library_id: str,
+        model_id: str,
+        model_version: str,
+        vectors: Sequence[Sequence[float]],
+        limit: int,
+        exclude_asset_id: str | None = None,
+        scope: SimilarityScope | None = None,
+    ) -> list[Alike]:
+        """Clips like any of these pictures (a photo's vector, or a video's scenes'), nearest first, `limit` at
+        most: photos by their vectors (find_similar, photos_near_any), and, for CLIP's, videos by their scenes
+        (nearest_scenes), each clip by the pair nearest."""
+        from src.producers.clip import CLIP_MODEL_ID
+
+        if not vectors:
+            return []
+        if len(vectors) == 1:  # by the vectors' index, where it helps
+            found = [Alike(aid, d) for aid, d in self.find_similar(
+                library_id=library_id, model_id=model_id, model_version=model_version,
+                vector=[float(x) for x in vectors[0]], limit=limit, exclude_asset_id=exclude_asset_id, scope=scope)]
+        else:
+            found = self.photos_near_any(library_id, model_id, model_version, vectors, limit,
+                                         exclude_asset_id=exclude_asset_id, scope=scope)
+        if model_id == CLIP_MODEL_ID:
+            found += self.nearest_scenes(library_id, model_version, vectors, limit,
+                                         exclude_asset_id=exclude_asset_id, scope=scope)
+        best: dict[str, Alike] = {}
+        for alike in found:
+            if alike.asset_id not in best or alike.distance < best[alike.asset_id].distance:
+                best[alike.asset_id] = alike
+        return sorted(best.values(), key=lambda a: a.distance)[:limit]

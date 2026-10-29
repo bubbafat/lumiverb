@@ -70,6 +70,8 @@ export default function BrowsePage() {
   // ref, because the grid mounts only once there are assets.
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
   const [lightboxAsset, setLightboxAsset] = useState<AssetPageItem | null>(null);
+  // A similar video opened at the scene it was found by (seconds); only while that clip is shown.
+  const [similarStart, setSimilarStart] = useState<{ assetId: string; startAt: number } | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [zoomLevel, setZoomLevel] = useLocalStorage("lv_grid_zoom", 2);
@@ -997,9 +999,11 @@ export default function BrowsePage() {
           libraryId={libraryId}
           isPublic={isPublicMode}
           publicLibraryId={libraryId}
-          onSimilarClick={(similarAsset) => {
+          onSimilarClick={(similarAsset, startAt) => {
+            setSimilarStart(startAt != null ? { assetId: similarAsset.asset_id, startAt } : null);
             setLightboxAsset(similarAsset);
           }}
+          startAt={similarStart?.assetId === lightboxAsset.asset_id ? similarStart.startAt : undefined}
           onFilterClick={(params) => {
             setLightboxAsset(null);
             if (params.camera_make) handleSetFilter("camera_make", params.camera_make);
