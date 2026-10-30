@@ -36,6 +36,7 @@ import pytest
 from sqlalchemy import text
 
 from src.producers.prompts import SCENE_PROMPT, VISION_PROMPT
+from src.producers.scene_vision import NOT_OFFERED
 from src.server.database import get_tenant_session, tenant_database_url
 from src.shared.producers import settings_hash
 from tests.producer_fakes import due
@@ -56,6 +57,8 @@ RAISED_SINCE = {"lumiverb.video.scenes": ("4", "5")}  # pictures compared by a w
 # Prompts changed on purpose since, (then, now): a row with the new one reads as it did then (Oct 29: scenes are a
 # video's frames, described with their own prompt, not the photos').
 PROMPTS_SINCE = {"lumiverb.video.scene_descriptions": (VISION_PROMPT, SCENE_PROMPT)}
+# Settings offered since, and why they weren't then (Oct 29: a model that thinks first needs a longer answer).
+OFFERED_SINCE = {"lumiverb.video.scene_descriptions": {"max_tokens": NOT_OFFERED}}
 
 
 def _as_then(row: dict) -> dict:
@@ -72,6 +75,8 @@ def _as_then(row: dict) -> dict:
         row = json.loads(json.dumps(row).replace(now, then))
         if "settings_hash" in row:
             row["settings_hash"] = settings_hash(row["settings"])
+    for key, why in OFFERED_SINCE.get(row.get("artifact"), {}).items():
+        row["fields"] = [{**f, "fixed": why} if f["key"] == key else f for f in row.get("fields", [])]
     return row
 
 
