@@ -62,7 +62,7 @@ class Setting:
     key: str
     default: Any
     label: str
-    kind: str = "int"  # "int" | "float" | "text" | "bool" | "level" | "notch"
+    kind: str = "int"  # "int" | "float" | "text" | "bool" | "level" | "notch" | "choice"
     minimum: float | None = None
     maximum: float | None = None
     unit: str = ""
@@ -85,13 +85,16 @@ class Setting:
     # the numbers before it makes nothing stale, and a producer's work reads
     # the numbers; each encoder maps them to its own (NVENC's CQ from x264's
     # CRF). Retuning a notch makes what it made another way than now.
+    # kind "choice": one of its values, as it is (a transcript's language).
     choices: tuple[str, ...] = ()
     means: dict[str, dict[str, Any]] = field(default_factory=dict, hash=False, compare=False)
 
     def check(self, value: Any) -> Any:
         """The value as stored, or ValueError saying what's wrong with it."""
-        if self.kind in ("level", "notch"):
+        if self.kind in ("level", "notch", "choice"):
             if value not in self.choices:
+                if self.kind == "choice" and len(self.choices) > 6:  # a language: Settings lists them
+                    raise ValueError(f"{self.label} is one of its {len(self.choices)} choices, as Settings lists them")
                 raise ValueError(f"{self.label} is one of {', '.join(self.choices)}")
             return value
         if self.kind == "bool":

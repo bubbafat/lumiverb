@@ -1157,7 +1157,7 @@ def test_changing_the_transcripts_model_makes_transcripts_stale(env, none):
     assert _counts(lib, "lumiverb.video.transcript")["stale"] == 1
     r = client.get("/v1/producers", params={"counts": "false"}, headers=headers)
     assert {p["artifact"]: p for p in r.json()["producers"]}["lumiverb.video.transcript"]["settings"] == {
-        "model": "medium", "vad_min_silence_ms": 500}
+        "model": "medium", "vad_min_silence_ms": 500, "language": "detect"}
     # The vision model is the vision job's alone.
     fake, _ = _machines({GAMING_PC: (QWEN,)})
     with fake:

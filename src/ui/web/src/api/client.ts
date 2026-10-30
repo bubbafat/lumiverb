@@ -1138,7 +1138,8 @@ export interface SettingField {
   key: string;
   label: string;
   // "notch": a quality, one of choices ("good", "better", "best"), not an encoder's number (ADR-018 decision 6).
-  kind: "int" | "float" | "text" | "bool" | "level" | "notch";
+  // "choice": one of choices, as it is (a transcript's language).
+  kind: "int" | "float" | "text" | "bool" | "level" | "notch" | "choice";
   value: unknown;
   default: unknown;
   minimum: number | null;
@@ -1149,7 +1150,8 @@ export interface SettingField {
   /** Changing it makes the artifact again; false: it changes only what's done with what's made
    * (how faces are grouped). Absent: true. */
   remakes?: boolean;
-  /** kind "level": its values, lowest first. Raising it makes nothing again by itself. */
+  /** kind "level": its values, lowest first. Raising it makes nothing again by itself. "notch", "choice": the
+   * values it can be. */
   choices?: string[];
 }
 

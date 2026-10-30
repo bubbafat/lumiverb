@@ -95,7 +95,8 @@ def server():
 def test_the_speech_goes_to_the_server_with_the_model_as_it_names_it(server, speech):
     s = server()
     heard = OpenAITranscriber(s.url + "/", "sk-1", "Systran/faster-whisper-small").transcribe(speech)
-    assert heard == Heard([Segment(0.0, 2.4, " The quick brown fox.")], "english")
+    # no_speech_prob: how likely it thought it wasn't speech (speech.cleaned).
+    assert heard == Heard([Segment(0.0, 2.4, " The quick brown fox.", 0.01)], "english")
     [req] = s.requests
     assert req["path"] == "/v1/audio/transcriptions" and req["auth"] == "Bearer sk-1"
     fields = req["fields"]
@@ -105,6 +106,22 @@ def test_the_speech_goes_to_the_server_with_the_model_as_it_names_it(server, spe
     assert fields["timestamp_granularities[]"][2] == b"segment"
     # It's asked not to skip silences (the worker already did) and to time its segments.
     assert fields["vad_filter"][2] == b"false" and fields["without_timestamps"][2] == b"false"
+    # Detect, as the Language setting's default says: no language sent.
+    assert "language" not in fields
+
+
+def test_a_server_is_asked_to_hear_the_language_chosen(server, speech):
+    """OpenAI's API doesn't say how sure it was of another language, so a server hears the one chosen."""
+    s = server()
+    OpenAITranscriber(s.url, None, "small").transcribe(speech, "en")
+    assert s.requests[0]["fields"]["language"][2] == b"en"
+
+
+@pytest.mark.parametrize(("said", "kept"), [(0.62, 0.62), (0, 0.0), (1, 1.0), (None, None), ("0.6", None),
+                                            (True, None), (1.5, None), (-0.1, None)])
+def test_a_segments_no_speech_is_kept_only_as_a_probability(server, speech, said, kept):
+    s = server((200, {"language": "en", "segments": [{"start": 0, "end": 1, "text": " hi", "no_speech_prob": said}]}))
+    assert OpenAITranscriber(s.url, None, "small").transcribe(speech).segments[0].no_speech == kept
 
 
 def test_no_key_no_authorization(server, speech):
@@ -202,12 +219,15 @@ def _ran(returncode=0, stdout="", stderr=""):
 
 
 def test_the_built_in_whisper_runs_the_model_on_the_speech_in_a_subprocess(speech):
-    out = json.dumps({"segments": [{"start": 0.0, "end": 1.5, "text": " Hi."}], "language": "en"})
+    out = json.dumps({"segments": [{"start": 0.0, "end": 1.5, "text": " Hi.", "no_speech": 0.04}], "language": "en"})
     with patch("subprocess.run", return_value=_ran(stdout=out)) as run:
         heard = BuiltInWhisper("small").transcribe(speech)
-    assert heard == Heard([Segment(0.0, 1.5, " Hi.")], "en")
+    assert heard == Heard([Segment(0.0, 1.5, " Hi.", 0.04)], "en")
     cmd = run.call_args.args[0]
-    assert cmd[1].endswith("transcripts/child.py") and cmd[2:] == ["transcribe", str(speech), "small", "auto"]
+    assert cmd[1].endswith("transcripts/child.py") and cmd[2:] == ["transcribe", str(speech), "small", "auto", ""]
+    with patch("subprocess.run", return_value=_ran(stdout=out)) as run:
+        BuiltInWhisper("small").transcribe(speech, "en")
+    assert run.call_args.args[0][-1] == "en"  # the Language setting's code
 
 
 @pytest.mark.parametrize(("ran", "fault"), [

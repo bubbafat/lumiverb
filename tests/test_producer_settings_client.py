@@ -91,7 +91,7 @@ def test_it_uses_the_servers_settings_and_says_so():
     ps = ProducerSettings(_client({"lumiverb.video.transcript": {"model": "medium"}}))
     assert ps.settings("lumiverb.video.transcript")["model"] == "medium"
     lin = ps.lineage("lumiverb.video.transcript", "sha256:" + "ab" * 32)
-    assert lin == {"producer": "lumiverb.video.transcript", "version": "1",
+    assert lin == {"producer": "lumiverb.video.transcript", "version": "2",
                    "settings_hash": P.settings_hash({**P.effective_settings("lumiverb.video.transcript"), "model": "medium"}),
                    "source_hash": "sha256:" + "ab" * 32}
 

@@ -8,6 +8,8 @@ asked not to skip silences of its own (vad_filter=false: none are left to
 skip) and to time its segments (without_timestamps=false: speaches
 otherwise answers in pieces of up to 30 s). Servers that don't know those
 fields ignore them; current speaches skips short silences whatever it's told.
+With a Language chosen, it's asked to hear that language: OpenAI's API
+doesn't say how sure it was of another, as the built-in's does.
 
 Its address is checked at each request and no redirect is followed
 (src/shared/ai_requests.py). What it says when it fails is the log's: a
@@ -22,7 +24,13 @@ from pathlib import Path
 import requests
 
 from src.processing.workers.captions.base import ENDPOINT_FAULT_STATUSES
-from src.processing.workers.transcripts.base import Heard, Segment, Transcriber, TranscriptError
+from src.processing.workers.transcripts.base import (
+    Heard,
+    Segment,
+    Transcriber,
+    TranscriptError,
+    chance,
+)
 from src.processing.workers.transcripts.speech import speech_seconds, time_allowed
 from src.shared import ai_requests
 
@@ -41,7 +49,7 @@ class OpenAITranscriber(Transcriber):
         self._fingerprint = fingerprint
         self._timeout = timeout
 
-    def transcribe(self, speech_wav: Path) -> Heard:
+    def transcribe(self, speech_wav: Path, language: str = "") -> Heard:
         headers = {"Authorization": f"Bearer {self._key}"} if self._key else {}
         seconds = speech_seconds(speech_wav)
         allowed = self._timeout or time_allowed(seconds)
@@ -52,7 +60,8 @@ class OpenAITranscriber(Transcriber):
                                         files={"file": ("speech.wav", audio, "audio/wav")},
                                         data={"model": self._model, "response_format": "verbose_json",
                                               "timestamp_granularities[]": "segment",
-                                              "vad_filter": "false", "without_timestamps": "false"})
+                                              "vad_filter": "false", "without_timestamps": "false",
+                                              **({"language": language} if language else {})})
         except (ai_requests.AddressRefused, ai_requests.NotItsCertificate, ai_requests.Redirected) as e:
             raise TranscriptError(str(e), endpoint_fault=True) from None
         except requests.ConnectTimeout as e:
@@ -84,7 +93,8 @@ class OpenAITranscriber(Transcriber):
                                       endpoint_fault=True)
             segments = []
         try:
-            heard = [Segment(float(s["start"]), float(s["end"]), str(s.get("text") or "")) for s in segments]
+            heard = [Segment(float(s["start"]), float(s["end"]), str(s.get("text") or ""),
+                             chance(s.get("no_speech_prob"))) for s in segments]
         except (KeyError, TypeError, ValueError) as e:
             raise TranscriptError(f"{self._url} sent segments without times.", endpoint_fault=True) from e
         if seconds and any(s.end > seconds + END_SLACK_SEC for s in heard):
