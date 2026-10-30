@@ -206,7 +206,7 @@ def test_a_failure_says_whether_the_endpoint_was_at_fault(tmp_path, answer, endp
 
 
 def _cut_off(content: str) -> dict:
-    """A reply ended at its longest answer, as Claude Haiku 5.5 answers at 500 tokens: thinking first."""
+    """A reply ended at its longest answer, as Claude Haiku 5.5's may: thinking first."""
     return {"choices": [{"message": {"content": content}, "finish_reason": "length"}]}
 
 
@@ -228,29 +228,29 @@ def test_a_reply_that_runs_out_of_room_says_to_raise_the_longest_answer(tmp_path
             p.describe(_image(tmp_path))
     assert e.value.endpoint_fault is endpoint_fault
     # Asked again once with twice the room, and not again after that: it would end the same.
-    assert [json.loads(b)["max_tokens"] for b in machine.sent] == [500, 1000]
-    assert str(e.value) == ("It ran out of room: it used all 1000 tokens of its answer before finishing (a model that "
+    assert [json.loads(b)["max_tokens"] for b in machine.sent] == [1000, 2000]
+    assert str(e.value) == ("It ran out of room: it used all 2000 tokens of its answer before finishing (a model that "
                             "thinks first can spend them all thinking). Raise its Longest answer in Settings › "
                             "Processing.")
 
 
 def test_a_reply_cut_off_is_asked_again_with_twice_the_room(tmp_path, caplog):
-    """Claude Haiku 5.5 thinks first: a reply cut off at 500 tokens finishes at 1,000, and the log says to raise it."""
+    """Claude Haiku 5.5 thinks first: a reply cut off at 1,000 tokens finishes at 2,000, and the log says to raise it."""
     from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
     from tests.ai_machine_server import local_machine
 
     whole = '{"description": "A troll figurine on a shelf.", "tags": ["troll", "shelf"]}'
 
     def answer(sent):
-        if sent["max_tokens"] < 1000:
+        if sent["max_tokens"] < 2000:
             return 200, _cut_off(""), {}
         return 200, {"choices": [{"message": {"content": whole}, "finish_reason": "stop"}]}, {}
 
     with local_machine(answer) as machine:
         got = OpenAICompatibleCaptionProvider(machine.url, "claude-haiku-5-5").describe(_image(tmp_path))
     assert got == {"description": "A troll figurine on a shelf.", "tags": ["troll", "shelf"]}
-    assert [json.loads(b)["max_tokens"] for b in machine.sent] == [500, 1000]
-    assert any("raise its Longest answer" in r.getMessage() and "500" in r.getMessage() for r in caplog.records)
+    assert [json.loads(b)["max_tokens"] for b in machine.sent] == [1000, 2000]
+    assert any("raise its Longest answer" in r.getMessage() and "1000" in r.getMessage() for r in caplog.records)
 
 
 def test_a_reply_cut_off_at_the_most_room_isnt_asked_again(tmp_path):
@@ -289,6 +289,41 @@ def test_a_reply_cut_off_after_its_description_is_kept_not_out_of_room(tmp_path)
                        ) as machine:
         got = OpenAICompatibleCaptionProvider(machine.url, "m").describe(_image(tmp_path))
     assert got == {"description": "A troll figurine on a shelf.", "tags": ["troll"]}
+
+
+def test_ocr_cut_off_is_asked_again_with_twice_the_room(tmp_path):
+    """Thinking first, a model's text read can be cut off too (Claude Haiku 5.5): asked again with twice the room."""
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from tests.ai_machine_server import local_machine
+
+    def answer(sent):
+        if sent["max_tokens"] < 2000:
+            return 200, _cut_off(""), {}
+        return 200, {"choices": [{"message": {"content": "OPEN 24 HOURS"}, "finish_reason": "stop"}]}, {}
+
+    with local_machine(answer) as machine:
+        got = OpenAICompatibleCaptionProvider(machine.url, "claude-haiku-5-5").extract_text(_image(tmp_path))
+    assert got == "OPEN 24 HOURS"
+    assert [json.loads(b)["max_tokens"] for b in machine.sent] == [1000, 2000]
+
+
+@pytest.mark.parametrize(("content", "endpoint_fault"), [("", True), ("OPEN 24 HO", False)])
+def test_ocr_still_cut_off_is_out_of_room_not_no_text(tmp_path, content, endpoint_fault):
+    """Cut off with the most room: neither nothing ("no text") nor the half read is saved, nor is it asked again."""
+    from unittest.mock import patch
+
+    from src.processing.workers.captions.base import CaptionError
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from tests.ai_machine_server import local_machine
+
+    with local_machine((200, _cut_off(content), {})) as machine, \
+            patch.object(OpenAICompatibleCaptionProvider, "_sleep_with_countdown"):
+        p = OpenAICompatibleCaptionProvider(machine.url, "claude-haiku-5-5")
+        with pytest.raises(CaptionError) as e:
+            p.extract_text(_image(tmp_path))
+    assert e.value.endpoint_fault is endpoint_fault
+    assert [json.loads(b)["max_tokens"] for b in machine.sent] == [1000, 2000]
+    assert "It ran out of room: it used all 2000 tokens" in str(e.value)
 
 
 def test_ocr_that_fails_raises_instead_of_saying_no_text(tmp_path):

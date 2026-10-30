@@ -48,15 +48,21 @@ def test_the_frozen_v1_hashes_are_the_registry_s():
     levels = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(levels)
     carried = {"faces": (levels._hash(levels.OLD_DEFAULTS), levels._hash(levels.NEW_SETTINGS))}
+
+    def as_then(settings: dict) -> dict:
+        # Oct 30: the longest answer's default raised from 500 to 1,000, a release's new defaults (held, not remade).
+        return {**settings, "max_tokens": 500} if settings.get("max_tokens") == 1000 else settings
+
     for artifact, (producer, h) in m.V1.items():
         name = now_called(artifact, "artifact")  # the migration's ids, named since (ADR-024)
         assert WAS[name]["producer"] == producer, "the producer then is today's"
         if PRODUCERS[name].version == "1":
             then, now = carried.get(artifact, (h, h))
-            assert h == then and settings_hash(effective_settings(name)) == now, artifact
-    assert m._vision_hash("qwen3-vl:8b") == settings_hash(effective_settings("lumiverb.image.description", account={"vision": "qwen3-vl:8b"}))
-    assert m._vision_hash("qwen3-vl:8b", m._OCR_PROMPT) == settings_hash(
-        effective_settings("lumiverb.image.text", account={"vision": "qwen3-vl:8b"}))
+            assert h == then and settings_hash(as_then(effective_settings(name))) == now, artifact
+    assert m._vision_hash("qwen3-vl:8b") == settings_hash(as_then(
+        effective_settings("lumiverb.image.description", account={"vision": "qwen3-vl:8b"})))
+    assert m._vision_hash("qwen3-vl:8b", m._OCR_PROMPT) == settings_hash(as_then(
+        effective_settings("lumiverb.image.text", account={"vision": "qwen3-vl:8b"})))
 
 
 @pytest.mark.migration

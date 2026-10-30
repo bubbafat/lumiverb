@@ -252,10 +252,15 @@ def _make_test_jpeg(path: Path) -> None:
     img.save(path, format="JPEG")
 
 
-@patch.object(OpenAICompatibleCaptionProvider, "_chat")
+def _replied(text: str) -> dict:
+    """A request's answer (_asked's) that finished."""
+    return {"reply": text, "finish": "stop", "tokens": None}
+
+
+@patch.object(OpenAICompatibleCaptionProvider, "_asked")
 def test_extract_text_direct_response(mock_chat, provider, tmp_path):
     """Direct text response is returned as-is."""
-    mock_chat.return_value = "STOP SIGN"
+    mock_chat.return_value = _replied("STOP SIGN")
     img = tmp_path / "test.jpg"
     _make_test_jpeg(img)
 
@@ -263,10 +268,10 @@ def test_extract_text_direct_response(mock_chat, provider, tmp_path):
     assert result == "STOP SIGN"
 
 
-@patch.object(OpenAICompatibleCaptionProvider, "_chat")
+@patch.object(OpenAICompatibleCaptionProvider, "_asked")
 def test_extract_text_none_response(mock_chat, provider, tmp_path):
     """NONE response returns empty string."""
-    mock_chat.return_value = "NONE"
+    mock_chat.return_value = _replied("NONE")
     img = tmp_path / "test.jpg"
     _make_test_jpeg(img)
 
@@ -274,10 +279,10 @@ def test_extract_text_none_response(mock_chat, provider, tmp_path):
     assert result == ""
 
 
-@patch.object(OpenAICompatibleCaptionProvider, "_chat")
+@patch.object(OpenAICompatibleCaptionProvider, "_asked")
 def test_extract_text_empty_response(mock_chat, provider, tmp_path):
     """Empty response returns empty string."""
-    mock_chat.return_value = ""
+    mock_chat.return_value = _replied("")
     img = tmp_path / "test.jpg"
     _make_test_jpeg(img)
 
@@ -285,10 +290,10 @@ def test_extract_text_empty_response(mock_chat, provider, tmp_path):
     assert result == ""
 
 
-@patch.object(OpenAICompatibleCaptionProvider, "_chat")
+@patch.object(OpenAICompatibleCaptionProvider, "_asked")
 def test_extract_text_reasoning_response(mock_chat, provider, tmp_path):
     """Reasoning-wrapped response has reasoning stripped."""
-    mock_chat.return_value = (
+    mock_chat.return_value = _replied(
         "Based on the visual content, I see a sign.\n"
         "1.  **Main sign:** Large text\n"
         "WELCOME\n"
@@ -303,7 +308,7 @@ def test_extract_text_reasoning_response(mock_chat, provider, tmp_path):
     assert "Based on" not in result
 
 
-@patch.object(OpenAICompatibleCaptionProvider, "_chat")
+@patch.object(OpenAICompatibleCaptionProvider, "_asked")
 def test_extract_text_missing_file(mock_chat, provider):
     """A missing file is an error (not "no text"), the image's not the
     endpoint's, and the model isn't called."""

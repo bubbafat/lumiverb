@@ -63,6 +63,11 @@ PROMPTS_SINCE = {"lumiverb.video.scene_descriptions": (VISION_PROMPT, SCENE_PROM
 OFFERED_SINCE = {"lumiverb.video.scene_descriptions": {"max_tokens": NOT_OFFERED}}
 # Settings added since (Oct 30: a transcript's language), at their defaults: a row reads as it did without them.
 SETTINGS_ADDED_SINCE = {"lumiverb.video.transcript": ("language",)}
+# Defaults raised since, (then, now): a row with the new one reads as it did then (Oct 30: at 500 a fifth of Claude
+# Haiku 5.5's photo descriptions were cut off).
+DEFAULTS_SINCE = {"max_tokens": (500, 1000)}
+# The producers whose made it changes, besides PROMPTS_SINCE's.
+DEFAULTS_RAISED_IN = ("lumiverb.image.description", "lumiverb.image.text")
 
 
 def _as_then(row: dict) -> dict:
@@ -81,6 +86,12 @@ def _as_then(row: dict) -> dict:
             row["settings_hash"] = settings_hash(row["settings"])
     for key, why in OFFERED_SINCE.get(row.get("artifact"), {}).items():
         row["fields"] = [{**f, "fixed": why} if f["key"] == key else f for f in row.get("fields", [])]
+    for key, (then, now) in DEFAULTS_SINCE.items():
+        row["fields"] = [{**f, "default": then, **({"value": then} if f.get("value") == now else {})}
+                         if f["key"] == key and f["default"] == now else f for f in row.get("fields", [])]
+        if row.get("settings", {}).get(key) == now:
+            row["settings"] = {**row["settings"], key: then}
+            row["settings_hash"] = settings_hash(row["settings"])
     for key in SETTINGS_ADDED_SINCE.get(row.get("artifact"), ()):
         row["fields"] = [f for f in row.get("fields", []) if f["key"] != key]
         if key in row.get("settings", {}):
@@ -238,16 +249,17 @@ def test_rename_an_account_from_before_migrated_up_answers_as_it_did_and_down_is
     mine = {row["artifact"]: row for row in now["producers"] if row["artifact"] not in ADDED_SINCE}
     theirs = {row["artifact"]: row for row in then["producers"]}
     assert list(mine) == list(theirs), "the same producers, in the same order"
-    for a in PROMPTS_SINCE:
-        # Made with the prompt before: what was current is stale now, and waits to be remade (an account that had
-        # seen the defaults before holds it, lineage.hold_new_defaults; this one hadn't, and has no model). The rest
-        # of its row is as it was.
+    for a in (*PROMPTS_SINCE, *DEFAULTS_RAISED_IN):
+        # Made with the prompt or a default before: what was current is stale now, and waits to be remade (an
+        # account that had seen the defaults before holds it, lineage.hold_new_defaults; this one hadn't, and has
+        # no model). The rest of its row is as it was.
         before, after = theirs[a]["counts"], mine[a]["counts"]
         assert (after["current"], after["stale"]) == (0, before["stale"] + before["current"]), (before, after)
         mine[a] = {**mine[a], "counts": before, "waits": theirs[a]["waits"]}
         redo = f"redo:{a}"
-        assert len(now["due"][redo]) == after["stale"], (now["due"][redo], after)
-        now["due"][redo] = then["due"][redo]
+        assert len(now["due"].get(redo, [])) == after["stale"], (now["due"].get(redo), after)
+        if redo in then["due"]:
+            now["due"][redo] = then["due"][redo]
     changed = {a: {k: (theirs[a].get(k), mine[a].get(k)) for k in set(theirs[a]) | set(mine[a])
                    if theirs[a].get(k) != mine[a].get(k)} for a in theirs if mine[a] != theirs[a]}
     assert changed == {}, f"producers whose row changed (before, now): {changed}"
