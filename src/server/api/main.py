@@ -128,12 +128,14 @@ async def lifespan(app: FastAPI):
 
     use_models_dir()
     adopt_old_models()
+    # What its stop needs, imported now: an upgrade can remove this version's files before it stops (brew upgrade's
+    # cleanup, Oct 30: "No module named 'src.server.faces'" as 0.1.158 stopped).
+    from src.server.faces import server_face_provider
+
     playback.start_cuts()
     yield
     # Running ffmpeg cuts would otherwise hold the worker's exit for minutes.
     playback.stop_cuts()
-    from src.server.faces import server_face_provider
-
     server_face_provider.close()  # search by image's face process
 
 
