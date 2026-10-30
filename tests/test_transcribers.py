@@ -8,8 +8,11 @@ left the job waits, and no clip is charged) or the clip's.
 
 from __future__ import annotations
 
+import importlib
 import json
+import os
 import subprocess
+import sys
 import threading
 from email.parser import BytesParser
 from email.policy import HTTP
@@ -20,6 +23,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
+from src.processing.workers.transcripts import local
 from src.processing.workers.transcripts.base import Heard, Segment, TranscriptError
 from src.processing.workers.transcripts.local import BuiltInWhisper, unavailable
 from src.processing.workers.transcripts.openai_compatible import OpenAITranscriber
@@ -254,6 +258,52 @@ def test_a_built_in_transcription_that_never_ends_is_the_clips(tmp_path):
             BuiltInWhisper("small").transcribe(wav)
     assert run.call_args.kwargs["timeout"] == 720.0  # ten minutes and four times the speech
     assert e.value.endpoint_fault is False
+
+
+@pytest.fixture
+def nvidia_wheels(tmp_path, monkeypatch):
+    """CUDA's libraries as torch's Linux wheels install them: site-packages/nvidia/<name>/lib. A package of its own
+    (__init__.py), as the wheels' is, so it's the one found ahead of a real one on Linux."""
+    site = tmp_path / "site"
+    (site / "nvidia").mkdir(parents=True)
+    (site / "nvidia" / "__init__.py").write_text("")
+    for name in ("cublas", "cudnn"):
+        (site / "nvidia" / name / "lib").mkdir(parents=True)
+        (site / "nvidia" / name / "lib" / f"lib{name}.so.12").write_bytes(b"")
+    (site / "nvidia" / "nvjitlink").mkdir()  # a package without libraries
+    monkeypatch.syspath_prepend(str(site))
+    for name in [m for m in sys.modules if m == "nvidia" or m.startswith("nvidia.")]:
+        monkeypatch.delitem(sys.modules, name)
+    importlib.invalidate_caches()
+    return site / "nvidia"
+
+
+def test_the_built_in_whisper_is_given_cudas_libraries_on_linux(speech, nvidia_wheels, monkeypatch):
+    """CTranslate2 loads libcublas.so.12 by name, and Linux's loader doesn't look in site-packages: it found it
+    only through torch, which CTranslate2 happens to import (media, Oct 30: without torch, no Whisper on the GPU)."""
+    ours = [str(nvidia_wheels / "cublas" / "lib"), str(nvidia_wheels / "cudnn" / "lib")]
+    assert local.cuda_libraries() == ours
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/before")
+    out = json.dumps({"segments": [], "language": "en"})
+    with patch("subprocess.run", return_value=_ran(stdout=out)) as run:
+        BuiltInWhisper("small").transcribe(speech)
+    env = run.call_args.kwargs["env"]
+    folders = env["LD_LIBRARY_PATH"].split(os.pathsep)
+    assert folders[-1] == "/opt/before" and set(ours) <= set(folders[:-1])
+    assert env["PATH"] == os.environ["PATH"]  # the rest of the environment as it was
+    # A Mac's Whisper uses no CUDA: its environment as it is.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert local.child_environment() is None
+
+
+def test_the_cuda_libraries_reach_the_child(nvidia_wheels, monkeypatch):
+    """The environment is what the child process starts with (a real one)."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+    seen = subprocess.run([sys.executable, "-c", "import os; print(os.environ['LD_LIBRARY_PATH'])"],
+                          capture_output=True, text=True, env=local.child_environment(), check=True)
+    assert str(nvidia_wheels / "cublas" / "lib") in seen.stdout.strip().split(os.pathsep)
 
 
 def test_the_built_in_whisper_needs_faster_whisper():

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -30,6 +31,28 @@ def unavailable() -> str:
     return ""
 
 
+def cuda_libraries() -> list[str]:
+    """The folders of the CUDA libraries installed as Python packages (nvidia-cublas-cu12, nvidia-cudnn-cu12, …,
+    which torch's Linux wheels bring): CTranslate2 loads libcublas.so.12 and cuDNN by name, and the loader doesn't
+    look in site-packages. It finds them today only because CTranslate2 happens to import torch, whose libraries
+    lead there; without that, Whisper on an NVIDIA GPU with no CUDA of its own doesn't load (media, Oct 30)."""
+    spec = importlib.util.find_spec("nvidia")
+    if spec is None or not spec.submodule_search_locations:
+        return []
+    return sorted(str(lib) for root in spec.submodule_search_locations
+                  for lib in Path(root).glob("*/lib") if lib.is_dir())
+
+
+def child_environment() -> dict[str, str] | None:
+    """The child's environment: this one, with the CUDA libraries' folders where Linux's loader looks first;
+    None (this one as it is) where there are none."""
+    folders = cuda_libraries() if sys.platform.startswith("linux") else []
+    if not folders:
+        return None
+    before = os.environ.get("LD_LIBRARY_PATH")
+    return {**os.environ, "LD_LIBRARY_PATH": os.pathsep.join(folders + ([before] if before else []))}
+
+
 class BuiltInWhisper(Transcriber):
     def __init__(self, model: str, *, device: str = "auto", timeout: float | None = None) -> None:
         self._model = model
@@ -40,7 +63,8 @@ class BuiltInWhisper(Transcriber):
         allowed = self._timeout or time_allowed(speech_seconds(speech_wav))
         try:
             proc = subprocess.run([sys.executable, child.__file__, "transcribe", str(speech_wav), self._model,
-                                   self._device, language], capture_output=True, text=True, timeout=allowed)
+                                   self._device, language], capture_output=True, text=True, timeout=allowed,
+                                  env=child_environment())
         except subprocess.TimeoutExpired as e:
             raise TranscriptError(f"Whisper didn't finish within {int(allowed)} s.", endpoint_fault=False) from e
         except OSError as e:
