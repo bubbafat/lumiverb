@@ -389,14 +389,6 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             raise CaptionError(f"Couldn't read the image: {e}", endpoint_fault=False) from e
 
         prompt = self._ocr["prompt"]
-
-        # Words from the prompt that should not appear in OCR results
-        _prompt_noise = {
-            "text", "visible", "readable", "labels", "signs", "screens",
-            "documents", "watermarks", "descriptions", "none", "image",
-            "products", "say", "include",
-        }
-
         content = [{"type": "image_url", "image_url": {"url": data_url}}, {"type": "text", "text": prompt}]
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
@@ -406,14 +398,9 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     raise OutOfRoomError(limit, said_nothing=not any(r["reply"].strip() for r in replies))
                 text = replies[0]["reply"].strip()
                 logger.info("OCR raw response (%d chars): %s", len(text), text[:200] if text else "(empty)")
-                if self._says_none(text):
-                    return ""
-
-                # Strip reasoning preamble (model analysis before actual OCR)
-                cleaned = self._strip_ocr_reasoning(text)
-                if not cleaned:
-                    return ""
-                logger.info("OCR found: %s", cleaned[:200])
+                cleaned = self._text_read(text)
+                if cleaned:
+                    logger.info("OCR found: %s", cleaned[:200])
                 return cleaned
             except Exception as e:
                 # Out of room at the most it was given: the same again would end the same.
@@ -444,6 +431,33 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
     def _says_none(cls, reply: str) -> bool:
         """The reply says the image has no text."""
         return not reply.strip() or cls._NONE.match(reply) is not None
+
+    @classmethod
+    def _text_listed(cls, reply: str) -> list[str] | None:
+        """The texts a reply lists as OCR_PROMPT asks ({"text": [...]}), each once, in order; None when it isn't
+        that (a prompt of an admin's own, or a model that didn't)."""
+        body = re.sub(r"^```(?:json)?\s*|\s*```$", "", reply.strip())
+        start, end = body.find("{"), body.rfind("}")
+        if start < 0 or end < start:
+            return None
+        try:
+            got = json.loads(body[start:end + 1])
+        except ValueError:
+            return None
+        listed = got.get("text") if isinstance(got, dict) else None
+        if not isinstance(listed, list) or not all(isinstance(t, str) for t in listed):
+            return None
+        return list(dict.fromkeys(t.strip() for t in listed if t.strip()))
+
+    def _text_read(self, reply: str) -> str:
+        """The text a reply read, a line each, or "" for none: its list (_text_listed), else NONE (_says_none), else
+        its lines without what reads as a model's reasoning (_strip_ocr_reasoning)."""
+        listed = self._text_listed(reply)
+        if listed is not None:
+            return "\n".join(listed)
+        if self._says_none(reply):
+            return ""
+        return self._strip_ocr_reasoning(reply)
 
     # Phrases that indicate reasoning preamble (not OCR text)
     _REASONING_STARTS = (
@@ -646,7 +660,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         result: dict | str | None = None
         problem = ""
         if what == "read":
-            result = "" if self._says_none(reply) else self._strip_ocr_reasoning(reply)
+            result = self._text_read(reply)
         else:
             try:
                 result = self._parse_description(reply)

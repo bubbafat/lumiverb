@@ -40,10 +40,14 @@ VIDEO_PROMPT = (
     'each a different thing worth finding it by: what people do, notable things, words read on signs, menus or '
     'screens copied exactly in quotes"], "tags": ["5-10 tags"]}'
 )
+# The text alone, as a list (Oct 30): in sentences, Claude Haiku 5.5 says where each text is and what it can't read,
+# and no filter of lines tells its commentary from the text it read.
 OCR_PROMPT = (
     "What text is visible in this image? "
     "Include text from signs, labels, products, screens, documents, or watermarks. "
-    "If none, say NONE."
+    "Copy each piece of text exactly as written, and nothing else: not where it is, and not what you can't read. "
+    'Respond only with valid JSON in this exact format: {"text": ["first text", "second text"]}. '
+    'If there is no readable text, respond {"text": []}.'
 )
 
 

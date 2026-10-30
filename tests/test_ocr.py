@@ -316,6 +316,28 @@ def test_extract_text_a_sign_starting_with_none_is_text(mock_chat, provider, tmp
     assert provider.extract_text(img) == "NONE SHALL PASS"
 
 
+@pytest.mark.parametrize(("reply", "read"), [
+    ('{"text": ["DUFFY\'S", "Kodak"]}', "DUFFY'S\nKodak"),
+    ('```json\n{"text": ["LES CATACOMBES DE PARIS"]}\n```', "LES CATACOMBES DE PARIS"),
+    ('{"text": []}', ""),
+    ('{"text": ["  ", "OPEN", "OPEN", "9 TO 5"]}', "OPEN\n9 TO 5"),
+    # The text alone, though the line it came on said where it was (Claude Haiku 5.5 in sentences, Oct 30).
+    ('{"text": ["Notre-Dame de Paris"]}\nThe banner is cut off and too small to read reliably.', "Notre-Dame de Paris"),
+])
+@patch.object(OpenAICompatibleCaptionProvider, "_asked")
+def test_extract_text_reads_the_list_asked_for(mock_chat, reply, read, provider, tmp_path):
+    mock_chat.return_value = _replied(reply)
+    img = tmp_path / "test.jpg"
+    _make_test_jpeg(img)
+    assert provider.extract_text(img) == read
+
+
+@pytest.mark.parametrize("reply", ['{"description": "a sign"}', '{"text": "OPEN"}', '{"text": [1, 2]}', '{"text": ['])
+def test_a_reply_that_isnt_the_list_is_read_as_lines(reply):
+    """An admin's own prompt, or a model that answered otherwise: its lines, as before."""
+    assert OpenAICompatibleCaptionProvider._text_listed(reply) is None
+
+
 @patch.object(OpenAICompatibleCaptionProvider, "_asked")
 def test_extract_text_reasoning_response(mock_chat, provider, tmp_path):
     """Reasoning-wrapped response has reasoning stripped."""

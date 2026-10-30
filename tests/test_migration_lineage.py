@@ -35,6 +35,7 @@ def test_the_frozen_v1_hashes_are_the_registry_s():
     import importlib.util
 
     from src.producers.names import WAS, now_called
+    from src.producers.prompts import OCR_PROMPT
     from src.shared.producers import PRODUCERS, effective_settings, settings_hash
 
     spec = importlib.util.spec_from_file_location(
@@ -51,7 +52,9 @@ def test_the_frozen_v1_hashes_are_the_registry_s():
 
     def as_then(settings: dict) -> dict:
         # Oct 30: the longest answer's default raised from 500 to 1,000, a release's new defaults (held, not remade).
-        return {**settings, "max_tokens": 500} if settings.get("max_tokens") == 1000 else settings
+        settings = {**settings, "max_tokens": 500} if settings.get("max_tokens") == 1000 else settings
+        # And the text read's prompt, the text alone as a list (Oct 30).
+        return {**settings, "prompt": m._OCR_PROMPT} if settings.get("prompt") == OCR_PROMPT else settings
 
     for artifact, (producer, h) in m.V1.items():
         name = now_called(artifact, "artifact")  # the migration's ids, named since (ADR-024)
