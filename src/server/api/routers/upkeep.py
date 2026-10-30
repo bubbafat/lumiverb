@@ -157,6 +157,15 @@ class VisitsResult(BaseModel):
     added_up: int = 0  # visitors' rows of days before today, added up into totals and deleted (ADR-025)
 
 
+class OtherNamesResult(BaseModel):
+    """People's names the account's AI machine was asked for their other names (src/server/search/
+    person_nicknames.py), and those it didn't answer (asked again next time)."""
+    asked: int = 0
+    failed: int = 0
+    paused: bool = False
+    paused_tenants: list[str] = []
+
+
 class UpkeepResult(BaseModel):
     search_sync: SearchSyncResult
     face_propagate: FacePropagateResult = FacePropagateResult()
@@ -168,6 +177,7 @@ class UpkeepResult(BaseModel):
     expired_uploads: ExpiredUploadsResult = ExpiredUploadsResult()
     idle_keys: IdleKeysResult = IdleKeysResult()
     visits: VisitsResult = VisitsResult()
+    other_names: OtherNamesResult = OtherNamesResult()
     # The admin key with tenants=all: the nightly backup "started", "running" or
     # "not due" (src/server/backups.py); None for one account.
     backup: str | None = None
@@ -445,6 +455,19 @@ def _add_up_visits(session) -> dict:
     return visits.add_up(session)
 
 
+def _ask_for_other_names(session, tenant_id: str) -> dict:
+    """People's names asked about for their other names, where the account lets searches ask its machines."""
+    from src.server.search import assist, person_nicknames
+    from src.server.tenant_settings import get_assisted_search
+
+    if not get_assisted_search(session) or not person_nicknames.unasked(session):
+        return {"asked": 0, "failed": 0}
+    model, ask = assist.asker(tenant_id, max_tokens=person_nicknames.ANSWER_TOKENS, timeout=person_nicknames.WAIT_SEC)
+    if ask is None:
+        return {"asked": 0, "failed": 0}
+    return person_nicknames.ask_about(session, model, ask)
+
+
 def _recluster_if_changed(session) -> dict:
     """Compute the face clusters again when faces changed since they were."""
     from src.server.api.routers.people import cached_clusters, clusters_current, store_clusters
@@ -565,6 +588,8 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
                                     pausable=False, with_account=True)
     idle_keys = _each_account(scope, "Unused keys aren't ended", _end_idle_keys, pausable=False, with_account=True)
     visits = _each_account(scope, "Visits aren't added up", _add_up_visits, pausable=False)
+    other_names = _each_account(scope, "People's other names aren't asked for", _ask_for_other_names,
+                                pausable=True, with_account=True)
     return UpkeepResult(
         search_sync=SearchSyncResult(**sync_result),
         face_propagate=FacePropagateResult(**prop_result),
@@ -576,6 +601,7 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         expired_uploads=ExpiredUploadsResult(**expired_uploads),
         idle_keys=IdleKeysResult(**idle_keys),
         visits=VisitsResult(**visits),
+        other_names=OtherNamesResult(**other_names),
         backup=backup,
         previews_move=previews_move,
         plugins_purged=plugins_purged,

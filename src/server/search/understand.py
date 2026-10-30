@@ -72,10 +72,17 @@ def fold(text_: str) -> str:
 class Person:
     person_id: str
     name: str
+    # Other names for words of their name, as the account's AI machine said (person_nicknames.py): (word, names).
+    others: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     @property
     def words(self) -> tuple[str, ...]:
         return tuple(_WORD.findall(fold(self.name)))
+
+    def names_for(self, word: str) -> frozenset[str]:
+        """Every name that's one name with a word of theirs (folded), itself included: the built-in list's and
+        their own."""
+        return nicknames.same_as(word) | frozenset(n for w, names in self.others if w == word for n in names)
 
 
 @dataclass(frozen=True)
@@ -100,6 +107,7 @@ class Part:
     words: str
     label: str
     person_ids: tuple[str, ...] = ()
+    own_ids: tuple[str, ...] = ()  # of person_ids, those named by their own name, not another of theirs
     places: tuple[Place, ...] = ()
     media: str | None = None
     also: tuple[str, ...] = ()  # the words it matches a clip by too: a name's others ("susan" is "sue" too)
@@ -124,8 +132,8 @@ class Understood:
         return out + ([{"kind": "words", "words": self.rest, "label": self.rest}] if self.rest else [])
 
 
-def _one_name(typed: str, word: str) -> bool:
-    return word in nicknames.same_as(typed)
+def _one_name(typed: str, word: str, person: Person) -> bool:
+    return typed in person.names_for(word) or word in nicknames.same_as(typed)
 
 
 def _family(typed: str, last: str) -> bool:
@@ -135,10 +143,10 @@ def _family(typed: str, last: str) -> bool:
 def _who(people: Sequence[Person], typed: str, then: str | None) -> tuple[list[Person], bool]:
     """The people these words name: (people, whether both words named them, a first name then a last)."""
     if then is not None and then not in STOPWORDS:
-        both = [p for p in people if any(_one_name(typed, w) and nxt in (then,) for w, nxt in zip(p.words, p.words[1:], strict=False))]
+        both = [p for p in people if any(_one_name(typed, w, p) and nxt in (then,) for w, nxt in zip(p.words, p.words[1:], strict=False))]
         if both:
             return both, True
-    one = [p for p in people if any(_one_name(typed, w) for w in p.words) or (p.words and _family(typed, p.words[-1]))]
+    one = [p for p in people if any(_one_name(typed, w, p) for w in p.words) or (p.words and _family(typed, p.words[-1]))]
     return one, False
 
 
@@ -185,9 +193,13 @@ def understand(raw: str, people: Sequence[Person], find_place: Callable[[str], S
             for k in span:
                 taken[k] = True
             said = [word[k] for k in span]
-            also = sorted(set().union(*(nicknames.same_as(w) for w in said)) - set(said))
+            # Their names as typed, and the others of the words of theirs it named.
+            theirs = {n for p in named for w in p.words if any(_one_name(t, w, p) for t in said) for n in p.names_for(w)}
+            also = sorted(set().union(theirs, *(nicknames.same_as(w) for w in said)) - set(said))
+            own = {p.person_id for p in named if said[0] in p.words}
             parts.append((i, Part(PERSON, " ".join(said), _label(named),
-                                  person_ids=tuple(sorted({p.person_id for p in named})), also=tuple(also))))
+                                  person_ids=tuple(sorted({p.person_id for p in named})),
+                                  own_ids=tuple(sorted(own)), also=tuple(also))))
             i += len(span)
             continue
         i += 1
@@ -354,4 +366,9 @@ def read(session: Session, raw: str, library_ids: list[str] | None) -> Understoo
     outside quotes could ask for something)."""
     if not any(not p.quoted and fold(p.words[0]) not in STOPWORDS for p in pieces(raw)):
         return Understood((), raw)
-    return understand(raw, people_in_sight(session, library_ids), place_finder(session, library_ids))
+    from src.server.search import person_nicknames
+
+    said = person_nicknames.kept(session)
+    people = [Person(p.person_id, p.name, tuple(sorted(said.get(person_nicknames.key(p.name), {}).items())))
+              for p in people_in_sight(session, library_ids)]
+    return understand(raw, people, place_finder(session, library_ids))

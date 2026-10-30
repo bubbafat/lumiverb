@@ -266,7 +266,7 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
             'src/server/api/routers/admin.py', 'src/server/api/routers/ai.py', 'src/server/api/routers/tenant.py',
             'src/server/repository/ai_machines.py', 'src/server/scheduler/account.py', 'src/server/search/assist.py',
             'src/ui/web/src/lib/waits.test.ts', 'src/ui/web/src/pages/settings/AiSection.test.tsx',
-            'tests/test_search_assisted.py',
+            'tests/test_search_assisted.py', 'tests/test_person_nicknames.py',
             'src/ui/web/src/pages/settings/AiSection.tsx', 'src/ui/web/src/pages/settings/ProcessingSection.test.tsx',
             'tests/ai_machine_fakes.py', 'tests/test_ai_machines.py', 'tests/test_ai_pool.py', 'tests/test_ai_requests.py',
             'tests/test_ai_try.py',
