@@ -92,7 +92,7 @@ def test_a_machine_is_sent_what_the_work_sends_and_says_what_came_back(env, none
     assert tries["Scene descriptions"]["result"] == DESCRIBED
     described = tries["Descriptions and tags"]
     assert described["result"] == DESCRIBED and described["problem"] == "" and described["finish"] == "stop"
-    assert described["tokens"] == {"prompt": 1200, "answer": 64} and described["limit"] == 500
+    assert described["tokens"] == {"prompt": 1200, "answer": 64} and described["limit"] == 1000
     assert tries["Text in images (OCR)"]["result"] == "OPEN 9 TO 5"
     assert tries["Video descriptions"]["limit"] == 900 and tries["Video descriptions"]["result"] == DESCRIBED
 
@@ -113,7 +113,7 @@ def test_a_thinking_model_that_runs_out_of_room_is_said(env, none):
     with answering, patch("src.shared.vision_endpoint._blocked", return_value=False):
         out = _try(env, machine_id).json()
     described = next(t for t in out["tries"] if "Descriptions and tags" in t["titles"])
-    assert described["problem"].startswith("It ran out of room: it used all 500 tokens of its answer")
+    assert described["problem"].startswith("It ran out of room: it used all 1000 tokens of its answer")
 
 
 def test_a_refusal_is_said_its_own_words_to_a_server_admin(env, none):

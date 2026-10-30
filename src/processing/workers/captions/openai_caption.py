@@ -334,22 +334,26 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
 
         raise CaptionError(str(last_error), endpoint_fault=False)
 
+    def _given_room(self, content: list[dict], settings: dict, got: dict) -> tuple[list[dict], int]:
+        """A reply (_asked's) cut off at its longest answer is asked again once, with twice the room (at most
+        LONGEST_ANSWER), and the log says to raise it when that one finishes. The replies, the last asked first,
+        and the room the last had."""
+        limit = int(settings["max_tokens"])
+        if got["finish"] != "length" or limit >= LONGEST_ANSWER:
+            return [got], limit
+        roomier = min(2 * limit, LONGEST_ANSWER)
+        again = self._asked(content, {**settings, "max_tokens": roomier})
+        if again["finish"] != "length":
+            logger.warning("An AI reply cut off at its Longest answer (%d tokens) finished when asked again with %d: "
+                           "raise its Longest answer in Settings › Processing", limit, roomier)
+        return [again, got], roomier
+
     def _with_room(self, content: list[dict], got: dict) -> dict:
-        """The description in a reply (_asked's). One cut off at its longest answer is asked again once, with twice
-        the room (at most LONGEST_ANSWER), and the log says to raise it; still cut off, what's whole in the longer
-        reply is kept (_salvage), else OutOfRoomError."""
-        limit = int(self._vision["max_tokens"])
-        replies = [got]
-        if got["finish"] == "length" and limit < LONGEST_ANSWER:
-            roomier = min(2 * limit, LONGEST_ANSWER)
-            again = self._asked(content, {**self._vision, "max_tokens": roomier})
-            if again["finish"] != "length":
-                parsed = self._parse_description(again["reply"])
-                logger.warning("An AI reply cut off at its Longest answer (%d tokens) finished when asked again with "
-                               "%d: raise its Longest answer in Settings › Processing", limit, roomier)
-                return parsed
-            replies.insert(0, again)
-            limit = roomier
+        """The description in a reply (_asked's), given more room when it's cut off (_given_room); still cut off,
+        what's whole in the longer reply is kept (_salvage), else OutOfRoomError."""
+        replies, limit = self._given_room(content, self._vision, got)
+        if replies[0]["finish"] != "length":
+            return self._parse_description(replies[0]["reply"])
         for reply in replies:
             try:
                 return self._parse_description(reply["reply"])
@@ -393,10 +397,14 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             "products", "say", "include",
         }
 
+        content = [{"type": "image_url", "image_url": {"url": data_url}}, {"type": "text", "text": prompt}]
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
-                raw = self._chat(data_url, prompt, self._ocr)
-                text = raw.strip()
+                replies, limit = self._given_room(content, self._ocr, self._asked(content, self._ocr))
+                if replies[0]["finish"] == "length":
+                    # Text cut off isn't the text it reads, nor is nothing "no text".
+                    raise OutOfRoomError(limit, said_nothing=not any(r["reply"].strip() for r in replies))
+                text = replies[0]["reply"].strip()
                 logger.info("OCR raw response (%d chars): %s", len(text), text[:200] if text else "(empty)")
                 if not text or text.upper() == "NONE" or text == "<none>":
                     return ""
@@ -408,7 +416,8 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 logger.info("OCR found: %s", cleaned[:200])
                 return cleaned
             except Exception as e:
-                if attempt < self.MAX_ATTEMPTS:
+                # Out of room at the most it was given: the same again would end the same.
+                if attempt < self.MAX_ATTEMPTS and not isinstance(e, OutOfRoomError):
                     retry_after = getattr(e, "retry_after", None)
                     if retry_after:
                         sleep_time = retry_after
@@ -422,7 +431,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     )
                     self._sleep_with_countdown(sleep_time)
                     continue
-                logger.warning("OCR failed for %s after %d attempts: %s", proxy_path, self.MAX_ATTEMPTS, e)
+                logger.warning("OCR failed for %s after %d attempts: %s", proxy_path, attempt, e)
                 raise CaptionError(str(e) or type(e).__name__, endpoint_fault=is_endpoint_fault(e)) from e
 
         return ""

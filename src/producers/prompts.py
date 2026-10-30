@@ -76,6 +76,8 @@ def ai_settings(prompt: str, fixed: str = "", *, room_fixed: bool = True) -> tup
         # a larger size would send the same image and redo every clip for nothing.
         Setting("max_edge", 1280, "Image size sent", minimum=256, maximum=1280, unit="px", fixed=fixed),
         Setting("temperature", 0.2, "Temperature", kind="float", minimum=0, maximum=2, advanced=True, fixed=fixed),
-        Setting("max_tokens", 500, "Longest answer", minimum=50, maximum=LONGEST_ANSWER, unit="tokens", advanced=True,
+        # 1,000: at 500 a fifth of Haiku 5.5's photo descriptions were cut off and asked again (Oct 30), a whole
+        # request more; room it doesn't use costs nothing.
+        Setting("max_tokens", 1000, "Longest answer", minimum=50, maximum=LONGEST_ANSWER, unit="tokens", advanced=True,
                 fixed=fixed if room_fixed else ""),
     )

@@ -109,7 +109,7 @@ def test_scenes_offer_their_longest_answer_alone_at_the_default_they_had(env):
     # the default stays, so no account's scenes are out of date for it.
     scenes = "lumiverb.video.scene_descriptions"
     fields = {f["key"]: f for f in _producer(env, scenes)["fields"]}
-    assert (fields["max_tokens"]["fixed"], fields["max_tokens"]["default"]) == (None, 500)
+    assert (fields["max_tokens"]["fixed"], fields["max_tokens"]["default"]) == (None, 1000)
     assert all(fields[k]["fixed"] for k in ("prompt", "max_edge", "temperature", "model"))
     before = _producer(env, scenes)["settings_hash"]
     try:
