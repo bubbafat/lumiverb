@@ -358,8 +358,8 @@ class PooledTranscriber(_OnAMachine, Transcriber):
     error = TranscriptError
     move_item_faults = True
 
-    def transcribe(self, speech_wav: Path) -> Heard:
-        return self._on_a_machine(lambda t: t.transcribe(speech_wav))
+    def transcribe(self, speech_wav: Path, language: str = "") -> Heard:
+        return self._on_a_machine(lambda t: t.transcribe(speech_wav, language))
 
 
 class PooledEmbedder(_OnAMachine):

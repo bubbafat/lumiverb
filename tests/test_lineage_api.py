@@ -148,7 +148,7 @@ def test_every_producer_with_its_settings_and_counts(env):
     producers = _producers(env)
     assert set(producers) == set(P.ARTIFACTS)
     t = producers["lumiverb.video.transcript"]
-    assert (t["version"], t["settings"]["model"]) == ("1", "small")
+    assert (t["version"], t["settings"]["model"]) == ("2", "small")
     assert "producer" not in t  # a producer is named by what it makes: its artifact (ADR-024 part 5)
     assert t["settings_hash"] == P.settings_hash(t["settings"])
     assert set(t["counts"]) == {"applicable", "current", "stale", "missing", "rechecking", "below", "failing",
@@ -237,7 +237,8 @@ def test_changing_one_producers_setting_makes_exactly_its_artifacts_stale(env):
         assert _state(env, clip, "lumiverb.video.transcript") == "stale"
         assert _state(env, clip, "lumiverb.preview") == "current"
         # The model is the transcripts job's (Settings → AI), whatever an override says.
-        assert after["lumiverb.video.transcript"]["settings"] == {"model": "small", "vad_min_silence_ms": 700}
+        assert after["lumiverb.video.transcript"]["settings"] == {"model": "small", "vad_min_silence_ms": 700,
+                                                                 "language": "detect"}
         assert after["lumiverb.video.transcript"]["counts"]["stale"] == before["lumiverb.video.transcript"]["counts"]["stale"] + 1
         for artifact in set(P.ARTIFACTS) - {"lumiverb.video.transcript"}:
             assert after[artifact]["counts"] == before[artifact]["counts"], artifact

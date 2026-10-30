@@ -352,7 +352,8 @@ def test_transcripts_go_to_each_machine_as_it_names_the_model_and_move_on_when_o
         return t
 
     transcriber = PooledTranscriber(pool, make)
-    assert transcriber.transcribe("speech.wav") == Heard([Segment(0.0, 1.0, " hi")], "en")
+    assert transcriber.transcribe("speech.wav", "en") == Heard([Segment(0.0, 1.0, " hi")], "en")
+    made["Speaches"][1].transcribe.assert_called_with("speech.wav", "en")  # the Language setting, to the machine
     assert made["Built in"][0] == "small" and made["Speaches"][0] == "Systran/faster-whisper-small"
     assert [m.name for m in pool.machines if m.online] == ["Speaches"]
     assert _statuses(client)["aim_self"][-1]["error"] == "Couldn't load small: no space left"
@@ -385,7 +386,7 @@ def test_a_clip_one_server_refuses_goes_to_the_others_first():
     def make(machine):
         t = MagicMock()
 
-        def transcribe(wav):
+        def transcribe(wav, language=""):
             calls.append(machine.name)
             if machine.name == "Speaches" or wav == "bad.wav":
                 raise TranscriptError(f"{machine.name} answered 413", endpoint_fault=False)

@@ -731,6 +731,21 @@ describe("ProcessingSection settings", () => {
     expect(sent.find((r) => r.method === "PUT")!.body).toEqual({ settings: { quality: "best" } });
   });
 
+  it("offers a transcript's language as a choice by its name, Detect first", async () => {
+    const language = { key: "language", label: "Language", kind: "choice", value: "detect", default: "detect",
+                       minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: true,
+                       choices: ["detect", "english", "haitian creole"] } as NonNullable<Producer["fields"]>[number];
+    producers = [producer({ artifact: "lumiverb.video.transcript", title: "Transcripts", media: ["video"], fields: [language] })];
+    renderSection();
+    fireEvent.click(await screen.findByText("Settings · version 1"));
+    const select = screen.getByLabelText("Language") as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(["Detect", "English", "Haitian creole"]);
+    fireEvent.change(select, { target: { value: "english" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
+    await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
+    expect(sent.find((r) => r.method === "PUT")!.body).toEqual({ settings: { language: "english" } });
+  });
+
   it("says new files get a new preview quality, the rest staying as they are, where nothing is remade yet", async () => {
     const quality = { key: "quality", label: "Quality", kind: "notch", value: "better", default: "better",
                       minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: true,

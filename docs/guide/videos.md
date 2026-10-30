@@ -51,6 +51,10 @@ The server also turns each scene's picture into the kind of vector visual search
 
 The server transcribes what's said in each video with Whisper, built into Lumiverb, skipping the silences. Nothing to set up. An admin can choose another Whisper model, or a machine of your own, for **Transcripts** in **Settings › AI** (see [AI machines](ai-machines.md)).
 
+Where it can't make out the speech, Whisper sometimes writes what it heard most in training instead: "Thank you." or "Thanks for watching!" over a few seconds of noise, a line said over and over, or English heard as another language. Lumiverb leaves out the stock lines where Whisper itself thought nobody was speaking, and keeps a line said again and again in a row once.
+
+If your videos are in one language, choose it as **Language** in the **Transcripts** settings (**Settings › Processing**). The built-in Whisper then hears that language unless it's sure (90% or more) it hears another; a machine of your own is asked to hear it. The default, **Detect**, lets Whisper decide each time.
+
 The viewer's **Transcript** shows each line with its start time, and the language heard. Click a line to jump the video there; this works once the whole video plays, and only within what your account plays.
 
 - **Download** saves it as an `.srt` file.

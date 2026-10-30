@@ -10,7 +10,13 @@ import sys
 from pathlib import Path
 
 from src.processing.workers.transcripts import child
-from src.processing.workers.transcripts.base import Heard, Segment, Transcriber, TranscriptError
+from src.processing.workers.transcripts.base import (
+    Heard,
+    Segment,
+    Transcriber,
+    TranscriptError,
+    chance,
+)
 from src.processing.workers.transcripts.speech import speech_seconds, time_allowed
 
 # Failures mid-transcription that are the computer's, not the clip's.
@@ -30,11 +36,11 @@ class BuiltInWhisper(Transcriber):
         self._device = device
         self._timeout = timeout
 
-    def transcribe(self, speech_wav: Path) -> Heard:
+    def transcribe(self, speech_wav: Path, language: str = "") -> Heard:
         allowed = self._timeout or time_allowed(speech_seconds(speech_wav))
         try:
             proc = subprocess.run([sys.executable, child.__file__, "transcribe", str(speech_wav), self._model,
-                                   self._device], capture_output=True, text=True, timeout=allowed)
+                                   self._device, language], capture_output=True, text=True, timeout=allowed)
         except subprocess.TimeoutExpired as e:
             raise TranscriptError(f"Whisper didn't finish within {int(allowed)} s.", endpoint_fault=False) from e
         except OSError as e:
@@ -53,5 +59,7 @@ class BuiltInWhisper(Transcriber):
             error = str(out.get("error") or "Whisper failed.")
             machine = out.get("stage") == "load" or any(t in error.lower() for t in _MACHINE_TROUBLE)
             raise TranscriptError(error, endpoint_fault=machine)
-        return Heard([Segment(float(s["start"]), float(s["end"]), str(s.get("text") or ""))
+        return Heard([Segment(float(s["start"]), float(s["end"]), str(s.get("text") or ""),
+                              chance(s.get("no_speech")))
                       for s in out.get("segments") or []], str(out.get("language") or ""))
+

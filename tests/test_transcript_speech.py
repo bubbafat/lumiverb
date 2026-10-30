@@ -20,7 +20,15 @@ import pytest
 
 from src.processing.workers.transcripts import child
 from src.processing.workers.transcripts.base import Segment
-from src.processing.workers.transcripts.speech import SpeechError, SpeechMap, find_speech, restore, to_srt
+from src.processing.workers.transcripts.speech import (
+    NOT_SPEECH,
+    SpeechError,
+    SpeechMap,
+    cleaned,
+    find_speech,
+    restore,
+    to_srt,
+)
 
 FIXTURES = Path(__file__).resolve().parents[1] / "clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/Fixtures"
 RATE = 16_000
@@ -155,3 +163,94 @@ def test_finding_the_speech_first_transcribes_as_faster_whisper_does_itself(tmp_
     new = restore([Segment(s["start"], s["end"], s["text"]) for s in heard["segments"]], chunks)
     assert new == old and heard["language"] == old_info.language
     assert "fox" in to_srt(new).lower()
+
+
+# ---------------------------------------------------------------------------
+# What Whisper makes up, left out (Robert's videos, Oct 30)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("said", [" You", " Thank you.", " Thanks for watching!", " Bye.", " I", " Bye bye!",
+                                  " Sous-titres réalisés par la communauté d'Amara.org", " ご視聴ありがとうございました",
+                                  " 감사합니다"])
+def test_a_stock_line_where_it_wasnt_speech_is_left_out(said):
+    # As the trial heard them: "Thank you." where it was 0.82 sure nobody spoke.
+    assert cleaned([Segment(0, 1, said, 0.82), Segment(1, 2, " Over here.", 0.05)]) == \
+        [Segment(1, 2, " Over here.", 0.05)]
+    assert cleaned([Segment(0, 1, said, NOT_SPEECH)]) == []
+
+
+@pytest.mark.fast
+def test_a_stock_line_somebody_said_is_kept():
+    # Said (it was sure), or a machine that didn't say how sure: kept, as is anything else it was unsure of.
+    kept = [Segment(0, 1, " Thank you.", 0.05), Segment(1, 2, " Bye.", None), Segment(2, 3, " Thank you for the cake.", 0.9)]
+    assert cleaned(kept) == kept
+
+
+@pytest.mark.fast
+def test_a_line_said_again_right_after_itself_is_kept_once():
+    # A loop ("I'm going to try it." over and over), told apart by its words alone, not its punctuation or case.
+    loop = [Segment(0, 2, " I'm going to try it.", 0.7), Segment(2, 4, " I'm going to try it!", 0.7),
+            Segment(4, 6, " i'm going to try it", 0.7), Segment(6, 8, " Two.", 0.7), Segment(8, 10, " I'm going to try it.", 0.7)]
+    assert [(s.start, s.text) for s in cleaned(loop)] == [(0, " I'm going to try it."), (6, " Two."),
+                                                          (8, " I'm going to try it.")]
+
+
+@pytest.mark.fast
+def test_a_sentence_said_over_and_over_in_one_line_is_said_once():
+    [s] = cleaned([Segment(0, 30, " That's all for now. Thank you. Thank you. Thank you. Thank you.", 0.2)])
+    assert s == Segment(0, 30, " That's all for now. Thank you.", 0.2)
+    # Said once each, nothing changes.
+    once = Segment(0, 5, " Hi. Say hi to Ludo. Hi.", 0.1)
+    assert cleaned([once]) == [once]
+
+
+class _Info:
+    def __init__(self, language: str, probability: float) -> None:
+        self.language, self.language_probability = language, probability
+
+
+class _Whisper:
+    """faster-whisper's model as child.transcribe uses it: what it detects, and what it hears in each language."""
+
+    def __init__(self, detected: str, probability: float) -> None:
+        self.detected, self.probability, self.asked = detected, probability, []
+
+    def transcribe(self, wav, vad_filter, language=None):
+        from types import SimpleNamespace
+
+        self.asked.append(language)
+        heard = language or self.detected
+        return (iter([SimpleNamespace(start=0.0, end=1.0, text=f" in {heard}", no_speech_prob=0.1)]),
+                _Info(heard, 1.0 if language else self.probability))
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(("detected", "probability", "language", "heard"), [
+    ("te", 0.25, "en", "en"),  # unsure of another: the language chosen
+    ("ja", 0.87, "en", "en"),  # the trial's surest other language, below SURE
+    ("fr", 0.95, "en", "fr"),  # sure of another: kept
+    ("en", 0.40, "en", "en"),  # the one chosen, however unsure
+    ("te", 0.25, "", "te"),  # Detect: as before
+])
+def test_the_built_in_hears_the_language_chosen_unless_sure_of_another(monkeypatch, detected, probability, language,
+                                                                        heard):
+    whisper = _Whisper(detected, probability)
+    monkeypatch.setattr(child, "_whisper", lambda *_: whisper)
+    out = child.transcribe("speech.wav", "small", language=language)
+    assert out == {"segments": [{"start": 0.0, "end": 1.0, "text": f" in {heard}", "no_speech": 0.1}],
+                   "language": heard}
+    assert whisper.asked == ([None] if heard == detected else [None, language])
+
+
+@pytest.mark.fast
+def test_the_child_takes_the_language_after_the_device(monkeypatch, capsys):
+    got = []
+    monkeypatch.setattr(child, "transcribe", lambda *a, **k: got.append((a, k)) or {"segments": [], "language": "en"})
+    for argv, said in ((["transcribe", "s.wav", "small"], ("auto", "")), (["transcribe", "s.wav", "small", "cpu"], ("cpu", "")),
+                       (["transcribe", "s.wav", "small", "cpu", "en"], ("cpu", "en"))):
+        assert child.main(argv) == 0
+        args, kwargs = got.pop()
+        assert (args[2], kwargs["language"]) == said
+    capsys.readouterr()

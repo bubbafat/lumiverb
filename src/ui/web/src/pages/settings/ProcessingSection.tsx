@@ -864,13 +864,13 @@ function RedoLine({ producer, stale, admin, paused, say }: { producer: Producer;
   );
 }
 
-/** A notch's name as Settings says it: "better" is Better. */
+/** A notch's or a choice's name as Settings says it: "better" is Better, "haitian creole" Haitian creole. */
 const notchName = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 
 function shown(field: SettingField, value: unknown): string {
   if (value === "" || value === null || value === undefined) return "—";
   if (field.kind === "bool") return value ? "On" : "Off";
-  if (field.kind === "notch") return notchName(String(value));
+  if (field.kind === "notch" || field.kind === "choice") return notchName(String(value));
   return `${String(value)}${field.unit ? ` ${field.unit}` : ""}`;
 }
 
@@ -918,7 +918,7 @@ function SettingsList({ fields }: { fields: SettingField[] }) {
 function asSetting(f: SettingField, raw: string): unknown {
   if (f.kind === "bool") return raw === "true";
   if (raw.trim() === "") return null;
-  return f.kind === "text" || f.kind === "notch" ? raw : Number(raw);
+  return f.kind === "text" || f.kind === "notch" || f.kind === "choice" ? raw : Number(raw);
 }
 
 /** Whether a field says what the setting is now. */
@@ -986,7 +986,7 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
         </label>
         {f.fixed ? (
           <p className="text-xs text-gray-500">{f.fixed}</p>
-        ) : f.kind === "notch" ? (
+        ) : f.kind === "notch" || f.kind === "choice" ? (
           <select id={id} className={`${inputClass} sm:max-w-48`} value={values[f.key]}
             onChange={(e) => edit(f.key, e.target.value)}>
             {(f.choices ?? []).map((c) => <option key={c} value={c}>{notchName(c)}</option>)}

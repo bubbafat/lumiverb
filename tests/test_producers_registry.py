@@ -44,7 +44,7 @@ def test_each_ai_producer_takes_its_jobs_model():
     # A job's model comes from the job alone: an override can't say another.
     assert P.effective_settings("lumiverb.image.description", overrides={"model": "llava:13b"}, account=models)["model"] == "qwen3-vl:8b"
     assert P.effective_settings("lumiverb.video.transcript", overrides={"model": "large-v3", "vad_min_silence_ms": 700},
-                                account=models) == {"model": "medium", "vad_min_silence_ms": 700}
+                                account=models) == {"model": "medium", "vad_min_silence_ms": 700, "language": "detect"}
     # Only declared settings count: anything else can't change output.
     assert P.effective_settings("lumiverb.video.transcript", overrides={"nonsense": 1}) == P.PRODUCERS["lumiverb.video.transcript"].defaults
 
@@ -56,16 +56,16 @@ def test_a_job_without_a_model_leaves_the_producers_default():
 
 
 def test_transcripts_made_with_small_stay_current():
-    """The transcripts job starts at small, what every transcript so far recorded."""
+    """The transcripts job starts at small, what every transcript of version 2 records: its language detected."""
     assert P.settings_hash(P.effective_settings("lumiverb.video.transcript", account={"transcripts": "small"})) == \
-        P.settings_hash({"model": "small", "vad_min_silence_ms": 500})
+        P.settings_hash({"model": "small", "vad_min_silence_ms": 500, "language": "detect"})
 
 
 def test_lineage_names_the_producer_version_settings_and_source():
     settings = P.effective_settings("lumiverb.video.transcript")
     assert P.lineage("lumiverb.video.transcript", settings, "sha256:" + "ab" * 32) == {
         # The producer by the name of what it makes (ADR-024 phase 1 part 2: servers take it from part 1).
-        "producer": "lumiverb.video.transcript", "version": "1", "settings_hash": P.settings_hash(settings),
+        "producer": "lumiverb.video.transcript", "version": "2", "settings_hash": P.settings_hash(settings),
         "source_hash": "sha256:" + "ab" * 32,
     }
 

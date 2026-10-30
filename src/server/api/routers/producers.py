@@ -185,7 +185,7 @@ class SettingField(BaseModel):
 
     key: str
     label: str
-    kind: str  # "int" | "float" | "text" | "bool" | "level"
+    kind: str  # "int" | "float" | "text" | "bool" | "level" | "notch" | "choice"
     value: Any
     default: Any
     minimum: float | None = None
@@ -198,6 +198,7 @@ class SettingField(BaseModel):
     remakes: bool = True
     # kind "level": its values, lowest first. Raising it makes nothing
     # again: what was made lower counts as below (counts.below) until a redo is asked.
+    # "notch" and "choice": the values it can be.
     choices: list[str] = []
 
 

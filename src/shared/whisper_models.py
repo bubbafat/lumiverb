@@ -83,6 +83,15 @@ LANGUAGES: dict[str, str] = {
     "ha": "hausa", "ba": "bashkir", "jw": "javanese", "su": "sundanese", "yue": "cantonese",
 }
 _CODES = {name: code for code, name in LANGUAGES.items()}
+# A transcript's Language setting (src/producers/transcript): detect it, as Whisper does, or a language spoken
+# there, by its name ("english"), English first, then the rest in order.
+DETECT = "detect"
+LANGUAGE_CHOICES: tuple[str, ...] = (DETECT, "english", *sorted(n for n in _CODES if n != "english"))
+
+
+def chosen_language(choice: str) -> str:
+    """The Language setting's code ("en"); "" to detect it."""
+    return _CODES.get(choice, "")
 
 
 def language_code(language: str) -> str:

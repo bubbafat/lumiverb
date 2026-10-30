@@ -10,9 +10,11 @@ whatever the worker's install looks like:
         → {"chunks": [{"start": sample, "end": sample}, ...]}; OUT.wav is the
           speech alone (16 kHz mono 16-bit, the clip's samples), written
           only when there is some.
-    python child.py transcribe SPEECH.wav MODEL [DEVICE]
-        → {"segments": [{"start", "end", "text"}], "language"}: Whisper on
-          the speech, without VAD of its own (the speech was found already).
+    python child.py transcribe SPEECH.wav MODEL [DEVICE [LANGUAGE]]
+        → {"segments": [{"start", "end", "text", "no_speech"}], "language"}:
+          Whisper on the speech, without VAD of its own (the speech was
+          found already). LANGUAGE ("en"): the language most likely spoken,
+          used unless Whisper is SURE it hears another.
 
 Failures print {"error", "stage"} and exit 1; stage "load" is the model not
 loading (the machine's trouble, not the clip's). Whisper's weights are in
@@ -27,6 +29,10 @@ import sys
 import wave
 
 RATE = 16_000
+# How sure Whisper must be that it hears another language than the one chosen (the Language setting) to keep it
+# (Robert's videos, Oct 30: every one of 39 transcripts in another language was detected at 0.87 or below, and
+# nearly all were English, heard as Telugu, Javanese or "Thank you for watching" in Japanese).
+SURE = 0.9
 
 
 def find_speech(wav_in: str, wav_out: str, min_silence_ms: int) -> list[dict]:
@@ -49,15 +55,19 @@ def find_speech(wav_in: str, wav_out: str, min_silence_ms: int) -> list[dict]:
     return chunks
 
 
-def transcribe(wav: str, model: str, device: str = "auto", compute_type: str = "auto") -> dict:
-    """Whisper on the speech alone. Raises _Failed with the stage it failed at."""
+def transcribe(wav: str, model: str, device: str = "auto", compute_type: str = "auto", language: str = "") -> dict:
+    """Whisper on the speech alone, in the language it detects, or in `language` unless it's SURE of another.
+    Raises _Failed with the stage it failed at."""
     try:
         whisper = _whisper(model, device, compute_type)
     except Exception as e:  # noqa: BLE001 — any reason it won't load is the machine's
         raise _Failed(f"Couldn't load {model}: {e}", "load") from e
     try:
         segments, info = whisper.transcribe(wav, vad_filter=False)
-        heard = [{"start": s.start, "end": s.end, "text": s.text} for s in segments]
+        if language and info.language != language and info.language_probability < SURE:
+            # Nothing's been heard yet (segments is lazy): only the language was detected.
+            segments, info = whisper.transcribe(wav, vad_filter=False, language=language)
+        heard = [{"start": s.start, "end": s.end, "text": s.text, "no_speech": s.no_speech_prob} for s in segments]
     except Exception as e:  # noqa: BLE001
         raise _Failed(str(e) or type(e).__name__, "transcribe") from e
     return {"segments": heard, "language": info.language or ""}
@@ -89,8 +99,9 @@ def main(argv: list[str]) -> int:
                 out = {"chunks": find_speech(argv[1], argv[2], int(argv[3]))}
             except Exception as e:  # noqa: BLE001
                 raise _Failed(str(e) or type(e).__name__, "find-speech") from e
-        elif argv[:1] == ["transcribe"] and len(argv) in (3, 4):
-            out = transcribe(argv[1], argv[2], *(argv[3:4] or ["auto"]))
+        elif argv[:1] == ["transcribe"] and len(argv) in (3, 4, 5):
+            device, language = (argv[3:] + ["auto", ""][len(argv) - 3:])[:2]
+            out = transcribe(argv[1], argv[2], device, language=language)
         else:
             raise _Failed(f"usage: child.py find-speech|transcribe …, not {argv}", "usage")
     except _Failed as e:

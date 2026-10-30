@@ -39,7 +39,7 @@ def _put(env, artifact: str, headers=None, **body):
 @pytest.fixture(autouse=True)
 def _defaults_after(env):
     yield
-    for artifact, keys in {"lumiverb.video.transcript": ["vad_min_silence_ms"], "lumiverb.image.description": ["prompt", "max_edge", "temperature"],
+    for artifact, keys in {"lumiverb.video.transcript": ["vad_min_silence_ms", "language"], "lumiverb.image.description": ["prompt", "max_edge", "temperature"],
                            "lumiverb.video.analysis_proxy": ["max_edge", "quality"]}.items():
         _put(env, artifact, settings={k: None for k in keys}, redo=True)
 
@@ -79,6 +79,23 @@ def test_what_cant_be_set_is_refused_saying_why(env, settings, code):
     r = _put(env, "lumiverb.video.transcript", settings=settings)
     assert r.status_code == 422 and r.json()["error"]["code"] == code, r.text
     assert _producer(env, "lumiverb.video.transcript")["settings_hash"] == before
+
+
+def test_a_transcripts_language_is_detected_or_one_of_whispers(env):
+    """Robert's videos are in English, which Whisper heard as Telugu or Javanese where it couldn't make them out:
+    the Language setting is a choice, Detect (as before) or a language by its name."""
+    fields = {f["key"]: f for f in _producer(env, "lumiverb.video.transcript")["fields"]}
+    language = fields["language"]
+    assert (language["kind"], language["value"], language["default"], language["fixed"]) == \
+        ("choice", "detect", "detect", None)
+    assert language["choices"][:2] == ["detect", "english"] and "japanese" in language["choices"]
+    r = _put(env, "lumiverb.video.transcript", settings={"language": "english"}, redo=False)
+    assert r.status_code == 200 and r.json()["settings"]["language"] == "english", r.text
+    for wrong in ("en", "klingon", "", 1):
+        r = _put(env, "lumiverb.video.transcript", settings={"language": wrong}, redo=False)
+        assert r.status_code == 422 and r.json()["error"]["code"] == "bad_setting", r.text
+        assert "is one of its" in r.json()["error"]["message"] and "klingon" not in r.json()["error"]["message"]
+    assert _producer(env, "lumiverb.video.transcript")["settings"]["language"] == "english"
 
 
 def test_a_setting_the_code_doesnt_read_cant_be_changed(env):

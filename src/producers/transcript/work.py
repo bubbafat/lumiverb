@@ -17,11 +17,12 @@ COULDNT = "transcription failed (see the log)"
 
 
 def transcribe(source_path: Path, transcriber, vad_min_silence_ms: int = 500, *,
-               work_dir: Path) -> tuple[str, str] | None:
+               work_dir: Path, language: str = "") -> tuple[str, str] | None:
     """Every audio track mixed into a 16 kHz mono WAV, its speech found here
     with the producer's VAD setting, and only the speech heard by
-    transcriber. Times come back onto the clip. The WAVs are made in
-    work_dir (a folder of the job's scratch), and left there.
+    transcriber, in `language` ("en"; "" detects it), what Whisper makes up
+    left out (speech.cleaned). Times come back onto the clip. The WAVs are
+    made in work_dir (a folder of the job's scratch), and left there.
 
     Returns (srt_text, language); srt_text is "" when nothing is said. None
     when it couldn't be tried this time (the audio tracks couldn't be read,
@@ -29,7 +30,13 @@ def transcribe(source_path: Path, transcriber, vad_min_silence_ms: int = 500, *,
     couldn't hear it (it says whose fault), and OSError when this machine
     can't (no ffmpeg, a disk error): a crash, not the clip's."""
     from src.processing.video.audio import audio_tracks, speech_wav_command
-    from src.processing.workers.transcripts.speech import SpeechError, find_speech, restore, to_srt
+    from src.processing.workers.transcripts.speech import (
+        SpeechError,
+        cleaned,
+        find_speech,
+        restore,
+        to_srt,
+    )
     from src.shared.whisper_models import language_code
 
     try:
@@ -72,9 +79,9 @@ def transcribe(source_path: Path, transcriber, vad_min_silence_ms: int = 500, *,
     if not chunks:
         logger.info("No speech detected in %s", source_path.name)
         return ("", "")
-    heard = transcriber.transcribe(speech)
+    heard = transcriber.transcribe(speech, language)
 
-    srt_text = to_srt(restore(heard.segments, chunks))
+    srt_text = to_srt(restore(cleaned(heard.segments), chunks))
     language = language_code(heard.language)
     if srt_text:
         logger.info("Transcribed %s: %d chars, language=%s", source_path.name, len(srt_text), language)
@@ -88,7 +95,11 @@ class Transcript(Work):
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)
-        self.vad_ms = acct.producers.settings(self.artifact)["vad_min_silence_ms"]
+        from src.shared.whisper_models import chosen_language
+
+        settings = acct.producers.settings(self.artifact)
+        self.vad_ms = settings["vad_min_silence_ms"]
+        self.language = chosen_language(settings["language"])
         guard = acct.guard("transcripts")
         self.used = acct.producers.with_model(self.artifact, guard.model)
         self.transcriber = acct.transcriber()
@@ -100,7 +111,7 @@ class Transcript(Work):
             with self.inputs.analysis_proxy(clip) as source, self.scratch_folder() as work_dir:
                 if source is None:
                     raise Failed("its analysis proxy couldn't be read")
-                result = transcribe(source, self.transcriber, self.vad_ms, work_dir=work_dir)
+                result = transcribe(source, self.transcriber, self.vad_ms, work_dir=work_dir, language=self.language)
         except TranscriptError as e:
             # The machines' trouble stops transcription, charging no clip;
             # the clip's is charged once a check finds the machine fine.

@@ -14,6 +14,7 @@ from __future__ import annotations
 import bisect
 import json
 import logging
+import re
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -97,6 +98,51 @@ def restore(segments: Iterable[Segment], chunks: list[dict]) -> list[Segment]:
     """Segments timed in the speech, timed in the clip."""
     to_clip = SpeechMap(chunks)
     return [Segment(to_clip.original(s.start), to_clip.original(s.end, is_end=True), s.text) for s in segments]
+
+
+# What Whisper writes for a stretch it can't make out (the end of its training's videos and their subtitles), as
+# normalized() says them: left out where the machine itself thought it most likely wasn't speech (NOT_SPEECH).
+# Robert's videos, Oct 30: 405 transcripts were three words or fewer, mostly these; every one of 31 such lines
+# tried again was at 0.38 or more, where the words of what's really said were at 0.31 (the median).
+STOCK = frozenset({
+    "you", "i", "bye", "bye bye", "thank you", "thanks", "thank you very much", "thank you so much",
+    "thank you for watching", "thanks for watching", "thank you for watching see you next time",
+    "please subscribe", "subtitles by the amaraorg community", "soustitres réalisés par la communauté damaraorg",
+    "ご視聴ありがとうございました", "감사합니다", "고맙습니다", "시청해주셔서 감사합니다",
+})
+NOT_SPEECH = 0.3
+_SENTENCE_END = re.compile(r"(?<=[.!?。！？])\s+")
+_NOT_A_WORD = re.compile(r"[^\w\s]+")
+
+
+def normalized(text: str) -> str:
+    """Text as compared: lower case, no punctuation, spaces single."""
+    return " ".join(_NOT_A_WORD.sub("", text.lower()).split())
+
+
+def _once(text: str) -> str:
+    """A segment's text with a sentence said again and again in a row said once ("Thank you. Thank you. …")."""
+    sentences = _SENTENCE_END.split(text)
+    kept = [s for i, s in enumerate(sentences) if i == 0 or normalized(s) != normalized(sentences[i - 1])]
+    if len(kept) == len(sentences):
+        return text
+    return (" " if text.startswith(" ") else "") + " ".join(s.strip() for s in kept)
+
+
+def cleaned(segments: Iterable[Segment]) -> list[Segment]:
+    """What a machine heard, without what Whisper makes up: a line said again right after itself (a loop) kept
+    once, a sentence said over and over in one line once, and a stock line (STOCK) where the machine thought it
+    wasn't speech (NOT_SPEECH) left out. A machine that didn't say how likely that was keeps them."""
+    out: list[Segment] = []
+    for s in segments:
+        text = _once(s.text)
+        said = normalized(text)
+        if said in STOCK and s.no_speech is not None and s.no_speech >= NOT_SPEECH:
+            continue
+        if said and out and said == normalized(out[-1].text):
+            continue
+        out.append(Segment(s.start, s.end, text, s.no_speech))
+    return out
 
 
 def _stamp(seconds: float) -> str:

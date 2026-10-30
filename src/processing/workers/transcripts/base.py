@@ -9,11 +9,20 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Segment:
-    """Something said, start and end in seconds."""
+    """Something said, start and end in seconds. no_speech: how likely the machine thought it wasn't speech
+    at all (Whisper's no_speech_prob), None when it didn't say."""
 
     start: float
     end: float
     text: str
+    no_speech: float | None = None
+
+
+def chance(value: object) -> float | None:
+    """A segment's no_speech as a machine said it: a probability, else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+        return None
+    return float(value)
 
 
 @dataclass(frozen=True)
@@ -41,5 +50,7 @@ class TranscriptError(Exception):
 
 class Transcriber(ABC):
     @abstractmethod
-    def transcribe(self, speech_wav: Path) -> Heard:
-        """What was said in speech_wav (16 kHz mono WAV of speech alone). Raises TranscriptError."""
+    def transcribe(self, speech_wav: Path, language: str = "") -> Heard:
+        """What was said in speech_wav (16 kHz mono WAV of speech alone). language: the code of the language
+        most likely spoken ("en"; "" detects it), as the transcript's Language setting says. Raises
+        TranscriptError."""

@@ -53,12 +53,16 @@ WRITE = "LUMIVERB_WRITE_TESTER_NAMED_DATA"
 # What phase 1 adds to each producer's row (the plan's section 2).
 ADDED = ("makes", "reads", "reads_others")
 # Versions raised on purpose since v0.1.104, (then, now): a row at its new version reads as it did then.
-RAISED_SINCE = {"lumiverb.video.scenes": ("4", "5")}  # pictures compared by a wavelet hash
+RAISED_SINCE = {"lumiverb.video.scenes": ("4", "5"),  # pictures compared by a wavelet hash
+                # Oct 30: what Whisper makes up left out, and the Language setting.
+                "lumiverb.video.transcript": ("1", "2")}
 # Prompts changed on purpose since, (then, now): a row with the new one reads as it did then (Oct 29: scenes are a
 # video's frames, described with their own prompt, not the photos').
 PROMPTS_SINCE = {"lumiverb.video.scene_descriptions": (VISION_PROMPT, SCENE_PROMPT)}
 # Settings offered since, and why they weren't then (Oct 29: a model that thinks first needs a longer answer).
 OFFERED_SINCE = {"lumiverb.video.scene_descriptions": {"max_tokens": NOT_OFFERED}}
+# Settings added since (Oct 30: a transcript's language), at their defaults: a row reads as it did without them.
+SETTINGS_ADDED_SINCE = {"lumiverb.video.transcript": ("language",)}
 
 
 def _as_then(row: dict) -> dict:
@@ -77,6 +81,11 @@ def _as_then(row: dict) -> dict:
             row["settings_hash"] = settings_hash(row["settings"])
     for key, why in OFFERED_SINCE.get(row.get("artifact"), {}).items():
         row["fields"] = [{**f, "fixed": why} if f["key"] == key else f for f in row.get("fields", [])]
+    for key in SETTINGS_ADDED_SINCE.get(row.get("artifact"), ()):
+        row["fields"] = [f for f in row.get("fields", []) if f["key"] != key]
+        if key in row.get("settings", {}):
+            row["settings"] = {k: v for k, v in row["settings"].items() if k != key}
+            row["settings_hash"] = settings_hash(row["settings"])
     return row
 
 

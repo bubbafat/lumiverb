@@ -169,7 +169,7 @@ def test_clips_go_to_every_online_machine_as_many_at_once_as_they_take(library):
     preparing = [0]
     full = threading.Event()  # every machine's slots taken at once, however slow this machine
 
-    def hear(self, wav):
+    def hear(self, wav, language=""):
         with lock:
             for k in ("all", type(self)):
                 busy[k] += 1
@@ -182,7 +182,7 @@ def test_clips_go_to_every_online_machine_as_many_at_once_as_they_take(library):
                 busy[k] -= 1
         return Heard()
 
-    def transcribe_one(source, transcriber, vad_ms, *, work_dir):
+    def transcribe_one(source, transcriber, vad_ms, *, work_dir, language):
         with lock:
             preparing[0] += 1
         return ("", "") if transcriber.transcribe(source) == Heard() else None
@@ -202,7 +202,7 @@ def test_no_machine_left_stops_transcription_without_charging_a_clip(library):
     client = _client([BUILT_IN])
     calls = []
 
-    def transcribe_one(source, transcriber, vad_ms, *, work_dir):
+    def transcribe_one(source, transcriber, vad_ms, *, work_dir, language):
         calls.append(source.name)
         raise TranscriptError("No machine doing transcripts is online (Built in: Couldn't load small).",
                               endpoint_fault=True)
@@ -217,7 +217,7 @@ def test_no_machine_left_stops_transcription_without_charging_a_clip(library):
 def test_a_surprise_on_one_clip_charges_it_and_the_rest_go_on(library):
     client = _client([BUILT_IN])
 
-    def transcribe_one(source, transcriber, vad_ms, *, work_dir):
+    def transcribe_one(source, transcriber, vad_ms, *, work_dir, language):
         if source.name == "ast_a.mp4":
             raise ValueError("unexpected")
         if source.name == "ast_b.mp4":
@@ -241,7 +241,7 @@ def test_without_faster_whisper_here_settings_says_so(library):
 def test_a_clip_the_machine_couldnt_make_sense_of_is_charged_once_the_machine_checks_out(library):
     client = _client([BUILT_IN])
 
-    def transcribe_one(source, transcriber, vad_ms, *, work_dir):
+    def transcribe_one(source, transcriber, vad_ms, *, work_dir, language):
         if source.name == "ast_a.mp4":
             raise TranscriptError("Invalid data found when processing input", endpoint_fault=False)
         return ("1\n00:00:00,000 --> 00:00:01,000\nhi\n", "en")
@@ -256,8 +256,10 @@ def test_the_built_in_failing_to_load_moves_the_clip_to_a_server_timed_onto_the_
     """End to end on the worker: the speech is found here (500 ms silences),
     the built-in Whisper can't load its model, so the server hears the
     speech; its times come back onto the clip, and the lineage says small."""
+    # What Whisper makes up where nobody spoke is left out (speech.cleaned).
     server = _Server((200, {"language": "english", "text": " hi",
-                            "segments": [{"start": 0.25, "end": 0.75, "text": " hi"}]}))
+                            "segments": [{"start": 0.25, "end": 0.75, "text": " hi"},
+                                         {"start": 0.8, "end": 0.95, "text": " Thank you.", "no_speech_prob": 0.8}]}))
     try:
         client = _client([BUILT_IN, _speaches(server.url, at_once=1)])
 
@@ -285,8 +287,10 @@ def test_the_built_in_failing_to_load_moves_the_clip_to_a_server_timed_onto_the_
     assert found == [500]
     assert req["fields"]["model"][2] == b"Systran/faster-whisper-small"
     assert req["fields"]["file"][2] == b"RIFF speech"
+    assert "language" not in req["fields"]  # Detect, the Language setting's default
     sent = _transcripts(client)["ast_a"]
     assert sent["srt"] == "1\n00:00:02,250 --> 00:00:02,750\nhi\n" and sent["language"] == "en"
-    assert sent["lineage"] == P.lineage("lumiverb.video.transcript", {"model": "small", "vad_min_silence_ms": 500}, SHA)
+    assert sent["lineage"] == P.lineage("lumiverb.video.transcript", {"model": "small", "vad_min_silence_ms": 500,
+                                                                    "language": "detect"}, SHA)
     assert _statuses(client, "aim_self")[-1]["error"] == "Couldn't load small: no space left"
     assert _charged(client) == []
