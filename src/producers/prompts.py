@@ -49,13 +49,14 @@ OCR_PROMPT = (
 
 def text_ai_settings(prompt: str, *, max_tokens: int) -> tuple:
     """A vision machine's settings for text alone (no image): its model, the prompt and the sampling."""
+    from src.processing.workers.captions.base import LONGEST_ANSWER
     from src.producers.contract import ITS_JOBS, Setting
 
     return (
         Setting("model", "", "Model", kind="text", fixed=ITS_JOBS),
         Setting("prompt", prompt, "Prompt", kind="text"),
         Setting("temperature", 0.2, "Temperature", kind="float", minimum=0, maximum=2, advanced=True),
-        Setting("max_tokens", max_tokens, "Longest answer", minimum=50, maximum=4000, unit="tokens",
+        Setting("max_tokens", max_tokens, "Longest answer", minimum=50, maximum=LONGEST_ANSWER, unit="tokens",
                 advanced=True),
     )
 
@@ -65,6 +66,7 @@ def ai_settings(prompt: str, fixed: str = "", *, room_fixed: bool = True) -> tup
     the image's size and the sampling. room_fixed=False offers the longest
     answer even where the rest are fixed: a model that thinks first spends
     it thinking, and needs more than the default to answer at all."""
+    from src.processing.workers.captions.base import LONGEST_ANSWER
     from src.producers.contract import ITS_JOBS, Setting
 
     return (
@@ -74,6 +76,6 @@ def ai_settings(prompt: str, fixed: str = "", *, room_fixed: bool = True) -> tup
         # a larger size would send the same image and redo every clip for nothing.
         Setting("max_edge", 1280, "Image size sent", minimum=256, maximum=1280, unit="px", fixed=fixed),
         Setting("temperature", 0.2, "Temperature", kind="float", minimum=0, maximum=2, advanced=True, fixed=fixed),
-        Setting("max_tokens", 500, "Longest answer", minimum=50, maximum=4000, unit="tokens", advanced=True,
+        Setting("max_tokens", 500, "Longest answer", minimum=50, maximum=LONGEST_ANSWER, unit="tokens", advanced=True,
                 fixed=fixed if room_fixed else ""),
     )

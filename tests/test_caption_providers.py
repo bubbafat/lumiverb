@@ -1,5 +1,7 @@
 """Fast tests for caption providers."""
 
+import json
+
 import pytest
 
 
@@ -225,9 +227,58 @@ def test_a_reply_that_runs_out_of_room_says_to_raise_the_longest_answer(tmp_path
         with pytest.raises(CaptionError) as e:
             p.describe(_image(tmp_path))
     assert e.value.endpoint_fault is endpoint_fault
-    assert str(e.value) == ("It ran out of room: it used all 500 tokens of its answer before finishing (a model that "
+    # Asked again once with twice the room, and not again after that: it would end the same.
+    assert [json.loads(b)["max_tokens"] for b in machine.sent] == [500, 1000]
+    assert str(e.value) == ("It ran out of room: it used all 1000 tokens of its answer before finishing (a model that "
                             "thinks first can spend them all thinking). Raise its Longest answer in Settings › "
                             "Processing.")
+
+
+def test_a_reply_cut_off_is_asked_again_with_twice_the_room(tmp_path, caplog):
+    """Claude Haiku 5.5 thinks first: a reply cut off at 500 tokens finishes at 1,000, and the log says to raise it."""
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from tests.ai_machine_server import local_machine
+
+    whole = '{"description": "A troll figurine on a shelf.", "tags": ["troll", "shelf"]}'
+
+    def answer(sent):
+        if sent["max_tokens"] < 1000:
+            return 200, _cut_off(""), {}
+        return 200, {"choices": [{"message": {"content": whole}, "finish_reason": "stop"}]}, {}
+
+    with local_machine(answer) as machine:
+        got = OpenAICompatibleCaptionProvider(machine.url, "claude-haiku-5-5").describe(_image(tmp_path))
+    assert got == {"description": "A troll figurine on a shelf.", "tags": ["troll", "shelf"]}
+    assert [json.loads(b)["max_tokens"] for b in machine.sent] == [500, 1000]
+    assert any("raise its Longest answer" in r.getMessage() and "500" in r.getMessage() for r in caplog.records)
+
+
+def test_a_reply_cut_off_at_the_most_room_isnt_asked_again(tmp_path):
+    from src.processing.workers.captions.base import LONGEST_ANSWER, CaptionError
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from tests.ai_machine_server import local_machine
+
+    with local_machine((200, _cut_off(""), {})) as machine:
+        from src.producers.names import DESCRIPTION
+        from src.shared.producers import effective_settings
+
+        settings = {**effective_settings(DESCRIPTION), "max_tokens": LONGEST_ANSWER}
+        p = OpenAICompatibleCaptionProvider(machine.url, "m", settings=settings)
+        with pytest.raises(CaptionError):
+            p.describe(_image(tmp_path))
+    assert [json.loads(b)["max_tokens"] for b in machine.sent] == [LONGEST_ANSWER]
+
+
+def test_a_video_reply_cut_off_after_its_gist_keeps_the_gist_and_whole_details(tmp_path):
+    """A video's reply is a gist and details (VIDEO_PROMPT): cut off in its details, it keeps those that are whole."""
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from tests.ai_machine_server import local_machine
+
+    cut = '{"gist": "A family rides a boat past a castle", "details": ["The boat passes a tower.", "Kids wa'
+    with local_machine((200, _cut_off(cut), {})) as machine:
+        got = OpenAICompatibleCaptionProvider(machine.url, "m").describe_text("Scene 1: a boat.")
+    assert got == {"description": "A family rides a boat past a castle. The boat passes a tower.", "tags": []}
+    assert len(machine.sent) == 2  # asked again with more room first
 
 
 def test_a_reply_cut_off_after_its_description_is_kept_not_out_of_room(tmp_path):

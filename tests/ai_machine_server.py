@@ -36,10 +36,11 @@ WORKS = {
 
 class LocalMachine:
     """lists: the models GET /v1/models lists (None: that's answered as everything else is). answer: (status,
-    body: JSON or bytes, headers) for everything else, `delay` seconds after it's asked. tls: (certificate, key) files
+    body: JSON or bytes, headers) for everything else, `delay` seconds after it's asked, or a function of what was
+    sent (its JSON) giving them. tls: (certificate, key) files
     to serve HTTPS with. asked: [(method, path)] as they came; sent: what each sent, in that order."""
 
-    def __init__(self, answer: tuple[int, Any, dict[str, str]] = (200, WORKS, {}),
+    def __init__(self, answer: Any = (200, WORKS, {}),
                  lists: tuple[str, ...] | None = (MODEL,), tls: tuple[Path, Path] | None = None) -> None:
         self.answer = answer
         self.delay = 0.0
@@ -56,7 +57,9 @@ class LocalMachine:
                     status, body, headers = 200, {"object": "list", "data": [{"id": m} for m in lists]}, {}
                 else:
                     time.sleep(outer.delay)
-                    status, body, headers = outer.answer
+                    answer = outer.answer
+                    status, body, headers = answer(json.loads(outer.sent[-1] or b"null")) if callable(answer) \
+                        else answer
                 data = body if isinstance(body, bytes) else json.dumps(body).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -95,7 +98,7 @@ def certificate(folder: Path) -> tuple[tuple[Path, Path], str]:
 
 
 @contextmanager
-def local_machine(answer: tuple[int, Any, dict[str, str]] = (200, WORKS, {}),
+def local_machine(answer: Any = (200, WORKS, {}),
                   lists: tuple[str, ...] | None = (MODEL,), tls: tuple[Path, Path] | None = None
                   ) -> Iterator[LocalMachine]:
     machine = LocalMachine(answer, lists, tls)
