@@ -34,8 +34,8 @@ def unavailable() -> str:
 def cuda_libraries() -> list[str]:
     """The folders of the CUDA libraries installed as Python packages (nvidia-cublas-cu12, nvidia-cudnn-cu12, …,
     which torch's Linux wheels bring): CTranslate2 loads libcublas.so.12 and cuDNN by name, and the loader doesn't
-    look in site-packages, so on a computer with an NVIDIA GPU and no CUDA of its own Whisper couldn't load at all
-    (media, Oct 30). torch and ONNX Runtime load them for themselves; the child imports neither."""
+    look in site-packages. It finds them today only because CTranslate2 happens to import torch, whose libraries
+    lead there; without that, Whisper on an NVIDIA GPU with no CUDA of its own doesn't load (media, Oct 30)."""
     spec = importlib.util.find_spec("nvidia")
     if spec is None or not spec.submodule_search_locations:
         return []

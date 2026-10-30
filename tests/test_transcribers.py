@@ -262,8 +262,11 @@ def test_a_built_in_transcription_that_never_ends_is_the_clips(tmp_path):
 
 @pytest.fixture
 def nvidia_wheels(tmp_path, monkeypatch):
-    """CUDA's libraries as torch's Linux wheels install them: site-packages/nvidia/<name>/lib."""
+    """CUDA's libraries as torch's Linux wheels install them: site-packages/nvidia/<name>/lib. A package of its own
+    (__init__.py), as the wheels' is, so it's the one found ahead of a real one on Linux."""
     site = tmp_path / "site"
+    (site / "nvidia").mkdir(parents=True)
+    (site / "nvidia" / "__init__.py").write_text("")
     for name in ("cublas", "cudnn"):
         (site / "nvidia" / name / "lib").mkdir(parents=True)
         (site / "nvidia" / name / "lib" / f"lib{name}.so.12").write_bytes(b"")
@@ -276,10 +279,10 @@ def nvidia_wheels(tmp_path, monkeypatch):
 
 
 def test_the_built_in_whisper_is_given_cudas_libraries_on_linux(speech, nvidia_wheels, monkeypatch):
-    """CTranslate2 loads libcublas.so.12 by name, and Linux's loader doesn't look in site-packages: without
-    their folders on LD_LIBRARY_PATH Whisper on an NVIDIA GPU never loaded (media, Oct 30)."""
+    """CTranslate2 loads libcublas.so.12 by name, and Linux's loader doesn't look in site-packages: it found it
+    only through torch, which CTranslate2 happens to import (media, Oct 30: without torch, no Whisper on the GPU)."""
     ours = [str(nvidia_wheels / "cublas" / "lib"), str(nvidia_wheels / "cudnn" / "lib")]
-    assert [f for f in local.cuda_libraries() if f.startswith(str(nvidia_wheels))] == ours
+    assert local.cuda_libraries() == ours
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/before")
     out = json.dumps({"segments": [], "language": "en"})
