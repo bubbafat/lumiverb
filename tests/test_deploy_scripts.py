@@ -1322,7 +1322,8 @@ def _restart_calls(tmp_path: Path, *, answers: bool = True) -> list[str]:
     block = text.split('step "Restarting services"', 1)[1].split('echo -e "${GREEN}${BOLD}API update complete', 1)[0]
     script = (
         'step() { :; }; ok() { :; }; warn() { :; }; fail() { echo "fail: $1"; exit 1; }\n'
-        f'systemctl() {{ echo "systemctl $*" >> "{calls}"; }}\n'
+        # A unit that's running isn't failed (is-failed's exit status).
+        f'systemctl() {{ echo "systemctl $*" >> "{calls}"; [[ "$1" != is-failed ]]; }}\n'
         f'curl() {{ echo "curl $*" >> "{calls}"; {"" if answers else "return 7;"} }}\n'
         'sudo() { :; }; sleep() { :; }\n'
         'API_PORT=8100; SVC_USER=lumiverb; UV_BIN=uv\n'
@@ -1331,8 +1332,9 @@ def _restart_calls(tmp_path: Path, *, answers: bool = True) -> list[str]:
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert (out.returncode == 0) == answers, out.stdout + out.stderr
     if not answers:
-        assert "fail: API server not responding after 10 s" in out.stdout
-    return [c for c in calls.read_text().splitlines() if not c.startswith(("systemctl is-enabled", "systemctl status"))]
+        assert "fail: API server not responding after 90 s" in out.stdout
+    return [c for c in calls.read_text().splitlines()
+            if not c.startswith(("systemctl is-enabled", "systemctl status", "systemctl is-failed"))]
 
 
 def test_the_scheduler_stops_before_the_api_restarts_and_starts_once_it_answers(tmp_path):
@@ -1344,11 +1346,11 @@ def test_the_scheduler_stops_before_the_api_restarts_and_starts_once_it_answers(
     assert stop < api < health < start
 
 
-def test_an_api_that_doesnt_answer_in_10_s_fails_before_the_scheduler_starts(tmp_path):
+def test_an_api_that_doesnt_answer_in_90_s_fails_before_the_scheduler_starts(tmp_path):
     """Review: the scheduler was started whether or not the API answered."""
     calls = _restart_calls(tmp_path, answers=False)
     assert "systemctl start lumiverb-scheduler" not in calls
-    assert sum(1 for c in calls if c.startswith("curl")) == 10
+    assert sum(1 for c in calls if c.startswith("curl")) == 90
 
 
 def test_a_failure_with_the_scheduler_stopped_says_how_to_start_it(tmp_path):

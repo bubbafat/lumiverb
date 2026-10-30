@@ -610,15 +610,19 @@ systemctl restart lumiverb-api
 # them), and the venv doesn't need it. Every update, so a rerun gets there.
 as_svc "$UV_BIN" cache clean || warn "Couldn't clear uv's cache"
 
+# A first start after new code compiles it (no .pyc yet): ~12 s on a 2-vCPU droplet (Oct 30), so up to 90 s,
+# stopping at once if the unit fails.
 ANSWERS=false
-for i in {1..10}; do
+for i in {1..90}; do
   if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then
     ANSWERS=true
     break
   fi
+  systemctl is-failed --quiet lumiverb-api && break
+  (( i % 10 == 0 )) && echo "  Waiting for the API to start (${i} s)..."
   sleep 1
 done
-[[ "$ANSWERS" == true ]] || fail "API server not responding after 10 s — check: journalctl -u lumiverb-api -n 50"
+[[ "$ANSWERS" == true ]] || fail "API server not responding after ${i} s — check: journalctl -u lumiverb-api -n 50"
 # The plug-ins once the API answers (its migrations are done), the scheduler
 # last: its jobs save through the API.
 systemctl is-enabled lumiverb-plugins >/dev/null 2>&1 && systemctl restart lumiverb-plugins
