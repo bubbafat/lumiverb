@@ -406,7 +406,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     raise OutOfRoomError(limit, said_nothing=not any(r["reply"].strip() for r in replies))
                 text = replies[0]["reply"].strip()
                 logger.info("OCR raw response (%d chars): %s", len(text), text[:200] if text else "(empty)")
-                if not text or text.upper() == "NONE" or text == "<none>":
+                if self._says_none(text):
                     return ""
 
                 # Strip reasoning preamble (model analysis before actual OCR)
@@ -435,6 +435,15 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 raise CaptionError(str(e) or type(e).__name__, endpoint_fault=is_endpoint_fault(e)) from e
 
         return ""
+
+    # The prompt's "If none, say NONE.", alone or with why (Claude Haiku 5.5: "NONE. I don't see any legible text in
+    # this image. It shows a beach sunset…"): never a sign reading "NONE SHALL PASS".
+    _NONE = re.compile(r"\s*<?none>?[ \t]*(?:[.,:;!\-\u2013\u2014(\n]|$)", re.IGNORECASE)
+
+    @classmethod
+    def _says_none(cls, reply: str) -> bool:
+        """The reply says the image has no text."""
+        return not reply.strip() or cls._NONE.match(reply) is not None
 
     # Phrases that indicate reasoning preamble (not OCR text)
     _REASONING_STARTS = (
@@ -637,7 +646,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         result: dict | str | None = None
         problem = ""
         if what == "read":
-            result = "" if not reply or reply.upper() == "NONE" or reply == "<none>" else self._strip_ocr_reasoning(reply)
+            result = "" if self._says_none(reply) else self._strip_ocr_reasoning(reply)
         else:
             try:
                 result = self._parse_description(reply)
