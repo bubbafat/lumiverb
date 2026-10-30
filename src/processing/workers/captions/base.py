@@ -19,6 +19,11 @@ class CaptionError(Exception):
         self.endpoint_fault = endpoint_fault
 
 
+# The most a machine's longest answer (its max_tokens) may be (Settings › Processing), and the most a reply cut off at
+# a smaller one is asked again with.
+LONGEST_ANSWER = 4000
+
+
 class OutOfRoomError(ValueError):
     """A reply cut off at its longest answer with nothing to keep in it. said_nothing: not a word of an answer, all
     of it spent thinking (a model that thinks first, Claude Haiku 5.5 at 500 tokens): every request will end the

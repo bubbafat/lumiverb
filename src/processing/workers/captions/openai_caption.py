@@ -22,6 +22,7 @@ import requests
 from PIL import Image
 
 from src.processing.workers.captions.base import (
+    LONGEST_ANSWER,
     CaptionError,
     CaptionProvider,
     OutOfRoomError,
@@ -199,36 +200,41 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         # Not the reply itself: a clip's failure is seen by everyone who sees the clip; the log keeps the reply.
         raise ValueError(f"No JSON object found in response ({len(clean)} chars)")
 
-    _WHOLE_DESCRIPTION = re.compile(r'"description"\s*:\s*("(?:[^"\\]|\\.)*")\s*[,}]', re.DOTALL)
-    _WHOLE_TAG = re.compile(r'("(?:[^"\\]|\\.)*")\s*(?=[,\]])')
+    _WHOLE_STRING = re.compile(r'\s*("(?:[^"\\]|\\.)*")\s*(?=[,\]}])[,]?', re.DOTALL)
     MAX_SALVAGED_TAGS = 10
 
     def _salvage(self, text: str) -> dict | None:
         """A reply cut off after its description (max_tokens, a loop in the
         tags): the description, and the tags that are whole (no repeats, at
-        most MAX_SALVAGED_TAGS). None when the description isn't whole."""
-        m = self._WHOLE_DESCRIPTION.search(text)
-        if m is None:
-            return None
-        try:
-            description = json.loads(m.group(1), strict=False).strip()
-        except json.JSONDecodeError:
-            return None
+        most MAX_SALVAGED_TAGS). A video's is its gist and the details that
+        are whole (VIDEO_PROMPT). None when neither is whole."""
+        description = " ".join(self._whole_strings(text, "description")[:1])
+        if not description:
+            gist = self._whole_strings(text, "gist")[:1]
+            description = self._gist_and_details({"gist": gist[0], "details": self._whole_strings(
+                text, "details", listed=True)}) if gist else ""
         if not description:
             return None
-        tags: list[str] = []
-        t = re.search(r'"tags"\s*:\s*\[', text)
-        if t is not None:
-            for raw in self._WHOLE_TAG.findall(text, t.end()):
-                try:
-                    tag = json.loads(raw, strict=False).strip()
-                except json.JSONDecodeError:
-                    continue
-                if tag and tag not in tags:
-                    tags.append(tag)
-                if len(tags) == self.MAX_SALVAGED_TAGS:
-                    break
-        return {"description": description, "tags": tags}
+        tags = list(dict.fromkeys(self._whole_strings(text, "tags", listed=True)))
+        return {"description": description, "tags": tags[:self.MAX_SALVAGED_TAGS]}
+
+    def _whole_strings(self, text: str, field: str, *, listed: bool = False) -> list[str]:
+        """The field's text when it's whole, or (listed) its list's strings up to the first that isn't: [] for
+        none."""
+        start = re.search(rf'"{field}"\s*:\s*' + (r"\[" if listed else ""), text)
+        found: list[str] = []
+        at = start.end() if start else len(text)
+        while start is not None and (m := self._WHOLE_STRING.match(text, at)) is not None:
+            try:
+                value = json.loads(m.group(1), strict=False).strip()
+            except json.JSONDecodeError:
+                break
+            if value:
+                found.append(value)
+            if not listed:
+                break
+            at = m.end()
+        return found
 
     def _strip_thinking(self, text: str) -> str:
         """Strip <think>...</think> blocks; some reasoning models prefix responses with them."""
@@ -302,16 +308,11 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             try:
                 got = self._asked(content, self._vision)
                 last_raw = got["reply"]
-                try:
-                    return self._parse_description(got["reply"])
-                except ValueError:
-                    if got["finish"] != "length":
-                        raise
-                    raise OutOfRoomError(int(self._vision["max_tokens"]),
-                                    said_nothing=not got["reply"].strip()) from None
+                return self._with_room(content, got)
             except Exception as e:  # noqa: BLE001
                 last_error = e
-                if attempt < self.MAX_ATTEMPTS:
+                # Out of room at the most it was given: the same again would end the same.
+                if attempt < self.MAX_ATTEMPTS and not isinstance(e, OutOfRoomError):
                     retry_after = getattr(e, "retry_after", None)
                     if retry_after:
                         sleep_time = retry_after
@@ -327,11 +328,35 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                     continue
                 logger.warning(
                     "OpenAI-compatible caption failed for %s after %d attempts: %s\n  Last raw response: %s",
-                    what, self.MAX_ATTEMPTS, e, last_raw[:500] if last_raw else "(empty)",
+                    what, attempt, e, last_raw[:500] if last_raw else "(empty)",
                 )
                 raise CaptionError(str(e) or type(e).__name__, endpoint_fault=is_endpoint_fault(e)) from e
 
         raise CaptionError(str(last_error), endpoint_fault=False)
+
+    def _with_room(self, content: list[dict], got: dict) -> dict:
+        """The description in a reply (_asked's). One cut off at its longest answer is asked again once, with twice
+        the room (at most LONGEST_ANSWER), and the log says to raise it; still cut off, what's whole in the longer
+        reply is kept (_salvage), else OutOfRoomError."""
+        limit = int(self._vision["max_tokens"])
+        replies = [got]
+        if got["finish"] == "length" and limit < LONGEST_ANSWER:
+            roomier = min(2 * limit, LONGEST_ANSWER)
+            again = self._asked(content, {**self._vision, "max_tokens": roomier})
+            if again["finish"] != "length":
+                parsed = self._parse_description(again["reply"])
+                logger.warning("An AI reply cut off at its Longest answer (%d tokens) finished when asked again with "
+                               "%d: raise its Longest answer in Settings › Processing", limit, roomier)
+                return parsed
+            replies.insert(0, again)
+            limit = roomier
+        for reply in replies:
+            try:
+                return self._parse_description(reply["reply"])
+            except ValueError:
+                if reply["finish"] != "length":
+                    raise
+        raise OutOfRoomError(limit, said_nothing=not any(r["reply"].strip() for r in replies))
 
     def extract_text(self, proxy_path: Path) -> str:
         """Extract visible text from an image via OCR prompt.
