@@ -35,7 +35,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import text
 
-from src.producers.prompts import SCENE_PROMPT, VISION_PROMPT
+from src.producers.prompts import OCR_PROMPT, SCENE_PROMPT, VISION_PROMPT
 from src.producers.scene_vision import NOT_OFFERED
 from src.server.database import get_tenant_session, tenant_database_url
 from src.shared.producers import settings_hash
@@ -58,7 +58,11 @@ RAISED_SINCE = {"lumiverb.video.scenes": ("4", "5"),  # pictures compared by a w
                 "lumiverb.video.transcript": ("1", "2")}
 # Prompts changed on purpose since, (then, now): a row with the new one reads as it did then (Oct 29: scenes are a
 # video's frames, described with their own prompt, not the photos').
-PROMPTS_SINCE = {"lumiverb.video.scene_descriptions": (VISION_PROMPT, SCENE_PROMPT)}
+OCR_PROMPT_BEFORE = ("What text is visible in this image? Include text from signs, labels, products, screens, "
+                     "documents, or watermarks. If none, say NONE.")
+PROMPTS_SINCE = {"lumiverb.video.scene_descriptions": (VISION_PROMPT, SCENE_PROMPT),
+                 # Oct 30: the text read alone, as a list (Claude Haiku 5.5 answered in sentences).
+                 "lumiverb.image.text": (OCR_PROMPT_BEFORE, OCR_PROMPT)}
 # Settings offered since, and why they weren't then (Oct 29: a model that thinks first needs a longer answer).
 OFFERED_SINCE = {"lumiverb.video.scene_descriptions": {"max_tokens": NOT_OFFERED}}
 # Settings added since (Oct 30: a transcript's language), at their defaults: a row reads as it did without them.
@@ -249,7 +253,7 @@ def test_rename_an_account_from_before_migrated_up_answers_as_it_did_and_down_is
     mine = {row["artifact"]: row for row in now["producers"] if row["artifact"] not in ADDED_SINCE}
     theirs = {row["artifact"]: row for row in then["producers"]}
     assert list(mine) == list(theirs), "the same producers, in the same order"
-    for a in (*PROMPTS_SINCE, *DEFAULTS_RAISED_IN):
+    for a in dict.fromkeys((*PROMPTS_SINCE, *DEFAULTS_RAISED_IN)):
         # Made with the prompt or a default before: what was current is stale now, and waits to be remade (an
         # account that had seen the defaults before holds it, lineage.hold_new_defaults; this one hadn't, and has
         # no model). The rest of its row is as it was.
