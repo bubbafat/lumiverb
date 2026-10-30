@@ -290,6 +290,32 @@ def test_extract_text_empty_response(mock_chat, provider, tmp_path):
     assert result == ""
 
 
+@pytest.mark.parametrize("reply", [
+    "NONE",
+    "none.",
+    "<none>",
+    "NONE. I don't see any legible text in this image. It shows a beach sunset with a pier, a Ferris wheel and palms.",
+    "NONE - the image shows a dog on a lawn.",
+    "None: there is no text.",
+    "NONE\n\nThe photo shows a mountain lake.",
+])
+@patch.object(OpenAICompatibleCaptionProvider, "_asked")
+def test_extract_text_none_with_why_is_no_text(mock_chat, reply, provider, tmp_path):
+    """The prompt's NONE, alone or with why (Claude Haiku 5.5 says why): no text, not the explanation saved as text."""
+    mock_chat.return_value = _replied(reply)
+    img = tmp_path / "test.jpg"
+    _make_test_jpeg(img)
+    assert provider.extract_text(img) == ""
+
+
+@patch.object(OpenAICompatibleCaptionProvider, "_asked")
+def test_extract_text_a_sign_starting_with_none_is_text(mock_chat, provider, tmp_path):
+    mock_chat.return_value = _replied("NONE SHALL PASS")
+    img = tmp_path / "test.jpg"
+    _make_test_jpeg(img)
+    assert provider.extract_text(img) == "NONE SHALL PASS"
+
+
 @patch.object(OpenAICompatibleCaptionProvider, "_asked")
 def test_extract_text_reasoning_response(mock_chat, provider, tmp_path):
     """Reasoning-wrapped response has reasoning stripped."""
