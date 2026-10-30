@@ -288,9 +288,14 @@ def _understood_search(session: Session, read: list, library_ids: list[str] | No
                 near = understand.clips_near(session, part.places, library_ids)
                 known = {aid: p.shown if len(part.places) > 1 else part.label for aid, p in near.items()}
             by_words, said, _ = _words_search(session, [part.searched], library_ids, limit, None, False, capped)
-            # Found by who's in it or where it was ranks above a word naming them.
+            # Found by who's in it or where it was ranks above a word naming them; someone named by another of their
+            # names, below someone named by their own.
             found_by = understand.PERSON if part.kind == understand.PERSON else understand.PLACE
-            matched = {aid: rank.Rank(field=max(rank.FIELD[found_by] if aid in known else 0,
+            field = dict.fromkeys(known, rank.FIELD[found_by])
+            if part.kind == understand.PERSON and part.own_ids and set(part.own_ids) != set(part.person_ids):
+                own = set(understand.clips_with(session, part.own_ids, library_ids))
+                field = {aid: f if aid in own else rank.FIELD["nickname"] for aid, f in field.items()}
+            matched = {aid: rank.Rank(field=max(field.get(aid, 0),
                                                 by_words[aid].field if aid in by_words else 0),
                                       quality=by_words[aid].quality if aid in by_words else 0.0)
                        for aid in {*known, *by_words}}

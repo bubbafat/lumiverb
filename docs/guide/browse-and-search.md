@@ -56,7 +56,7 @@ A clip found by something other than its description says so in the corner of it
 
 A search also understands who, where and what kind of clip you ask for. `a video of Sue dancing at California Adventure` finds videos where Sue is recognised, taken within 5 km of California Adventure, that match "dancing":
 
-- **Who**: a name of someone you've named on the People page, their first name, last name or both (`Horvick` finds every Horvick, and `the Tuttles` every Tuttle). Common short forms count both ways: `Sue` finds Susan, and `Bob` finds Robert.
+- **Who**: a name of someone you've named on the People page, their first name, last name or both (`Horvick` finds every Horvick, and `the Tuttles` every Tuttle). Common short forms count both ways: `Sue` finds Susan, and `Bob` finds Robert. Where an admin lets searches use the AI machine (below), it's also asked once, a few minutes after you name someone, what else people with their first name are called, so `Beppe` finds Giuseppe; nothing to type in. Someone named by the name you typed comes before someone it's another name of: `Rob` shows Rob Smith, then Robert Horvick.
 - **Where**: the name of a place (with the Place names plug-in on) where some of your clips were taken. A clip within 5 km of it matches, wherever its GPS or its location guess put it. When places share a name, it's each of them you've been to, up to three, those with the most clips first: `Portland` finds your clips from Portland, Oregon and Portland, Maine, its card says **Portland (Oregon or Maine)**, and each clip's tag says which.
 - **What kind**: `video`, `videos`, `photo`, `pictures` and the like.
 

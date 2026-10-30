@@ -220,7 +220,8 @@ def kinds(session: Session, asked: Sequence[str], model: str,
     return out
 
 
-def asker(tenant_id: str) -> tuple[str, Callable[[str], str] | None]:
+def asker(tenant_id: str, *, max_tokens: int = ANSWER_TOKENS,
+          timeout: float = WAIT_SEC) -> tuple[str, Callable[[str], str] | None]:
     """The account's model for descriptions and a way to ask its machines a question (each describing machine that's
     on, in order, until one answers), or (model, None) when there's none to ask."""
     from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
@@ -245,7 +246,7 @@ def asker(tenant_id: str) -> tuple[str, Callable[[str], str] | None]:
                 allowed(m.api_url)
                 provider = OpenAICompatibleCaptionProvider(m.api_url, model, key_of(m) or None,
                                                            fingerprint=m.fingerprint)
-                return provider.answer(prompt, max_tokens=ANSWER_TOKENS, timeout=WAIT_SEC)
+                return provider.answer(prompt, max_tokens=max_tokens, timeout=timeout)
             except (VisionEndpointError, OSError, ValueError) as e:  # requests' errors are OSErrors: the next one
                 last = e
         raise last or RuntimeError("no machine answered")

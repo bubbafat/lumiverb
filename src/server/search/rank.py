@@ -27,7 +27,9 @@ from src.server.search.understand import fold
 
 # Where it matched, the more telling the higher: a search's matched_in (text_search.MATCHED_IN, and a search
 # understood's place and person), and a description a person wrote.
-FIELD = {"note": 6, "corrected": 6, "person": 5, "place": 5, "description": 4, "scene": 4, "text": 3,
+# A person found by another of their names ranks below one a search named by their own (Robert, Oct 30: "Rob" finds
+# Rob Smith first, then Robert Horvick).
+FIELD = {"note": 6, "corrected": 6, "person": 5, "place": 5, "nickname": 4, "description": 4, "scene": 4, "text": 3,
          "transcript": 3, "fact": 2, "path": 1}
 SPLIT = 2  # a search's words matched across fields: no one field says
 FILE, FOLDER = 2, 1  # named: its file's name, a folder's
