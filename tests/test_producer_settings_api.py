@@ -87,6 +87,26 @@ def test_a_setting_the_code_doesnt_read_cant_be_changed(env):
     assert "Not read by this producer yet" in r.json()["error"]["message"]
 
 
+def test_scenes_offer_their_longest_answer_alone_at_the_default_they_had(env):
+    # A model that thinks first (Claude Haiku 5.5) spends 500 tokens thinking: its room is offered, nothing else, and
+    # the default stays, so no account's scenes are out of date for it.
+    scenes = "lumiverb.video.scene_descriptions"
+    fields = {f["key"]: f for f in _producer(env, scenes)["fields"]}
+    assert (fields["max_tokens"]["fixed"], fields["max_tokens"]["default"]) == (None, 500)
+    assert all(fields[k]["fixed"] for k in ("prompt", "max_edge", "temperature", "model"))
+    before = _producer(env, scenes)["settings_hash"]
+    try:
+        r = _put(env, scenes, settings={"max_tokens": 4000}, redo=False)
+        assert r.status_code == 200 and r.json()["settings"]["max_tokens"] == 4000, r.text
+        assert _producer(env, scenes)["settings_hash"] != before  # what's made says the room it had
+        r = _put(env, scenes, settings={"prompt": "Say what you see."})
+        assert r.status_code == 422 and r.json()["error"]["code"] == "setting_fixed", r.text
+    finally:
+        _put(env, scenes, settings={"max_tokens": None}, redo=True)
+        env[0].post(f"/v1/producers/{scenes}/resume", json={"scope": "redo"}, headers=env[1])
+    assert _producer(env, scenes)["settings_hash"] == before
+
+
 def test_new_settings_ask_before_making_again_what_the_old_ones_made(env):
     lib = _library(env, "SettingsRedo")
     sha = _sha()

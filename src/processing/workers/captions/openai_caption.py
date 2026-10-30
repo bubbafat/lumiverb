@@ -21,7 +21,13 @@ from pathlib import Path
 import requests
 from PIL import Image
 
-from src.processing.workers.captions.base import CaptionError, CaptionProvider, is_endpoint_fault
+from src.processing.workers.captions.base import (
+    CaptionError,
+    CaptionProvider,
+    OutOfRoomError,
+    is_endpoint_fault,
+    out_of_room,
+)
 from src.shared import ai_requests
 
 logger = logging.getLogger(__name__)
@@ -294,9 +300,15 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         last_raw: str = ""
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
-                raw = self._ask(content, self._vision)
-                last_raw = raw
-                return self._parse_description(raw)
+                got = self._asked(content, self._vision)
+                last_raw = got["reply"]
+                try:
+                    return self._parse_description(got["reply"])
+                except ValueError:
+                    if got["finish"] != "length":
+                        raise
+                    raise OutOfRoomError(int(self._vision["max_tokens"]),
+                                    said_nothing=not got["reply"].strip()) from None
             except Exception as e:  # noqa: BLE001
                 last_error = e
                 if attempt < self.MAX_ATTEMPTS:
@@ -598,8 +610,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             except Exception as e:  # noqa: BLE001 — what parsing it raised: it isn't what was asked for
                 problem = f"Its answer isn't the description and tags asked for ({e})."
         if got["finish"] == "length":
-            problem = (f"It ran out of room: it used all {int(settings['max_tokens'])} tokens of its answer before "
-                       "finishing (a model that thinks first can spend them all thinking).")
+            problem = out_of_room(int(settings["max_tokens"]))
         elif not reply:
             problem = "It answered nothing."
         return {**got, "result": result, "problem": problem, "limit": int(settings["max_tokens"])}

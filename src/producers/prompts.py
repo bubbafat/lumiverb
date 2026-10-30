@@ -22,14 +22,18 @@ SCENE_PROMPT = (
 # A video's own description, written from its scenes' (they come before it, in order: video_description.work.scenes_text).
 # What it is first, then what to find it by (Robert, Oct 29, P5 of the study): asked one scene at a time, a model
 # listed the scenes, a sentence each, and never said what the video was. The reply's gist and details are its
-# description (openai_caption's _parse_description).
+# description (openai_caption's _parse_description). A name only when quoted, and nothing about what isn't there
+# (Robert, Oct 29, Qwen and Haiku compared): Haiku 5.5 opened with "most likely Castaway Cay" and spent a detail on
+# "No readable signs appear"; where a clip was is its location's to say.
 VIDEO_PROMPT = (
     "These are moments from one video, in order, each described from a single still frame by someone who saw only "
     "that frame. Work out what the video is of as a whole.\n"
     "The frames are one continuous video: a person or place described a little differently in two frames is the "
     "same one. Where frames disagree, keep what most say and drop the rest. Ignore dark, blurred or empty frames.\n"
     "Write plainly, like a careful viewer's notes: no mood, lighting, praise or sales words (serene, vibrant, "
-    "luxurious, whimsical, bustling), no 'the video shows', and never 'scene', 'frame', 'then' or 'next'.\n"
+    "luxurious, whimsical, bustling), no 'the video shows', and never 'scene', 'frame', 'then', 'next' or 'later'.\n"
+    "Name a place, park, ride, restaurant or brand only when its name is quoted in the moments; never work one out "
+    "from what things look like. Say only what is there, never that something can't be read or isn't seen.\n"
     "Respond only with valid JSON in this exact format:\n"
     '{"gist": "one sentence: what the video is of (an outing, a meal, a walk through somewhere, a ride, a tour, a '
     'show) and where, as the frames show it", "details": ["3 to 5 short sentences, fewer for a short, simple video, '
@@ -56,9 +60,11 @@ def text_ai_settings(prompt: str, *, max_tokens: int) -> tuple:
     )
 
 
-def ai_settings(prompt: str, fixed: str = "") -> tuple:
+def ai_settings(prompt: str, fixed: str = "", *, room_fixed: bool = True) -> tuple:
     """A vision machine's settings: its model (Settings → AI), the prompt,
-    the image's size and the sampling."""
+    the image's size and the sampling. room_fixed=False offers the longest
+    answer even where the rest are fixed: a model that thinks first spends
+    it thinking, and needs more than the default to answer at all."""
     from src.producers.contract import ITS_JOBS, Setting
 
     return (
@@ -69,5 +75,5 @@ def ai_settings(prompt: str, fixed: str = "") -> tuple:
         Setting("max_edge", 1280, "Image size sent", minimum=256, maximum=1280, unit="px", fixed=fixed),
         Setting("temperature", 0.2, "Temperature", kind="float", minimum=0, maximum=2, advanced=True, fixed=fixed),
         Setting("max_tokens", 500, "Longest answer", minimum=50, maximum=4000, unit="tokens", advanced=True,
-                fixed=fixed),
+                fixed=fixed if room_fixed else ""),
     )

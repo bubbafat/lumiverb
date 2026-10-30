@@ -203,6 +203,43 @@ def test_a_failure_says_whether_the_endpoint_was_at_fault(tmp_path, answer, endp
     assert e.value.endpoint_fault is endpoint_fault
 
 
+def _cut_off(content: str) -> dict:
+    """A reply ended at its longest answer, as Claude Haiku 5.5 answers at 500 tokens: thinking first."""
+    return {"choices": [{"message": {"content": content}, "finish_reason": "length"}]}
+
+
+@pytest.mark.parametrize(("content", "endpoint_fault"), [
+    ("", True),  # all of it spent thinking: every request will end so, the machine's settings are at fault
+    ('{"description": "A woman reads a menu at a restaurant table, the heading reads', False),  # this one ran long
+])
+def test_a_reply_that_runs_out_of_room_says_to_raise_the_longest_answer(tmp_path, content, endpoint_fault):
+    from unittest.mock import patch
+
+    from src.processing.workers.captions.base import CaptionError
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from tests.ai_machine_server import local_machine
+
+    with local_machine((200, _cut_off(content), {})) as machine, \
+            patch.object(OpenAICompatibleCaptionProvider, "_sleep_with_countdown"):
+        p = OpenAICompatibleCaptionProvider(machine.url, "claude-haiku-5-5")
+        with pytest.raises(CaptionError) as e:
+            p.describe(_image(tmp_path))
+    assert e.value.endpoint_fault is endpoint_fault
+    assert str(e.value) == ("It ran out of room: it used all 500 tokens of its answer before finishing (a model that "
+                            "thinks first can spend them all thinking). Raise its Longest answer in Settings › "
+                            "Processing.")
+
+
+def test_a_reply_cut_off_after_its_description_is_kept_not_out_of_room(tmp_path):
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from tests.ai_machine_server import local_machine
+
+    with local_machine((200, _cut_off('{"description": "A troll figurine on a shelf.", "tags": ["troll", "sh'), {})
+                       ) as machine:
+        got = OpenAICompatibleCaptionProvider(machine.url, "m").describe(_image(tmp_path))
+    assert got == {"description": "A troll figurine on a shelf.", "tags": ["troll"]}
+
+
 def test_ocr_that_fails_raises_instead_of_saying_no_text(tmp_path):
     from unittest.mock import patch
 
