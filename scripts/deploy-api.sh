@@ -887,10 +887,13 @@ step "Starting services"
 
 systemctl enable --now lumiverb-api lumiverb-plugins lumiverb-upkeep.timer lumiverb-upkeep-daily.timer
 
-for i in {1..10}; do
+# Its first start compiles the code (no .pyc yet): up to 90 s, stopping at once if the unit fails.
+for i in {1..90}; do
   if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then
     break
   fi
+  systemctl is-failed --quiet lumiverb-api && break
+  (( i % 10 == 0 )) && echo "  Waiting for the API to start (${i} s)..."
   sleep 1
 done
 
