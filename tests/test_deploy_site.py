@@ -236,6 +236,7 @@ def test_nginx_takes_the_site_and_serves_the_page_alone(tmp_path):
         assert status == 200 and b"<title>Lumiverb" in body
         assert headers["Content-Type"] == "text/html; charset=utf-8"
         assert headers["X-Content-Type-Options"] == "nosniff"
+        assert headers["Server"] == "nginx", "no version"
         assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
         status, headers, _ = get("/images/search.webp")
         assert (status, headers["Content-Type"]) == (200, "image/webp")

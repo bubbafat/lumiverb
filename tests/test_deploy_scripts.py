@@ -1163,6 +1163,26 @@ def test_update_gives_a_site_from_v0_1_160_what_deploy_does_now(tmp_path, https)
     assert site.read_text() == deployed.read_text()
 
 
+@pytest.mark.parametrize("refused", [False, True])
+def test_a_site_nginx_refuses_after_the_update_is_put_back(tmp_path, refused):
+    # Left in place, the next reload (certbot's renewal, a reboot) would be refused for every site here.
+    site = tmp_path / "lumiverb"
+    site.write_text(OLD_SITE)
+    text = UPDATE_WEB.read_text()
+    steps = text[text.index('step "Updating the nginx site"'):text.index('ok "nginx reloaded"')]
+    nginx = 'nginx() { [[ "$1" == -t ]] && return 1; return 0; }' if refused else "nginx() { :; }"
+    script = (f'step() {{ :; }}; ok() {{ :; }}; warn() {{ :; }}; fail() {{ echo "$1"; exit 1; }}; {nginx}\n'
+              f'APP_DIR={REPO}\n' + steps.replace("/etc/nginx/sites-available/lumiverb", str(site)))
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert (tmp_path / "lumiverb.before-update").read_text() == OLD_SITE
+    if refused:
+        assert out.returncode == 1 and "is back as it was before this update" in out.stdout, out.stdout + out.stderr
+        assert site.read_text() == OLD_SITE
+    else:
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert site.read_text() == _deploy_web_site(tmp_path)
+
+
 def test_update_leaves_a_site_without_the_api_location_alone(tmp_path):
     site = tmp_path / "lumiverb"
     site.write_text("server {\n    listen 80;\n}\n")

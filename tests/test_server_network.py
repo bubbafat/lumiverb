@@ -62,7 +62,7 @@ def test_https_beside_plain_http(tmp_path):
     lines = network.listen_file(tmp_path).read_text()
     for line in ("listen 6464 default_server;", "listen 6465 ssl default_server;",
                  "listen [::]:6465 ssl default_server;", f"ssl_certificate {served.certificate};",
-                 f"ssl_certificate_key {served.key};", "ssl_protocols TLSv1.2 TLSv1.3;",
+                 f"ssl_certificate_key {served.key};", "ssl_protocols TLSv1.2 TLSv1.3;", "http2 on;",
                  f"sha256 {served.fingerprint}", f"alias {tls.ca_certificate(tmp_path)};"):
         assert line in lines, line
     # The redirect itself: the certificate's fingerprint, random hex, can hold "301".

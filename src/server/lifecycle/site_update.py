@@ -9,7 +9,9 @@ and what was changed by hand there is left too, and said. What a site gains:
 - video from blob: URLs (the grid's previews, playback's fallback), which the CSP blocked;
 - the API's Referrer-Policy, and its Permissions-Policy beside the other headers;
 - text compressed, and nginx's version unsaid;
-- a hidden file (/.env, /.git/) or a file name the app doesn't have answered 404, never the app's page.
+- a hidden file (/.env, /.git/) or a file name the app doesn't have answered 404, never the app's page;
+- HTTP/2 where it's served over HTTPS (certbot's 443), in the words this machine's nginx takes: `http2 on;` from
+  1.25.1, the listen line's `http2` before.
 
 init.py and deploy-web.sh write these same lines (tests/test_site_update.py holds them to it). It runs on the
 python3 of every Ubuntu deploy-web.sh supports: 3.10 at the oldest.
@@ -20,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -72,6 +75,9 @@ APP_PAGES = (
 _OLD_APP_PAGES = ("location / {", "    try_files $uri $uri/ /index.html;", "}")
 
 _SERVER = re.compile(r"(\s*)server\s*\{\s*")
+# A listen line serving HTTPS on 443 (certbot's: `listen 443 ssl;`, `listen [::]:443 ssl ipv6only=on;`).
+_TLS_LISTEN = re.compile(r"(\s*listen\s+(?:\S*:)?443\s+ssl)\b(.*)")
+HTTP2_ON = (1, 25, 1)  # the http2 directive; before it, the listen line's parameter
 
 GAINED = {
     "csp": "Video from blob: URLs plays (the CSP)",
@@ -79,6 +85,7 @@ GAINED = {
     "permissions": "The permissions policy is on",
     "delivery": "Text is compressed, and nginx doesn't say its version",
     "pages": "A hidden file or a file the app doesn't have is a 404, not the page",
+    "http2": "HTTPS speaks HTTP/2",
 }
 
 
@@ -86,12 +93,30 @@ def _indent(line: str) -> str:
     return line[:len(line) - len(line.lstrip())]
 
 
-def _server(block: list[str], gained: set[str], left: list[str]) -> list[str]:
+def _http2(block: list[str], nginx: tuple[int, ...] | None, gained: set[str]) -> list[str]:
+    """HTTP/2 on the block's HTTPS, if it has any and this nginx's version is known."""
+    tls = [i for i, line in enumerate(block) if _TLS_LISTEN.fullmatch(line)]
+    if not tls or nginx is None or any(line.strip() == "http2 on;" for line in block):
+        return block
+    if nginx >= HTTP2_ON:
+        gained.add("http2")
+        return [*block[:tls[-1] + 1], _indent(block[tls[-1]]) + "http2 on;", *block[tls[-1] + 1:]]
+    out = list(block)
+    for i in tls:
+        m = _TLS_LISTEN.fullmatch(block[i])
+        if not re.search(r"\bhttp2\b", m.group(2)):
+            out[i] = f"{m.group(1)} http2{m.group(2)}"
+            gained.add("http2")
+    return out
+
+
+def _server(block: list[str], gained: set[str], left: list[str], nginx: tuple[int, ...] | None) -> list[str]:
     """One server block brought up to date. Its own directives are at its server_name's indentation; a block
     without one isn't the app's."""
     pad = next((_indent(line) for line in block if line.strip().startswith("server_name ")), None)
-    if pad is None:
+    if pad is None or not any(line.strip().startswith("root ") for line in block):
         return block
+    block = _http2(block, nginx, gained)
     delivered = any(line.strip() == "gzip on;" for line in block)
     paged = any(line.strip() == APP_PAGES[3].strip() for line in block)
     out: list[str] = []
@@ -131,8 +156,9 @@ def _server(block: list[str], gained: set[str], left: list[str]) -> list[str]:
     return out
 
 
-def updated(text: str) -> tuple[str, list[str], list[str]]:
-    """The site's text with what it has gained, what it gained (for the log), and what was left as it was."""
+def updated(text: str, nginx: tuple[int, ...] | None = None) -> tuple[str, list[str], list[str]]:
+    """The site's text with what it has gained, what it gained (for the log), and what was left as it was. HTTP/2
+    only with the version of the nginx serving it (`nginx_version`)."""
     lines = text.split("\n")
     gained: set[str] = set()
     left: list[str] = []
@@ -145,9 +171,19 @@ def updated(text: str) -> tuple[str, list[str], list[str]]:
             out.append(lines[i])
             i += 1
             continue
-        out.extend(_server(lines[i:end + 1], gained, left))
+        out.extend(_server(lines[i:end + 1], gained, left, nginx))
         i = end + 1
     return "\n".join(out), [GAINED[key] for key in GAINED if key in gained], left
+
+
+def nginx_version() -> tuple[int, ...] | None:
+    """This machine's nginx's version (`nginx -v`), or None when there's none to ask."""
+    try:
+        said = subprocess.run(["nginx", "-v"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"nginx/(\d+)\.(\d+)\.(\d+)", said.stderr + said.stdout)
+    return tuple(int(part) for part in m.groups()) if m else None
 
 
 def rewrite(path: Path, text: str) -> None:
@@ -180,7 +216,7 @@ def main(argv: list[str]) -> int:
         text = path.read_text()
     except FileNotFoundError:
         return 0
-    new, gained, left = updated(text)
+    new, gained, left = updated(text, nginx_version())
     if new != text:
         rewrite(path, new)
     for line in gained:

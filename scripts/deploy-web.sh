@@ -406,6 +406,49 @@ add_hsts() {
   mv "${site}.new" "$site"
 }
 
+# A name none of this machine's sites serves (its bare address, someone else's domain pointing here) gets
+# nothing: the connection closed, and over HTTPS before any certificate is shown (ssl_reject_handshake, nginx
+# 1.19.4; an older one turns them away over HTTP alone). On IPv6 only where a site here listens there: a
+# listener of its own would answer that port for every name. For a web app with a name of its own (--domain _
+# answers every name). tests/test_site_update.py holds deploy-web.sh's and update-web.sh's to the same text.
+version_at_least() { [[ "$(printf '%s\n' "$2" "$1" | sort -V | head -1)" == "$2" ]]; }
+default_site() {
+  local enabled="$1" version="$2" listens port ssl
+  listens="$(grep -rhsE '^[[:space:]]*listen[[:space:]]' --exclude=lumiverb-default "$enabled" || true)"
+  echo "# Lumiverb's (deploy-web.sh, update-web.sh): a name no site here serves gets nothing."
+  echo "server {"
+  for port in 80 443; do
+    ssl=""
+    if [[ "$port" == 443 ]]; then
+      version_at_least "$version" 1.19.4 || continue
+      ssl=" ssl"
+    fi
+    echo "    listen ${port}${ssl} default_server;"
+    if grep -qE "^[[:space:]]*listen[[:space:]]+\[::\]:${port}[[:space:];]" <<<"$listens"; then
+      echo "    listen [::]:${port}${ssl} default_server;"
+    fi
+  done
+  echo "    server_name _;"
+  echo "    server_tokens off;"
+  if version_at_least "$version" 1.19.4; then
+    echo "    ssl_reject_handshake on;"
+  fi
+  echo "    return 444;"
+  echo "}"
+}
+install_default_site() {
+  local available="${LUMIVERB_NGINX_SITES:-/etc/nginx/sites-available}" enabled="${LUMIVERB_NGINX_ENABLED:-/etc/nginx/sites-enabled}"
+  default_site "$enabled" "$(nginx -v 2>&1 | sed -nE 's|.*nginx/([0-9.]+).*|\1|p')" > "${available}/lumiverb-default"
+  ln -sf "${available}/lumiverb-default" "${enabled}/lumiverb-default"
+  # One nginx refuses (another site here is the default already) would stop every later reload: gone again.
+  if ! nginx -t >/dev/null 2>&1; then
+    rm -f "${enabled}/lumiverb-default"
+    warn "nginx refused a default site for names it doesn't serve (another site is the default?): left as it was"
+    return 0
+  fi
+  ok "A name no site here serves gets nothing"
+}
+
 if [[ -n "$CERTIFICATE_ARCHIVE" ]]; then
   step "Restoring TLS certificate from archive"
   tar xzf "$CERTIFICATE_ARCHIVE" -C /
@@ -438,9 +481,17 @@ fi
 
 if [[ "$TLS_ACTIVE" == "true" ]]; then
   add_hsts /etc/nginx/sites-available/lumiverb
+  ok "HSTS on"
+  # HTTP/2 on its HTTPS, in the words this nginx takes (update-web.sh gives an existing site the same).
+  python3 -I "${APP_DIR}/src/server/lifecycle/site_update.py" /etc/nginx/sites-available/lumiverb
   nginx -t
   systemctl reload nginx
-  ok "HSTS on"
+fi
+
+if [[ "$ANY_HOST" == "false" ]]; then
+  step "Turning away names this machine doesn't serve"
+  install_default_site
+  systemctl reload nginx
 fi
 
 # ---------------------------------------------------------------------------
