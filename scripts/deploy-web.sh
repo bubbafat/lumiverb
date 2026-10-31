@@ -265,10 +265,14 @@ else
   LISTEN="listen 80;"
 fi
 
+# Its access log's lines name the site (lumiverb_host, for lumiverb-server site-visits): the format first.
+python3 -I "${APP_DIR}/src/server/lifecycle/site_update.py" --log-format "${LUMIVERB_NGINX_CONF_D:-/etc/nginx/conf.d}/lumiverb-log.conf"
+
 cat > /etc/nginx/sites-available/lumiverb <<NGINX
 server {
     ${LISTEN}
     server_name ${DOMAIN};
+    access_log /var/log/nginx/access.log lumiverb_host;
 
     root ${APP_DIR}/src/ui/web/dist;
     index index.html;

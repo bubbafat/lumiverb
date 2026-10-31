@@ -23,7 +23,7 @@ from pathlib import Path
 from src.server.lifecycle import network
 from src.server.lifecycle.envfile import read_env_file
 from src.server.lifecycle.migrate import APP_DIR
-from src.server.lifecycle.site_update import APP_PAGES, DELIVERY, HEADERS
+from src.server.lifecycle.site_update import ACCESS_LOG, APP_PAGES, DELIVERY, HEADERS
 from src.server.sealing import new_key as new_secrets_key
 
 # A block of their own, clear of a dev checkout's (Vite 5173, uvicorn 8000).
@@ -157,14 +157,17 @@ def _at(indent: int, lines: tuple[str, ...]) -> str:
     return ("\n" + " " * indent).join(lines)
 
 
-def nginx_site(*, listen: tuple[str, ...], server_name: str, root: Path, upstream: str) -> str:
+def nginx_site(*, listen: tuple[str, ...], server_name: str, root: Path, upstream: str,
+               logged: bool = False) -> str:
     """deploy-web.sh's site: the web build, with /v1/ (and playback, unbuffered)
-    passed to the API. What an install's has gained since it was written is
-    site_update.py's to give it."""
+    passed to the API, its access log naming the site where `logged` (a Linux
+    server's: a Mac's nginx keeps none). What an install's has gained since it
+    was written is site_update.py's to give it."""
+    log = f"\n    {ACCESS_LOG}" if logged else ""
     return f"""\
 server {{
     {_at(4, listen)}
-    server_name {server_name};
+    server_name {server_name};{log}
 
     root {root};
     index index.html;

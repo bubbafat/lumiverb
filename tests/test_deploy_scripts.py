@@ -1064,7 +1064,7 @@ def _update_web_site(site: Path) -> None:
     """Run update-web.sh's nginx-site step against `site`."""
     text = UPDATE_WEB.read_text()
     block = text.split('step "Updating the nginx site"', 1)[1].split("# ----", 1)[0]
-    script = (f'step() {{ :; }}; ok() {{ :; }}; warn() {{ :; }}; APP_DIR={REPO}\n'
+    script = (f'step() {{ :; }}; ok() {{ :; }}; warn() {{ :; }}; APP_DIR={REPO}; LUMIVERB_NGINX_CONF_D={site.parent}\n'
               + block.replace("/etc/nginx/sites-available/lumiverb", str(site)))
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stdout + out.stderr
@@ -1182,7 +1182,7 @@ def test_a_site_nginx_refuses_after_the_update_is_put_back(tmp_path, refused):
     steps = text[text.index('step "Updating the nginx site"'):text.index('ok "nginx reloaded"')]
     nginx = 'nginx() { [[ "$1" == -t ]] && return 1; return 0; }' if refused else "nginx() { :; }"
     script = (f'step() {{ :; }}; ok() {{ :; }}; warn() {{ :; }}; fail() {{ echo "$1"; exit 1; }}; {nginx}\n'
-              f'APP_DIR={REPO}\n' + steps.replace("/etc/nginx/sites-available/lumiverb", str(site)))
+              f'APP_DIR={REPO}; LUMIVERB_NGINX_CONF_D={tmp_path}\n' + steps.replace("/etc/nginx/sites-available/lumiverb", str(site)))
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert (tmp_path / "lumiverb.before-update").read_text() == OLD_SITE
     if refused:
@@ -1207,7 +1207,7 @@ def test_update_says_nothing_of_nginx_s_version_on_deploy_site_s_sites_either(tm
     steps = text[text.index('step "Updating the nginx site"'):text.index('ok "nginx reloaded"')]
     nginx = 'nginx() { [[ "$1" == -t ]] && return 1; return 0; }' if refused else "nginx() { :; }"
     script = (f'step() {{ :; }}; ok() {{ :; }}; warn() {{ :; }}; fail() {{ echo "$1"; exit 1; }}; {nginx}\n'
-              f'install_default_site() {{ :; }}\nAPP_DIR={REPO}\n'
+              f'install_default_site() {{ :; }}\nAPP_DIR={REPO}; LUMIVERB_NGINX_CONF_D={tmp_path}\n'
               + steps.replace("/etc/nginx/sites-available/lumiverb", str(site)))
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert (tmp_path / "lumiverb-default").read_text() == "server {\n    server_name _;\n}\n"
@@ -1216,8 +1216,11 @@ def test_update_says_nothing_of_nginx_s_version_on_deploy_site_s_sites_either(tm
         assert static.read_text() == redirect and site.read_text() == _certbot(_site_v0_1_160()), "both put back"
     else:
         assert out.returncode == 0, out.stdout + out.stderr
-        assert static.read_text() == redirect.replace("    server_name lumiverb.io;\n",
-                                                      "    server_name lumiverb.io;\n    server_tokens off;\n")
+        assert static.read_text() == redirect.replace(
+            "    server_name lumiverb.io;\n",
+            "    server_name lumiverb.io;\n    access_log /var/log/nginx/access.log lumiverb_host;\n"
+            "    server_tokens off;\n"), "its version unsaid, its log naming the site"
+        assert (tmp_path / "lumiverb-log.conf").exists(), "the format its log lines use, before a site uses it"
         assert site.read_text().count("server_tokens off;") == 2, "the app's block and certbot's redirect"
 
 
