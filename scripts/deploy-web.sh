@@ -254,8 +254,10 @@ step "Configuring nginx"
 API_UPSTREAM="${API_UPSTREAM%/}"
 
 # The built app loads only its own files and calls only its own /v1/: no
-# inline script or style, images shown from blob: URLs, video from /v1/stream/.
-CSP="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+# inline script or style, pictures and videos shown from blob: URLs, video
+# streamed from /v1/stream/. What this site gains later reaches an install
+# through update-web.sh (src/server/lifecycle/site_update.py, its lines).
+CSP="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 
 if [[ "$ANY_HOST" == "true" ]]; then
   LISTEN="listen 80 default_server;"
@@ -274,7 +276,16 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header Content-Security-Policy "${CSP}" always;
     add_header X-Frame-Options DENY always;
-    add_header Referrer-Policy no-referrer-when-downgrade always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+    # Text goes compressed (the app's code and styles, the API's answers), and
+    # nginx doesn't say its version.
+    server_tokens off;
+    gzip on;
+    gzip_types text/css application/javascript text/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+    gzip_vary on;
 
     # Playback: a multi-GB proxy streams straight through instead of being
     # spooled to disk, and the link (a bearer token good for hours) stays
@@ -313,7 +324,8 @@ server {
         add_header X-Content-Type-Options nosniff always;
         add_header Content-Security-Policy "${CSP}" always;
         add_header X-Frame-Options DENY always;
-        add_header Referrer-Policy no-referrer-when-downgrade always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     }
 
     # The page names the build's files, so the browser checks it every time
@@ -323,10 +335,19 @@ server {
         add_header X-Content-Type-Options nosniff always;
         add_header Content-Security-Policy "${CSP}" always;
         add_header X-Frame-Options DENY always;
-        add_header Referrer-Policy no-referrer-when-downgrade always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     }
 
+    # The app's pages: any path that isn't one of its files. A hidden file
+    # (/.env, /.git/) or a file name it doesn't have is a 404, never the page.
     location / {
+        location ~ /\\. {
+            return 404;
+        }
+        location ~ \\.[A-Za-z0-9]+\$ {
+            try_files \$uri =404;
+        }
         try_files \$uri \$uri/ /index.html;
     }
 }

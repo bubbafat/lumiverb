@@ -92,7 +92,7 @@ from pathlib import Path
 
 from src.server import backups
 from src.server.ai_worker import DEFAULT_PORT as DEFAULT_AI_WORKER_PORT
-from src.server.lifecycle import api_port, log, network, plugins_cli, private, upkeep
+from src.server.lifecycle import api_port, log, network, plugins_cli, private, site_update, upkeep
 from src.server.lifecycle.envfile import EnvFileError, read_env_file
 from src.server.lifecycle.init import WEB_ROOT, Choices, InitError, init
 from src.server.lifecycle.migrate import (
@@ -505,6 +505,13 @@ def _run(args: argparse.Namespace) -> int:
     if named is not None:  # the API off 6465, HTTPS's now (api_port.py), before anything starts on either
         env, ports_moved = api_port.moved(named, env)
         env, secrets_key_added = with_secrets_key(named, env)
+    site_gained: list[str] = []
+    site_left: list[str] = []
+    if env.get("NGINX_CONFIG"):  # what deploy-web.sh's site has gained since init wrote this one, before nginx starts
+        try:
+            site_gained, site_left = site_update.bring_up_to_date(Path(env["NGINX_CONFIG"]))
+        except OSError as exc:
+            site_left = [f"{env['NGINX_CONFIG']} wasn't brought up to date: {exc.strerror or exc}"]
     url = env["CONTROL_PLANE_DATABASE_URL"]
     data = data_dir(env)  # before anything starts
     migrated = threading.Event()
@@ -520,6 +527,10 @@ def _run(args: argparse.Namespace) -> int:
         logger.info("Ports: %s", ports_moved)
     if secrets_key_added:
         logger.info("Secrets: %s", secrets_key_added)
+    for line in site_gained:
+        logger.info("Web: %s (%s)", line, env["NGINX_CONFIG"])
+    for line in site_left:
+        logger.warning("Web: %s", line)
     private.begin(data, log_file)  # umask 077 before anything is made, and what's there made private
     forget_quickwit(env, data)
     stop = threading.Event()

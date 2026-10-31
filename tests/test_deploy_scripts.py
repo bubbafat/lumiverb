@@ -1063,7 +1063,8 @@ def _update_web_site(site: Path) -> None:
     """Run update-web.sh's nginx-site step against `site`."""
     text = UPDATE_WEB.read_text()
     block = text.split('step "Updating the nginx site"', 1)[1].split("# ----", 1)[0]
-    script = 'step() { :; }; ok() { :; }; warn() { :; }\n' + block.replace("/etc/nginx/sites-available/lumiverb", str(site))
+    script = (f'step() {{ :; }}; ok() {{ :; }}; warn() {{ :; }}; APP_DIR={REPO}\n'
+              + block.replace("/etc/nginx/sites-available/lumiverb", str(site)))
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stdout + out.stderr
 
@@ -1129,6 +1130,36 @@ def test_update_gives_an_https_site_what_deploy_does(tmp_path):
     deployed = tmp_path / "deployed"
     deployed.write_text(_certbot(_deploy_web_site(tmp_path)))
     _add_hsts(deployed)
+    assert site.read_text() == deployed.read_text()
+
+
+def _site_v0_1_160() -> str:
+    """The site deploy-web.sh wrote at v0.1.160: a Mac's config of then (init.py's, the same server block) as
+    Linux's."""
+    mac = (REPO / "tests" / "fixtures" / "nginx-mac-v0.1.160.conf").read_text()
+    block = mac[mac.index("    server {"):mac.rindex("    }\n") + len("    }\n")]
+    site = "".join(line[4:] + "\n" for line in block.splitlines())
+    return (site.replace("include /usr/local/var/lumiverb/nginx/listen.conf;", "listen 80 default_server;")
+            .replace("/opt/homebrew/opt/lumiverb/libexec/", "/opt/lumiverb/")
+            .replace("http://127.0.0.1:6364", "http://127.0.0.1:8100"))
+
+
+@pytest.mark.parametrize("https", [False, True])
+def test_update_gives_a_site_from_v0_1_160_what_deploy_does_now(tmp_path, https):
+    # Video from blob: URLs, the API's referrer and permissions policies, compression, 404s for probes
+    # (src/server/lifecycle/site_update.py, which update-web.sh runs).
+    site = tmp_path / "lumiverb"
+    old = _site_v0_1_160()
+    assert "media-src 'self';" in old and "gzip" not in old
+    site.write_text(_certbot(old) if https else old)
+    if https:
+        _add_hsts(site)
+    _update_web_site(site)
+    _update_web_site(site)
+    deployed = tmp_path / "deployed"
+    deployed.write_text(_certbot(_deploy_web_site(tmp_path)) if https else _deploy_web_site(tmp_path))
+    if https:
+        _add_hsts(deployed)
     assert site.read_text() == deployed.read_text()
 
 

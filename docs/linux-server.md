@@ -198,7 +198,7 @@ One command:
 sudo bash /opt/lumiverb/scripts/update.sh
 ```
 
-It pulls the install's branch, then runs `update-api.sh` (packages, migrations, units, restarts; it keeps processing's packages, and the first time replaces lumiverb-worker with lumiverb-scheduler) and `update-web.sh` (the web build and the nginx site: playback streams go straight through, unbuffered, and their links, good for hours, stay out of the access logs, nginx's and the API's). It ends with a summary: the commits that came in, each service's state and the API's health.
+It pulls the install's branch, then runs `update-api.sh` (packages, migrations, units, restarts; it keeps processing's packages, and the first time replaces lumiverb-worker with lumiverb-scheduler) and `update-web.sh` (the web build and the nginx site: playback streams go straight through, unbuffered, and their links, good for hours, stay out of the access logs, nginx's and the API's; and whatever else deploy-web.sh's site has gained since, `src/server/lifecycle/site_update.py`: its headers, compression, and a 404 for a hidden file or a file the app doesn't have). It ends with a summary: the commits that came in, each service's state and the API's health.
 
 - **Another branch:** `--branch NAME` moves the install there and remembers it (in `/etc/lumiverb/env`, for the next update and for `deploy-api.sh`).
 - **The log:** everything also goes to `/var/log/lumiverb/update-<date>-<time>-<pid>.log`, which belongs to whoever ran sudo, so it reads without sudo; `update-latest.log` is the newest. It ends with a line `Result: OK` or `Result: FAILED`. The last 20 are kept.

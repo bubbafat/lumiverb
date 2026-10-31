@@ -23,6 +23,7 @@ from pathlib import Path
 from src.server.lifecycle import network
 from src.server.lifecycle.envfile import read_env_file
 from src.server.lifecycle.migrate import APP_DIR
+from src.server.lifecycle.site_update import APP_PAGES, DELIVERY, HEADERS
 from src.server.sealing import new_key as new_secrets_key
 
 # A block of their own, clear of a dev checkout's (Vite 5173, uvicorn 8000).
@@ -39,12 +40,6 @@ PG_ROLE = "lumiverb"
 LOCAL_ROOT_MAP = '{"/": "/"}'
 WEB_ROOT = APP_DIR / "src" / "ui" / "web" / "dist"
 
-# deploy-web.sh's: the built app loads only its own files and calls only its
-# own /v1/: no inline script or style, images shown from blob: URLs, video
-# from /v1/stream/.
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self'; "
-       "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; "
-       "frame-ancestors 'none'")
 
 
 class InitError(Exception):
@@ -149,14 +144,6 @@ LOG_LEVEL=INFO
 """
 
 
-# Every response's headers: repeated in a location with add_header of its own,
-# which drops the server's.
-_HEADERS = (
-    "add_header X-Content-Type-Options nosniff always;",
-    f'add_header Content-Security-Policy "{CSP}" always;',
-    "add_header X-Frame-Options DENY always;",
-    "add_header Referrer-Policy no-referrer-when-downgrade always;",
-)
 _PROXIED = (
     "proxy_http_version 1.1;",
     "proxy_set_header Host $host;",
@@ -172,7 +159,8 @@ def _at(indent: int, lines: tuple[str, ...]) -> str:
 
 def nginx_site(*, listen: tuple[str, ...], server_name: str, root: Path, upstream: str) -> str:
     """deploy-web.sh's site: the web build, with /v1/ (and playback, unbuffered)
-    passed to the API."""
+    passed to the API. What an install's has gained since it was written is
+    site_update.py's to give it."""
     return f"""\
 server {{
     {_at(4, listen)}
@@ -181,7 +169,9 @@ server {{
     root {root};
     index index.html;
 
-    {_at(4, _HEADERS)}
+    {_at(4, HEADERS)}
+
+    {_at(4, DELIVERY)}
 
     # Playback: a multi-GB proxy streams straight through instead of being
     # spooled to disk, and the link (a bearer token good for hours) stays
@@ -209,19 +199,17 @@ server {{
     # A location's add_header drops the server's, so they are repeated.
     location /assets/ {{
         add_header Cache-Control "public, max-age=31536000, immutable";
-        {_at(8, _HEADERS)}
+        {_at(8, HEADERS)}
     }}
 
     # The page names the build's files, so the browser checks it every time
     # (the SPA fallback below ends here too).
     location = /index.html {{
         add_header Cache-Control "no-cache";
-        {_at(8, _HEADERS)}
+        {_at(8, HEADERS)}
     }}
 
-    location / {{
-        try_files $uri $uri/ /index.html;
-    }}
+    {_at(4, APP_PAGES)}
 }}
 """
 
