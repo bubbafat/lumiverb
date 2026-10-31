@@ -12,6 +12,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -1097,13 +1098,20 @@ def _certbot(site: str) -> str:
     head, tail = site.rsplit("}\n", 1)
     return (head + "    listen 443 ssl; # managed by Certbot\n    listen [::]:443 ssl; # managed by Certbot\n}\n" + tail
             + "\nserver {\n    if ($host = x) {\n        return 301 https://$host$request_uri;\n    }\n"
-            "    listen 80;\n    return 404; # managed by Certbot\n}\n")
+            "    listen 80;\n    server_name x;\n    return 404; # managed by Certbot\n}\n")
 
 
 def _add_hsts(site: Path) -> None:
     text = DEPLOY_WEB.read_text()
     fn = text[text.index("add_hsts() {"):text.index("\n}\n", text.index("add_hsts() {")) + 3]
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", f"{fn}\nadd_hsts {site}\nadd_hsts {site}"],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+
+
+def _site_update(site: Path, *args: str) -> None:
+    """What deploy-web.sh (and deploy-site.sh, --static) run once certbot has written its HTTPS."""
+    out = subprocess.run([sys.executable, "-I", str(REPO / "src/server/lifecycle/site_update.py"), *args, str(site)],
                          capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
 
@@ -1130,6 +1138,7 @@ def test_update_gives_an_https_site_what_deploy_does(tmp_path):
     deployed = tmp_path / "deployed"
     deployed.write_text(_certbot(_deploy_web_site(tmp_path)))
     _add_hsts(deployed)
+    _site_update(deployed)
     assert site.read_text() == deployed.read_text()
 
 
@@ -1160,6 +1169,7 @@ def test_update_gives_a_site_from_v0_1_160_what_deploy_does_now(tmp_path, https)
     deployed.write_text(_certbot(_deploy_web_site(tmp_path)) if https else _deploy_web_site(tmp_path))
     if https:
         _add_hsts(deployed)
+        _site_update(deployed)
     assert site.read_text() == deployed.read_text()
 
 
@@ -1176,11 +1186,39 @@ def test_a_site_nginx_refuses_after_the_update_is_put_back(tmp_path, refused):
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert (tmp_path / "lumiverb.before-update").read_text() == OLD_SITE
     if refused:
-        assert out.returncode == 1 and "is back as it was before this update" in out.stdout, out.stdout + out.stderr
+        assert out.returncode == 1 and "are back as they were before this update" in out.stdout, out.stdout + out.stderr
         assert site.read_text() == OLD_SITE
     else:
         assert out.returncode == 0, out.stdout + out.stderr
         assert site.read_text() == _deploy_web_site(tmp_path)
+
+
+@pytest.mark.parametrize("refused", [False, True])
+def test_update_says_nothing_of_nginx_s_version_on_deploy_site_s_sites_either(tmp_path, refused):
+    # lumiverb.io's front page and the docs, beside the web app's site: certbot's redirects in them showed it.
+    site = tmp_path / "lumiverb"
+    site.write_text(_certbot(_site_v0_1_160()))
+    static = tmp_path / "lumiverb-site"
+    redirect = ("server {\n    if ($host = lumiverb.io) {\n        return 301 https://$host$request_uri;\n    }\n"
+                "    listen 80;\n    server_name lumiverb.io;\n    return 404; # managed by Certbot\n}\n")
+    static.write_text(redirect)
+    (tmp_path / "lumiverb-default").write_text("server {\n    server_name _;\n}\n")  # the default site: its own
+    text = UPDATE_WEB.read_text()
+    steps = text[text.index('step "Updating the nginx site"'):text.index('ok "nginx reloaded"')]
+    nginx = 'nginx() { [[ "$1" == -t ]] && return 1; return 0; }' if refused else "nginx() { :; }"
+    script = (f'step() {{ :; }}; ok() {{ :; }}; warn() {{ :; }}; fail() {{ echo "$1"; exit 1; }}; {nginx}\n'
+              f'install_default_site() {{ :; }}\nAPP_DIR={REPO}\n'
+              + steps.replace("/etc/nginx/sites-available/lumiverb", str(site)))
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert (tmp_path / "lumiverb-default").read_text() == "server {\n    server_name _;\n}\n"
+    if refused:
+        assert out.returncode == 1, out.stdout + out.stderr
+        assert static.read_text() == redirect and site.read_text() == _certbot(_site_v0_1_160()), "both put back"
+    else:
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert static.read_text() == redirect.replace("    server_name lumiverb.io;\n",
+                                                      "    server_name lumiverb.io;\n    server_tokens off;\n")
+        assert site.read_text().count("server_tokens off;") == 2, "the app's block and certbot's redirect"
 
 
 def test_update_leaves_a_site_without_the_api_location_alone(tmp_path):

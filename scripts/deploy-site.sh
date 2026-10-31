@@ -221,6 +221,8 @@ fi
 
 if [[ "$TLS_ACTIVE" == "true" ]]; then
   add_hsts "$SITE_CONF"
+  # nginx's version unsaid on certbot's redirect too (update-web.sh gives an existing site the same).
+  python3 -I "${APP_DIR}/src/server/lifecycle/site_update.py" --static "$SITE_CONF"
   nginx -t
   systemctl reload nginx
   ok "HSTS on"

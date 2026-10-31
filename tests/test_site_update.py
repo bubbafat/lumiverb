@@ -31,8 +31,9 @@ LISTEN = "include /usr/local/var/lumiverb/nginx/listen.conf;"
 WEB = Path("/opt/homebrew/opt/lumiverb/libexec/src/ui/web/dist")
 
 
-# What a site without HTTPS of its own gains (a Mac's: its HTTPS is network.py's lines).
-WITHOUT_HTTPS = [line for key, line in site_update.GAINED.items() if key != "http2"]
+# What a Mac's config gains: its HTTPS is network.py's lines, and its one block's version unsaid is the app's own
+# lines' (DELIVERY).
+WITHOUT_HTTPS = [line for key, line in site_update.GAINED.items() if key not in ("http2", "tokens")]
 
 
 def _today() -> str:
@@ -58,11 +59,29 @@ def test_what_was_changed_by_hand_is_left_and_said():
     assert "gzip on;" in after, "the rest it still gains"
 
 
-def test_a_block_that_isnt_the_app_s_is_left_alone():
-    # certbot's redirect block (it has its own server_name) has none of the app's lines.
+def test_certbot_s_redirect_gains_only_its_version_unsaid():
+    # Its own block, without the app's lines; the distribution's nginx.conf says server_tokens itself (a second
+    # in the http block is refused), so each block says it.
     redirect = ("server {\n    if ($host = x) {\n        return 301 https://$host$request_uri;\n    }\n"
                 "    listen 80;\n    server_name x;\n    return 404;\n}\n")
-    assert site_update.updated(redirect) == (redirect, [], [])
+    now, gained, left = site_update.updated(redirect)
+    assert now == redirect.replace("    server_name x;\n", "    server_name x;\n    server_tokens off;\n")
+    assert (gained, left) == ([site_update.GAINED["tokens"]], [])
+    assert site_update.updated(now) == (now, [], []), "once"
+
+
+def test_a_static_site_gains_only_its_version_unsaid(tmp_path):
+    # deploy-site.sh's (lumiverb.io, the docs): its own block says it already; certbot's redirect gains it.
+    dry = subprocess.run(["bash", str(SCRIPTS / "deploy-site.sh"), "--domain", "lumiverb.io", "--dry-run"],
+                         capture_output=True, text=True, timeout=30,
+                         env={"PATH": "/usr/bin:/bin", "LUMIVERB_APP_DIR": str(Path(__file__).parents[1])})
+    assert dry.returncode == 0, dry.stderr
+    site = _certbot(dry.stdout.replace("server_name lumiverb.io;", "server_name x;"))
+    now, gained, left = site_update.updated(site, (1, 28, 0), static=True)
+    tls, redirect = now.split("\nserver {", 1)
+    assert tls == site.split("\nserver {", 1)[0], "its own block as deploy-site.sh wrote it: no app lines, no HTTP/2"
+    assert "    server_name x;\n    server_tokens off;\n" in redirect
+    assert (gained, left) == ([site_update.GAINED["tokens"]], [])
 
 
 def test_a_mac_s_config_is_backed_up_beside_itself_first(tmp_path):
@@ -201,7 +220,7 @@ def test_https_speaks_http2_in_the_words_this_nginx_takes():
     site = _certbot(_linux_site())
     now, gained, _ = site_update.updated(site, (1, 28, 0))
     assert "    listen [::]:443 ssl ipv6only=on; # managed by Certbot\n    http2 on;\n" in now
-    assert gained == [site_update.GAINED["http2"]]
+    assert gained == [site_update.GAINED["http2"], site_update.GAINED["tokens"]], "certbot's redirect: tokens"
     assert site_update.updated(now, (1, 28, 0))[0] == now, "once"
 
     before, _, _ = site_update.updated(site, (1, 24, 0))  # Ubuntu 24.04's: the listen line's parameter
@@ -209,10 +228,9 @@ def test_https_speaks_http2_in_the_words_this_nginx_takes():
     assert "listen [::]:443 ssl http2 ipv6only=on; # managed by Certbot" in before
     assert "http2 on;" not in before and site_update.updated(before, (1, 24, 0))[0] == before
 
-    assert site_update.updated(site)[0] == site, "an nginx it can't ask: left"
+    assert "http2" not in site_update.updated(site)[0], "an nginx it can't ask: no HTTP/2"
     assert site_update.updated(_linux_site(), (1, 28, 0))[0] == _linux_site(), "no HTTPS, nothing to do"
-    redirect = site.split("\nserver {", 1)[1]
-    assert "http2" not in site_update.updated(site, (1, 28, 0))[0].split("\nserver {", 1)[1] == redirect
+    assert "http2" not in now.split("\nserver {", 1)[1], "not on certbot's port-80 redirect"
 
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
@@ -270,7 +288,7 @@ def test_nginx_turns_away_a_name_no_site_serves(tmp_path):
            f"    root {tmp_path / 'www'};\n    ssl_certificate {tmp_path / 'c.pem'};\n"
            f"    ssl_certificate_key {tmp_path / 'k.pem'};\n}}\n")
     app, gained, _ = site_update.updated(app, site_update.nginx_version())
-    assert gained == [site_update.GAINED["http2"]]
+    assert site_update.GAINED["http2"] in gained
     (enabled / "lumiverb").write_text(app.replace("listen 443 ", f"listen 127.0.0.1:{https} "))
     default = (_default_site(enabled, version).replace("listen 80 ", f"listen 127.0.0.1:{http} ")
                .replace("listen 443 ", f"listen 127.0.0.1:{https} "))
