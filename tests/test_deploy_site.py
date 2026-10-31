@@ -134,8 +134,6 @@ def _stubbed(
             "LUMIVERB_SITE_CONF": str(conf),
             "LUMIVERB_SITE_LINK": str(link),
             "LUMIVERB_NGINX_CONF_D": str(tmp_path),
-            "LUMIVERB_SITE_LOG_DIR": str(tmp_path / "log"),
-            "LUMIVERB_LOGROTATE_D": str(tmp_path),
         },
     )
     return out, conf, link, called
@@ -187,8 +185,7 @@ def _free_port() -> int:
 def test_nginx_takes_the_site_and_serves_the_page_alone(tmp_path):
     port = _free_port()
     site = (_site("lumiverb.io").replace("listen 80;", f"listen 127.0.0.1:{port};")
-            .replace("/var/log/nginx/access.log", str(tmp_path / "access.log"))
-            .replace("/var/log/lumiverb/sites.log", str(tmp_path / "sites.log")))
+            .replace("/var/log/nginx/access.log", str(tmp_path / "access.log")))
     (tmp_path / "site.conf").write_text(site)
     # nginx's own files in this test's folder: run as anyone, it writes nowhere else.
     temp_paths = (
@@ -262,7 +259,6 @@ def test_nginx_takes_the_site_and_serves_the_page_alone(tmp_path):
             )
         logged = (tmp_path / "access.log").read_text().splitlines()
         assert logged and all(line.endswith('"lumiverb.io"') for line in logged), "each line names the site"
-        assert (tmp_path / "sites.log").read_text().splitlines() == logged, "Lumiverb's own copy, the same lines"
     finally:
         server.terminate()
         server.wait(10)

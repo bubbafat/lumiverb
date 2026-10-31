@@ -25,7 +25,7 @@ import shutil
 import threading
 import time
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -604,43 +604,6 @@ def _backups(request: Request) -> Backups:
                             restore=restore_commands(b.path))
                  for b in made],
     )
-
-
-class SiteVisitPerson(BaseModel):
-    first_at: datetime
-    sites: list[str]
-    device: str
-    why: list[str]
-
-
-class SiteVisitDay(BaseModel):
-    day: date
-    browsers: dict[str, int]  # each site's browser-like addresses (an upper bound: many scanners run a browser)
-    sources: dict[str, int]  # where they came from: addresses, by the site's host
-    people: list[SiteVisitPerson]  # likely people, by what they did
-
-
-class SiteVisits(BaseModel):
-    logged: bool  # whether this server keeps its sites' log (a Linux server's nginx: a Mac's keeps none)
-    days: list[SiteVisitDay]  # newest first
-
-
-@router.get("/site-visits", response_model=SiteVisits,
-            dependencies=[Depends(require_signed_in), Depends(require_server_admin)])
-def get_site_visits(days: int = Query(30, ge=1, le=366)) -> SiteVisits:
-    """Who other than the people running this server looked at its sites, a day at a time: the days upkeep has
-    added up from nginx's log (src/server/lifecycle/site_visits.py), the last `days`."""
-    import glob
-    from datetime import timedelta
-
-    from src.server.config import get_settings
-    from src.server.database import get_control_session
-    from src.server.repository.site_visits import SiteVisitRepository
-
-    with get_control_session() as session:
-        kept = SiteVisitRepository(session).since(date.today() - timedelta(days=days - 1))
-    return SiteVisits(logged=bool(glob.glob(get_settings().lumiverb_site_log + "*")),
-                      days=[SiteVisitDay(**day) for day in kept])
 
 
 @router.get("/backups", response_model=Backups, dependencies=[Depends(require_signed_in), Depends(require_server_admin)])
