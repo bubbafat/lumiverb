@@ -15,7 +15,11 @@ and what was changed by hand there is left too, and said. What a site gains:
 - nginx's version unsaid by every server block in the file, certbot's port-80 redirects too (it can't be said
   once for them all: the distribution's nginx.conf sets server_tokens itself, and a second is refused).
 
-deploy-site.sh's static sites (lumiverb.io's front page, the docs) get only the last (`--static`).
+- on a Linux server, each line of its access log naming the site (nginx's combined format and "$host",
+  `lumiverb_host`, defined in conf.d by `--log-format`), for `lumiverb-server site-visits` (site_visits.py). A Mac's
+  nginx keeps no access log.
+
+deploy-site.sh's static sites (lumiverb.io's front page, the docs) get only the last two (`--static`).
 
 init.py and deploy-web.sh write these same lines (tests/test_site_update.py holds them to it). It runs on the
 python3 of every Ubuntu deploy-web.sh supports: 3.10 at the oldest.
@@ -50,6 +54,17 @@ HEADERS = (
     REFERRER,
     PERMISSIONS,
 )
+
+# Its access log's lines name the site (nginx's combined format, then "$host"): a format of the http block's,
+# defined in conf.d (the distribution's nginx.conf includes it there), each Lumiverb site logging with it.
+LOG_FORMAT_FILE = "/etc/nginx/conf.d/lumiverb-log.conf"
+LOG_FORMAT = """\
+# Lumiverb's (site_update.py --log-format): its sites' access log lines name the site, for
+# lumiverb-server site-visits. nginx's combined format, then "$host".
+log_format lumiverb_host '$remote_addr - $remote_user [$time_local] "$request" '
+                         '$status $body_bytes_sent "$http_referer" "$http_user_agent" "$host"';
+"""
+ACCESS_LOG = "access_log /var/log/nginx/access.log lumiverb_host;"
 
 # After the server's headers.
 DELIVERY = (
@@ -91,6 +106,7 @@ GAINED = {
     "pages": "A hidden file or a file the app doesn't have is a 404, not the page",
     "http2": "HTTPS speaks HTTP/2",
     "tokens": "nginx doesn't say its version on any of the site's answers (certbot's redirects too)",
+    "log": "Its access log names the site, for lumiverb-server site-visits",
 }
 
 
@@ -122,6 +138,21 @@ def _tokens(block: list[str], gained: set[str]) -> list[str]:
         return block
     gained.add("tokens")
     return [*block[:at + 1], _indent(block[at]) + "server_tokens off;", *block[at + 1:]]
+
+
+def _logged(block: list[str], gained: set[str], left: list[str]) -> list[str]:
+    """Its access log in lumiverb_host, right after its server_name, unless it says where it logs already."""
+    at = next((i for i, line in enumerate(block) if line.strip().startswith("server_name ")), None)
+    if at is None:
+        return block
+    pad = _indent(block[at])
+    own = [line.strip() for line in block if line.startswith(pad + "access_log ")]
+    if own:
+        if own != [ACCESS_LOG]:
+            left.append("A block logs as it was told by hand (its access_log): its visits aren't counted")
+        return block
+    gained.add("log")
+    return [*block[:at + 1], pad + ACCESS_LOG, *block[at + 1:]]
 
 
 def _server(block: list[str], gained: set[str], left: list[str], nginx: tuple[int, ...] | None) -> list[str]:
@@ -170,11 +201,11 @@ def _server(block: list[str], gained: set[str], left: list[str], nginx: tuple[in
     return out
 
 
-def updated(text: str, nginx: tuple[int, ...] | None = None, *,
-            static: bool = False) -> tuple[str, list[str], list[str]]:
+def updated(text: str, nginx: tuple[int, ...] | None = None, *, static: bool = False,
+            logged: bool = False) -> tuple[str, list[str], list[str]]:
     """The site's text with what it has gained, what it gained (for the log), and what was left as it was. HTTP/2
-    only with the version of the nginx serving it (`nginx_version`); a static site of deploy-site.sh's gains
-    only its version unsaid."""
+    only with the version of the nginx serving it (`nginx_version`); its access log named only where `logged` (a
+    Linux server's: LOG_FORMAT defined); a static site of deploy-site.sh's gains only those two."""
     lines = text.split("\n")
     gained: set[str] = set()
     left: list[str] = []
@@ -188,7 +219,8 @@ def updated(text: str, nginx: tuple[int, ...] | None = None, *,
             i += 1
             continue
         block = lines[i:end + 1]
-        out.extend(_tokens(block if static else _server(block, gained, left, nginx), gained))
+        block = _tokens(block if static else _server(block, gained, left, nginx), gained)
+        out.extend(_logged(block, gained, left) if logged else block)
         i = end + 1
     return "\n".join(out), [GAINED[key] for key in GAINED if key in gained], left
 
@@ -224,17 +256,35 @@ def bring_up_to_date(config: Path, *, now: datetime | None = None) -> tuple[list
     return gained, left
 
 
+def write_log_format(path: Path) -> bool:
+    """LOG_FORMAT in conf.d (Lumiverb's own file there); True if it changed."""
+    try:
+        if path.read_text() == LOG_FORMAT:
+            return False
+    except FileNotFoundError:
+        pass
+    part = path.with_name(path.name + ".part")
+    part.write_text(LOG_FORMAT)
+    os.chmod(part, 0o644)
+    os.replace(part, path)
+    return True
+
+
 def main(argv: list[str]) -> int:
+    if argv[1:2] == ["--log-format"] and len(argv) == 3:
+        if write_log_format(Path(argv[2])):
+            print("  ✓ Its sites' access log lines name the site (lumiverb_host)")
+        return 0
     static = argv[1:2] == ["--static"]
     if len(argv) != 2 + static:
-        print("Usage: site_update.py [--static] SITE", file=sys.stderr)
+        print("Usage: site_update.py [--static] SITE | --log-format FILE", file=sys.stderr)
         return 2
     path = Path(argv[-1])
     try:
         text = path.read_text()
     except FileNotFoundError:
         return 0
-    new, gained, left = updated(text, None if static else nginx_version(), static=static)
+    new, gained, left = updated(text, None if static else nginx_version(), static=static, logged=True)
     if new != text:
         rewrite(path, new)
     for line in gained:

@@ -129,6 +129,8 @@ SITE="/etc/nginx/sites-available/lumiverb"
 # every site.
 KEPT=()
 keep_before() { cp -p "$1" "$1.before-update"; KEPT+=("$1"); }
+# The format the sites' access log lines name the site in (lumiverb_host), before a site uses it.
+python3 -I "$APP_DIR/src/server/lifecycle/site_update.py" --log-format "${LUMIVERB_NGINX_CONF_D:-/etc/nginx/conf.d}/lumiverb-log.conf"
 if [[ -f "$SITE" ]]; then
   keep_before "$SITE"
 fi

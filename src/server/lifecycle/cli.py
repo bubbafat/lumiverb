@@ -92,7 +92,7 @@ from pathlib import Path
 
 from src.server import backups
 from src.server.ai_worker import DEFAULT_PORT as DEFAULT_AI_WORKER_PORT
-from src.server.lifecycle import api_port, log, network, plugins_cli, private, site_update, upkeep
+from src.server.lifecycle import api_port, log, network, plugins_cli, private, site_update, site_visits, upkeep
 from src.server.lifecycle.envfile import EnvFileError, read_env_file
 from src.server.lifecycle.init import WEB_ROOT, Choices, InitError, init
 from src.server.lifecycle.migrate import (
@@ -1072,6 +1072,14 @@ def _ai_worker(args: argparse.Namespace) -> int:
     return 0
 
 
+def _site_visits(args: argparse.Namespace) -> int:
+    """site_visits.py's report, leaving out the addresses the env file names too (when it's named)."""
+    named = _named_env_file(args.env)
+    env = read_env_file(named) if named is not None else {}
+    return site_visits.run(days=args.days, verbose=args.verbose,
+                           not_counted=env.get(site_visits.NOT_COUNTED, "").split())
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="lumiverb-server", description="Look after this machine's Lumiverb server.")
     _env_option(parser, None)
@@ -1148,6 +1156,11 @@ def main(argv: list[str] | None = None) -> int:
     worker_command.add_argument("--install", action="store_true",
                                 help="run it as this Mac's service (a launchd agent: at login, after upgrades)")
     worker_command.add_argument("--uninstall", action="store_true", help="stop the service and take it away")
+    visits_command = commands.add_parser(
+        "site-visits", help="who other than you looked at this server's sites, from nginx's log (as root: a Linux "
+                            "server's)")
+    _env_option(visits_command, argparse.SUPPRESS)
+    site_visits.add_options(visits_command)
     plugins_cli.add_parser(commands, _env_option)
     for verb, does in (("pause", "pause processing here (what's running finishes)"),
                        ("resume", "resume processing here")):
@@ -1163,7 +1176,7 @@ def main(argv: list[str] | None = None) -> int:
         return {"init": _init, "migrate": _migrate, "run": _run, "setup": _setup,
                 "reset-password": _reset_password, "server-admins": _server_admins, "backup": _backup,
                 "restore": _restore, "ai-worker": _ai_worker, "plugins": _plugins,
-                "pause": _pausing, "resume": _pausing}[args.command](args)
+                "pause": _pausing, "resume": _pausing, "site-visits": _site_visits}[args.command](args)
     except (InstallError, EnvFileError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1

@@ -80,6 +80,7 @@ site_config() {
 server {
     listen 80;
     server_name ${DOMAINS[*]};
+    access_log /var/log/nginx/access.log lumiverb_host;
 
     root ${SITE_DIR};
     index index.html;
@@ -176,6 +177,8 @@ add_hsts() {
 # ---------------------------------------------------------------------------
 step "Configuring nginx"
 
+# Its access log's lines name the site (lumiverb_host, for lumiverb-server site-visits): the format first.
+python3 -I "${APP_DIR}/src/server/lifecycle/site_update.py" --log-format "${LUMIVERB_NGINX_CONF_D:-/etc/nginx/conf.d}/lumiverb-log.conf"
 site_config > "$SITE_CONF"
 ln -sf "$SITE_CONF" "$SITE_LINK"
 # A site nginx refuses would stop every later reload (the web app's too): it goes again at once.

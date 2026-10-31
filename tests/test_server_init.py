@@ -221,7 +221,8 @@ def test_the_nginx_site_is_deploy_web_s_to_the_byte():
                      {"LISTEN": "listen 6464 default_server;", "DOMAIN": "_", "APP_DIR": "/opt/lumiverb",
                       "API_UPSTREAM": "http://127.0.0.1:6465"}, also=("CSP=",))
     assert nginx_site(listen=("listen 6464 default_server;",), server_name="_",
-                      root=Path("/opt/lumiverb/src/ui/web/dist"), upstream="http://127.0.0.1:6465") == linux
+                      root=Path("/opt/lumiverb/src/ui/web/dist"), upstream="http://127.0.0.1:6465",
+                      logged=True) == linux, "its access log naming the site: a Linux server's"
 
 
 def test_the_env_file_names_every_setting_linux_s_does(tmp_path):

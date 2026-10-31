@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from src.server.lifecycle import site_update
+
 pytestmark = pytest.mark.fast
 
 REPO = Path(__file__).resolve().parents[1]
@@ -131,6 +133,7 @@ def _stubbed(
             "PATH": f"{bin_}:{os.environ['PATH']}",
             "LUMIVERB_SITE_CONF": str(conf),
             "LUMIVERB_SITE_LINK": str(link),
+            "LUMIVERB_NGINX_CONF_D": str(tmp_path),
         },
     )
     return out, conf, link, called
@@ -140,6 +143,7 @@ def test_it_writes_the_site_and_reloads_nginx(tmp_path):
     out, conf, link, called = _stubbed(tmp_path, nginx_ok=True)
     assert out.returncode == 0, out.stdout + out.stderr
     assert conf.read_text() == _site("lumiverb.io")
+    assert (tmp_path / "lumiverb-log.conf").read_text() == site_update.LOG_FORMAT, "the format its log lines use"
     assert link.is_symlink() and link.resolve() == conf.resolve()
     assert called.read_text().splitlines() == ["nginx -t", "systemctl reload nginx"]
     assert "Skipping certbot" in out.stdout
@@ -180,7 +184,8 @@ def _free_port() -> int:
 @pytest.mark.skipif(not shutil.which("nginx"), reason="no nginx here to try the site on")
 def test_nginx_takes_the_site_and_serves_the_page_alone(tmp_path):
     port = _free_port()
-    site = _site("lumiverb.io").replace("listen 80;", f"listen 127.0.0.1:{port};")
+    site = (_site("lumiverb.io").replace("listen 80;", f"listen 127.0.0.1:{port};")
+            .replace("/var/log/nginx/access.log", str(tmp_path / "access.log")))
     (tmp_path / "site.conf").write_text(site)
     # nginx's own files in this test's folder: run as anyone, it writes nowhere else.
     temp_paths = (
@@ -196,6 +201,7 @@ def test_nginx_takes_the_site_and_serves_the_page_alone(tmp_path):
         "  types { text/html html; text/css css; application/javascript js; image/webp webp;"
         " image/svg+xml svg; image/jpeg jpg; }\n"
         "  access_log off;\n"
+        + site_update.LOG_FORMAT.replace("/var/log/nginx/", f"{tmp_path}/")
         + "".join(f"  {d} {tmp_path / d};\n" for d in temp_paths)
         + f"  include {tmp_path}/site.conf;\n}}\n"
     )
@@ -251,6 +257,8 @@ def test_nginx_takes_the_site_and_serves_the_page_alone(tmp_path):
             assert status in (400, 404) and b"Lumiverb" not in body, (
                 f"{outside} reached outside site/"
             )
+        logged = (tmp_path / "access.log").read_text().splitlines()
+        assert logged and all(line.endswith('"lumiverb.io"') for line in logged), "each line names the site"
     finally:
         server.terminate()
         server.wait(10)

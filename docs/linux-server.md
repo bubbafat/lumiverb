@@ -200,6 +200,14 @@ sudo bash /opt/lumiverb/scripts/update.sh
 
 It pulls the install's branch, then runs `update-api.sh` (packages, migrations, units, restarts; it keeps processing's packages, and the first time replaces lumiverb-worker with lumiverb-scheduler) and `update-web.sh` (the web build and the nginx site: playback streams go straight through, unbuffered, and their links, good for hours, stay out of the access logs, nginx's and the API's; and whatever else deploy-web.sh's site has gained since, `src/server/lifecycle/site_update.py`: its headers, compression, a 404 for a hidden file or a file the app doesn't have, HTTP/2 over HTTPS, and nginx's version unsaid on every answer, certbot's redirects and the lumiverb.io sites' too; each site is backed up first and put back if nginx refuses the result). A web app with a domain of its own also gets nginx's default site, `lumiverb-default`, which closes the connection for any name no site here serves: the machine's bare address, or someone else's domain still pointing at it. It ends with a summary: the commits that came in, each service's state and the API's health.
 
+Each site's access log lines name the site (`lumiverb_host`), so the server can say who other than you looked at the web app and any static site `deploy-site.sh` serves:
+
+```bash
+sudo /opt/lumiverb/.venv/bin/lumiverb-server site-visits --env /etc/lumiverb/env --days 7
+```
+
+(On a web server without Lumiverb's Python, `sudo python3 -I /opt/lumiverb/src/server/lifecycle/site_visits.py --days 7` says the same, without the env file's list.) It reads nginx's log (its 14 days) and leaves out this machine, the addresses anyone signed in from over SSH, and any listed in the env file's `LUMIVERB_SITE_VISITS_NOT_COUNTED` (separated by spaces). It lists the likely people (who started the demo, opened a clip, came from a search or social site, followed a link from another of the sites, or read a few pages), where they came from, and the browser-like addresses per site and day, an upper bound (`-v` lists each).
+
 - **Another branch:** `--branch NAME` moves the install there and remembers it (in `/etc/lumiverb/env`, for the next update and for `deploy-api.sh`).
 - **The log:** everything also goes to `/var/log/lumiverb/update-<date>-<time>-<pid>.log`, which belongs to whoever ran sudo, so it reads without sudo; `update-latest.log` is the newest. It ends with a line `Result: OK` or `Result: FAILED`. The last 20 are kept.
 - **A failure** stops the update where it happened and says where; so does Ctrl-C or a dropped SSH session. Fix that and run it again.

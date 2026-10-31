@@ -33,11 +33,12 @@ WEB = Path("/opt/homebrew/opt/lumiverb/libexec/src/ui/web/dist")
 
 # What a Mac's config gains: its HTTPS is network.py's lines, and its one block's version unsaid is the app's own
 # lines' (DELIVERY).
-WITHOUT_HTTPS = [line for key, line in site_update.GAINED.items() if key not in ("http2", "tokens")]
+WITHOUT_HTTPS = [line for key, line in site_update.GAINED.items() if key not in ("http2", "tokens", "log")]
 
 
-def _today() -> str:
-    return nginx_conf(nginx_site(listen=(LISTEN,), server_name="_", root=WEB, upstream="http://127.0.0.1:6364"))
+def _today(*, logged: bool = False) -> str:
+    return nginx_conf(nginx_site(listen=(LISTEN,), server_name="_", root=WEB, upstream="http://127.0.0.1:6364",
+                                 logged=logged))
 
 
 def test_a_config_from_before_becomes_today_s_to_the_byte_once():
@@ -97,15 +98,16 @@ def test_a_mac_s_config_is_backed_up_beside_itself_first(tmp_path):
 
 
 def test_the_script_is_the_standard_library_s_alone(tmp_path):
-    # update-web.sh runs it as `python3 -I site_update.py SITE`, outside Lumiverb's environment.
+    # update-web.sh runs it as `python3 -I site_update.py SITE`, outside Lumiverb's environment: a Linux
+    # server's, whose access log names the site.
     site = tmp_path / "lumiverb"
     site.write_text(FIXTURE.read_text())
     script = Path(site_update.__file__)
     out = subprocess.run([sys.executable, "-I", "-S", str(script), str(site)], capture_output=True, text=True,
                          timeout=30, cwd=tmp_path)
     assert out.returncode == 0, out.stderr
-    assert site.read_text() == _today()
-    assert out.stdout.splitlines() == [f"  ✓ {line}" for line in WITHOUT_HTTPS]
+    assert site.read_text() == _today(logged=True)
+    assert out.stdout.splitlines() == [f"  ✓ {line}" for line in [*WITHOUT_HTTPS, site_update.GAINED["log"]]]
     missing = subprocess.run([sys.executable, "-I", "-S", str(script), str(tmp_path / "none")], capture_output=True,
                              text=True, timeout=30)
     assert (missing.returncode, missing.stdout) == (0, ""), "no site, nothing to do"
@@ -327,3 +329,25 @@ def test_nginx_turns_away_a_name_no_site_serves(tmp_path):
     finally:
         server.terminate()
         server.wait(timeout=10)
+
+
+def test_a_linux_site_s_log_names_the_site_unless_it_logs_as_told_by_hand():
+    site = _certbot(_linux_site())
+    now, gained, left = site_update.updated(site, logged=True)
+    assert now.count(f"    server_name x;\n    {site_update.ACCESS_LOG}\n") == 2, "the site and certbot's redirect"
+    assert site_update.GAINED["log"] in gained and left == []
+    assert site_update.updated(now, logged=True) == (now, [], []), "once"
+    assert site_update.ACCESS_LOG not in site_update.updated(site)[0], "a Mac's nginx keeps no access log"
+
+    own = site.replace("    server_name x;\n", "    server_name x;\n    access_log /var/log/nginx/try.log;\n", 1)
+    kept, _, left = site_update.updated(own, logged=True)
+    assert "access_log /var/log/nginx/try.log;" in kept and kept.count(site_update.ACCESS_LOG) == 1
+    assert left == ["A block logs as it was told by hand (its access_log): its visits aren't counted"]
+
+
+def test_the_log_format_is_written_once(tmp_path):
+    conf = tmp_path / "lumiverb-log.conf"
+    assert site_update.write_log_format(conf) is True and conf.read_text() == site_update.LOG_FORMAT
+    assert site_update.write_log_format(conf) is False
+    assert "log_format lumiverb_host " in site_update.LOG_FORMAT and site_update.LOG_FORMAT.rstrip().endswith(
+        '"$http_user_agent" "$host"\';'), "nginx's combined format, then the site"
