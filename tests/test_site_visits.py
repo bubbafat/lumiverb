@@ -99,6 +99,35 @@ def _log() -> list[str]:
               _line(o, "20/Oct/2026:12:06:00", "GET /page6.html", agent=MAC_CHROME, host=None)]
     # A browser and nothing more: counted as one, not as a person.
     lines += [_line("198.51.100.30", "25/Oct/2026:08:00:00", "GET /assets/index-abc123.js", agent=MAC_CHROME)]
+    # From before the log named the site (the demo server's, Oct 20-29): "/" placed by the file loaded right after
+    # it. A reload inside the web app follows nothing; the front page's link to it does.
+    lines += [_line("198.51.100.40", "22/Oct/2026:10:00:00", "GET /", referrer="https://try.example.org/",
+                    agent=MAC_CHROME, host=None),
+              _line("198.51.100.40", "22/Oct/2026:10:00:01", "GET /assets/index-abc123.js", agent=MAC_CHROME,
+                    host=None),
+              _line("198.51.100.41", "23/Oct/2026:10:00:00", "GET /", referrer="https://example.org/",
+                    agent=MAC_CHROME, host=None),
+              _line("198.51.100.41", "23/Oct/2026:10:00:02", "GET /assets/index-abc123.js", agent=MAC_CHROME,
+                    host=None)]
+    # ...and a docs page linked from the docs is the docs' own navigation.
+    lines += [_line("198.51.100.42", "24/Oct/2026:10:00:00", "GET /docs.css", agent=MAC_CHROME, host=None),
+              _line("198.51.100.42", "24/Oct/2026:10:00:01", "GET /page7.html", referrer="https://docs.example.org/",
+                    agent=MAC_CHROME, host=None)]
+    # A reader skimming six pages in under a minute, 5 to 24 s apart (the demo server's), and a crawler taking five
+    # in a burst.
+    for n, at in enumerate(("15:13:27", "15:13:35", "15:13:40", "15:14:04", "15:14:13", "15:14:24"), start=8):
+        lines.append(_line("198.51.100.43", f"26/Oct/2026:{at}", f"GET /page{n}.html", agent=IPHONE,
+                           host="docs.example.org"))
+    lines.append(_line("198.51.100.43", "26/Oct/2026:15:13:28", "GET /docs.css", agent=IPHONE,
+                       host="docs.example.org"))
+    lines.append(_line("198.51.100.44", "27/Oct/2026:09:00:00", "GET /docs.css", agent=MAC_CHROME,
+                       host="docs.example.org"))
+    lines += [_line("198.51.100.44", "27/Oct/2026:09:00:01", f"GET /page{n}.html", agent=MAC_CHROME,
+                    host="docs.example.org") for n in range(14, 19)]
+    # Certbot's redirect answers every path with a 301: no file given, so no browser.
+    lines += [_line("198.51.100.45", "28/Oct/2026:01:00:00", "GET /assets/config.js", 301, agent=MAC_CHROME,
+                    host="example.org"),
+              _line("198.51.100.45", "28/Oct/2026:01:00:01", "GET /assets/index-abc123.js", 301, agent=MAC_CHROME)]
     return lines
 
 
@@ -130,13 +159,16 @@ def test_the_likely_people_and_what_they_did(tmp_path):
     said = _report(tmp_path)
     assert "Visitors other than the people running this server, Oct 20 to Oct 31" in said
     people = said.split("Likely people: ", 1)[1].split("\n\n", 1)[0].splitlines()
-    assert people[0] == "3"
+    assert people[0] == "5"
     assert people[1].split() == ["Oct", "20", "12:00", "docs.example.org", "Mac", "Chrome", "read", "3",
                                  "docs.example.org", "pages"], "a line from before the format, by its file"
     assert people[2].startswith("  Oct 21 10:14  example.org+try.example.org")
     assert "iPhone Safari" in people[2]
     assert people[2].endswith("tried the demo x1; opened 2 clips; followed a link from another of these sites")
-    assert people[3].endswith("from reddit.com; read 3 docs.example.org pages")
+    assert people[3].startswith("  Oct 23 10:00  try.example.org")
+    assert people[3].endswith("followed a link from another of these sites"), "the front page's link, by its file"
+    assert people[4].startswith("  Oct 26 15:13  docs.example.org") and people[4].endswith("read 6 docs.example.org pages")
+    assert people[5].endswith("from reddit.com; read 3 docs.example.org pages")
     assert "Came from: reddit.com 1" in said, "a Google referrer from a scanner isn't counted"
 
 
@@ -144,11 +176,13 @@ def test_browsers_are_counted_apart_and_scanners_not_at_all(tmp_path):
     said = _report(tmp_path)
     browsers = dict(line.split(None, 2)[:2] for line in
                     said.split("Browser-like addresses", 1)[1].split("\n\n", 1)[0].splitlines()[1:])
-    # The docs: the reader, the crawler, the one from before; the web app: the person and the browser alone.
-    assert browsers == {"try.example.org": "2", "example.org": "1", "docs.example.org": "3"}
+    # The web app: the person, the browser alone and the two placed by their file; the docs: the readers, both
+    # crawlers and the ones from before.
+    assert browsers == {"try.example.org": "4", "example.org": "1", "docs.example.org": "6"}
     assert "Left out as the people running it: 127.0.0.1, 192.0.2.10, 192.0.2.20, ::1" in said
     every = _report(tmp_path, verbose=True).split("Every browser-like address:", 1)[1]
-    for scanner in ("192.0.2.80", "66.249.66.1", "192.0.2.81", "192.0.2.82", "192.0.2.83", "192.0.2.84"):
+    for scanner in ("192.0.2.80", "66.249.66.1", "192.0.2.81", "192.0.2.82", "192.0.2.83", "192.0.2.84",
+                    "198.51.100.45"):
         assert scanner not in every, scanner
     assert "192.0.2.77" in every and "198.51.100.30" in every
 
