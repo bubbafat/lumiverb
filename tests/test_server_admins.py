@@ -48,7 +48,7 @@ SERVER_ROUTES = {
     ("DELETE", "/v1/system/network/certificate"),
     ("GET", "/v1/system/backups"), ("POST", "/v1/system/backups"), ("PUT", "/v1/system/backups/folder"),
     ("GET", "/v1/system/storage"), ("PUT", "/v1/system/storage/previews"), ("POST", "/v1/system/storage/move"),
-    ("GET", "/v1/system/logs"),
+    ("GET", "/v1/system/logs"), ("GET", "/v1/system/site-visits"),
     ("PUT", "/v1/plugins/{plugin_id}/server-settings"),
 }
 

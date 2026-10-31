@@ -86,8 +86,10 @@ def _blocks(text: str) -> Iterable[list[str]]:
             yield lines[i:end]
 
 
-def sites(available: Path = Path(SITES)) -> list[Site]:
-    """This server's Lumiverb sites, from nginx's: each one's names and folder, in the blocks that serve its files."""
+def sites(available: Path | None = None) -> list[Site]:
+    """This server's Lumiverb sites, from nginx's (SITES): each one's names and folder, in the blocks that serve
+    its files."""
+    available = Path(SITES) if available is None else available
     found: list[Site] = []
     files = [available / APP_SITE, *sorted(available.glob(f"{APP_SITE}-*"))]
     for path in files:
@@ -167,15 +169,18 @@ def _median_gap(times: list[datetime]) -> timedelta:
     return gaps[len(gaps) // 2] if gaps else timedelta()
 
 
-def _opened(paths: Iterable[str]) -> Iterable[str]:
+def opened(paths: Iterable[str]) -> Iterable[str]:
+    """The log's lines, its oldest file first (rotated ones gzipped)."""
     for path in sorted(paths, key=lambda p: (os.path.getmtime(p), p), reverse=False):
         opener = gzip.open if path.endswith(".gz") else open
         with opener(path, "rt", errors="replace") as lines:
             yield from lines
 
 
-def read(lines: Iterable[str], here: list[Site], *, since: date = date.min) -> tuple[dict[str, Visitor], date | None]:
-    """Every browser-like address in the log's lines, with what it did; and the first day the lines cover."""
+def read(lines: Iterable[str], here: list[Site], *, since: date = date.min,
+         until: date = date.max) -> tuple[dict[str, Visitor], date | None]:
+    """Every browser-like address in the log's lines from `since` to `until`, with what it did; and the first day
+    the lines cover."""
     by_name = {name: site for site in here for name in site.names}
     any_name = next((site for site in here if site.app and not site.names), None)
     any_app = any(site.app for site in here)
@@ -190,7 +195,7 @@ def read(lines: Iterable[str], here: list[Site], *, since: date = date.min) -> t
             at = datetime.strptime(when, "%d/%b/%Y:%H:%M:%S %z")
         except ValueError:
             continue
-        if at.date() < since:
+        if not since <= at.date() <= until:
             continue
         first = min(first or at.date(), at.date())
         if (not status.startswith(("2", "3")) or not user_agent.strip() or _BOT.search(user_agent)
@@ -239,19 +244,68 @@ def read(lines: Iterable[str], here: list[Site], *, since: date = date.min) -> t
     return {a: v for a, v in visitors.items() if v.sites}, first
 
 
-def machine_addresses() -> set[str]:
+@dataclass(frozen=True)
+class Person:
+    """A likely person, as kept: what they did, never their address."""
+    first_at: datetime
+    sites: tuple[str, ...]
+    device: str
+    why: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Day:
+    """A day's visits, as kept (upkeep: src/server/repository/site_visits.py): counts and likely people alone."""
+    day: date
+    browsers: dict[str, int]  # each site's browser-like addresses
+    sources: dict[str, int]  # where likely people and browsers came from: addresses, by the site's host
+    people: tuple[Person, ...]
+
+
+def days(lines: Callable[[], Iterable[str]], here: list[Site], *, before: date, kept: Iterable[date] = (),
+         not_counted: Iterable[str] = (), ours: Callable[[date], set[str]] | None = None) -> list[Day]:
+    """Each whole day the log has before `before` (today) that isn't `kept` yet, added up: `lines` reads the log
+    afresh each time. The first day it has may begin partway (when Lumiverb's log was made, or after rotating
+    nginx's oldest file away): it's left out, a day being kept the night after it, whole."""
+    _, first = read(lines(), here)
+    if first is None:
+        return []
+    left_out = {"127.0.0.1", "::1", *not_counted, *(ours or _ours)(first)}
+    done = set(kept)
+    out = []
+    day = first + timedelta(days=1)
+    while day < before:
+        if day not in done:
+            visitors, _ = read(lines(), here, since=day, until=day)
+            browsers = {a: v for a, v in visitors.items() if a not in left_out}
+            came: dict[str, int] = defaultdict(int)
+            for v in browsers.values():
+                for host in v.came_from:
+                    came[host] += 1
+            people = sorted((Person(first_at=min(v.times), sites=tuple(sorted(v.sites)), device=device(v.user_agent),
+                                    why=tuple(why)) for v in browsers.values() if (why := v.why())),
+                            key=lambda p: p.first_at)
+            out.append(Day(day=day, people=tuple(people), sources=dict(sorted(came.items())),
+                           browsers={site.name: sum(1 for v in browsers.values() if site.name in v.sites)
+                                     for site in here}))
+        day += timedelta(days=1)
+    return out
+
+
+def machine_addresses(env: dict[str, str] | None = None) -> set[str]:
     try:
-        said = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=30).stdout
+        said = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=30, env=env).stdout
     except (OSError, subprocess.SubprocessError):
         return set()
     return set(said.split())
 
 
-def ssh_logins(since: date) -> set[str]:
-    """Every address someone signed in from over SSH since then (the day before: a session already open)."""
+def ssh_logins(since: date, env: dict[str, str] | None = None) -> set[str]:
+    """Every address someone signed in from over SSH since then (the day before: a session already open), as far
+    as this user may read the journal (root, or the systemd-journal group's)."""
     try:
         said = subprocess.run(["journalctl", "-u", "ssh", "-u", "sshd", "--since", str(since - timedelta(days=1)),
-                               "--no-pager", "-q"], capture_output=True, text=True, timeout=120).stdout
+                               "--no-pager", "-q"], capture_output=True, text=True, timeout=120, env=env).stdout
     except (OSError, subprocess.SubprocessError):
         return set()
     return set(_SSH_LOGIN.findall(said))
@@ -315,7 +369,7 @@ def run(*, days: int = 0, verbose: bool = False, not_counted: Iterable[str] = ()
     import glob
 
     try:
-        print(report(_opened(glob.glob(LOGS)), here, today=date.today(), days=days, verbose=verbose,
+        print(report(opened(glob.glob(LOGS)), here, today=date.today(), days=days, verbose=verbose,
                      not_counted=not_counted), end="")
     except PermissionError:
         print("✗ nginx's log is root's to read: run it with sudo", file=sys.stderr)

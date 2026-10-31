@@ -81,6 +81,7 @@ server {
     listen 80;
     server_name ${DOMAINS[*]};
     access_log /var/log/nginx/access.log lumiverb_host;
+    access_log /var/log/lumiverb/sites.log lumiverb_host;
 
     root ${SITE_DIR};
     index index.html;
