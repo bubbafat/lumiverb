@@ -5,6 +5,7 @@ import {
   ApiError,
   getAccountVisits,
   getCurrentUser,
+  getSiteVisits,
   getSetupProgress,
   listLibraries,
   setSetupProgress,
@@ -224,6 +225,8 @@ export default function AdminPage() {
       </section>
 
       <VisitsSection />
+
+      {user?.server_admin && <SiteVisitsSection />}
     </div>
   );
 }
@@ -282,6 +285,92 @@ function VisitsSection() {
   );
 }
 
+
+/** "Oct 30, 2:16 AM": when a likely person was first seen, in this browser's time. */
+function seenAt(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** "Oct 30": a day the server added up (its own date, not this browser's). */
+function dayOf(day: string): string {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+/** Who other than the people running this server looked at its sites, from nginx's log a day at a time: a server
+ *  admin's. Nothing on a server that keeps no log of its sites (a Mac's). */
+function SiteVisitsSection() {
+  const { data, error } = useQuery({ queryKey: ["site-visits", VISIT_DAYS], queryFn: () => getSiteVisits(VISIT_DAYS) });
+  // Shown once it's known there's something to show: nothing flashes by on a server that keeps no log.
+  if (!error && (!data || (!data.logged && data.days.length === 0))) return null;
+  const people = (data?.days ?? []).flatMap((d) => d.people).sort((a, b) => b.first_at.localeCompare(a.first_at));
+  const came = new Map<string, number>();
+  for (const day of data?.days ?? []) {
+    for (const [host, n] of Object.entries(day.sources)) came.set(host, (came.get(host) ?? 0) + n);
+  }
+  const sites = [...new Set((data?.days ?? []).flatMap((d) => Object.keys(d.browsers)))];
+  return (
+    <section>
+      <SectionHeader title="Site visits"
+        subtitle={`Who other than the people running this server looked at its sites in the last ${VISIT_DAYS} days, from nginx's log a day at a time; nobody's address is kept`} />
+      {error ? (
+        <p role="alert" className="text-sm text-red-300">
+          {error instanceof ApiError ? error.message : "Couldn't reach the server. Try again."}
+        </p>
+      ) : !data || data.days.length === 0 ? (
+        <p className="text-sm text-gray-500 italic">No day added up yet: each is, the night after it ends.</p>
+      ) : (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-300">
+            {people.length.toLocaleString()} likely {people.length === 1 ? "person" : "people"}
+            {came.size > 0 && (
+              <span className="text-gray-400">
+                {" · came from "}
+                {[...came].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([h, n]) => `${h} ${n}`).join(", ")}
+              </span>
+            )}
+          </p>
+          {people.length > 0 && (
+            <ul aria-label="Likely people" className="space-y-2">
+              {people.map((p, i) => (
+                <li key={`${p.first_at}:${i}`} className="rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-2">
+                  <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                    <span className="text-gray-100">{seenAt(p.first_at)}</span>
+                    <span className="text-gray-400">{p.sites.join(" + ")}</span>
+                    {p.device && <span className="text-xs text-gray-500">{p.device}</span>}
+                  </div>
+                  <p className="mt-0.5 text-sm text-gray-400">{p.why.join("; ")}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="overflow-x-auto">
+            <table aria-label="Browser-like addresses by day" className="w-full text-sm">
+              <caption className="mb-1 text-left text-xs text-gray-500">
+                Browser-like addresses each day: at most, as many scanners run a real browser
+              </caption>
+              <thead>
+                <tr className="text-left text-xs text-gray-500">
+                  <th scope="col" className="py-1 pr-4 font-normal">Day</th>
+                  {sites.map((site) => <th key={site} scope="col" className="py-1 pr-4 font-normal">{site}</th>)}
+                  <th scope="col" className="py-1 font-normal">Likely people</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.days.map((d) => (
+                  <tr key={d.day} className="border-t border-gray-800 text-gray-300">
+                    <th scope="row" className="py-1 pr-4 text-left font-normal text-gray-400">{dayOf(d.day)}</th>
+                    {sites.map((site) => <td key={site} className="py-1 pr-4">{(d.browsers[site] ?? 0).toLocaleString()}</td>)}
+                    <td className="py-1">{d.people.length.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
 
 /** Setting up isn't finished: how far, Continue, or put it away. */
 function SetupCard() {

@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   setSetupProgress: vi.fn(),
   getCurrentUser: vi.fn(),
   getAccountVisits: vi.fn(),
+  getSiteVisits: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -48,6 +49,7 @@ const STEPS = ["storage", "network", "find", "ai", "people", "library"];
 
 beforeEach(() => {
   api.getAccountVisits.mockResolvedValue({ since: "2026-10-01", places: [] });
+  api.getSiteVisits.mockResolvedValue({ logged: false, days: [] });
   api.getCurrentUser.mockResolvedValue({ user_id: "usr_1", email: "a@b.c", role: "admin", server_admin: true });
   api.getSetupProgress.mockResolvedValue({ steps: STEPS, done: STEPS, dismissed: false, finished: true });
   api.getSystemHealth.mockResolvedValue(health());
@@ -236,5 +238,56 @@ describe("AdminPage's visits (ADR-025)", () => {
   it("says when there are none", async () => {
     renderPage();
     expect(await screen.findByText("No visits in the last 30 days.")).toBeTruthy();
+  });
+
+  it("shows a server admin who else looked at the server's sites, a day at a time", async () => {
+    api.getSiteVisits.mockResolvedValue({
+      logged: true,
+      days: [
+        { day: "2026-10-30", browsers: { "try.example.org": 3, "example.org": 2 }, sources: { "reddit.com": 1 },
+          people: [{ first_at: "2026-10-30T02:16:00Z", sites: ["example.org", "try.example.org"],
+                     device: "Mac Chrome", why: ["tried the demo x1", "from reddit.com"] }] },
+        { day: "2026-10-29", browsers: { "try.example.org": 1, "example.org": 0 }, sources: { "reddit.com": 1 },
+          people: [{ first_at: "2026-10-29T15:10:00Z", sites: ["docs.example.org"], device: "Mac Chrome",
+                     why: ["from reddit.com", "read 6 docs.example.org pages"] }] },
+      ],
+    });
+    renderPage();
+    const people = await screen.findByRole("list", { name: "Likely people" });
+    const items = within(people).getAllByRole("listitem");
+    expect(items.map((i) => i.textContent)).toEqual([
+      expect.stringContaining("tried the demo x1; from reddit.com"),
+      expect.stringContaining("from reddit.com; read 6 docs.example.org pages"),
+    ]);
+    expect(within(items[0]).getByText("example.org + try.example.org")).toBeTruthy();
+    expect(screen.getByText(/2 likely people/)).toBeTruthy();
+    expect(screen.getByText(/came from reddit\.com 2/)).toBeTruthy();
+    const table = screen.getByRole("table", { name: "Browser-like addresses by day" });
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows.map((r) => within(r).getAllByRole("cell").map((c) => c.textContent))).toEqual([
+      ["3", "2", "1"], ["1", "0", "1"]]);
+    expect(api.getSiteVisits).toHaveBeenCalledWith(30);
+  });
+
+  it("shows no site visits where the server keeps no log of its sites, nor to an account admin", async () => {
+    renderPage();
+    await screen.findByRole("list", { name: "System health" });
+    await vi.waitFor(() => expect(api.getSiteVisits).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole("heading", { name: "Site visits" })).toBeNull();
+
+    cleanup();
+    api.getCurrentUser.mockResolvedValue({ user_id: "usr_2", email: "b@b.c", role: "admin", server_admin: false });
+    api.getSiteVisits.mockResolvedValue({ logged: true, days: [] });
+    renderPage();
+    await screen.findByRole("list", { name: "System health" });
+    expect(screen.queryByRole("heading", { name: "Site visits" })).toBeNull();
+    expect(api.getSiteVisits).toHaveBeenCalledTimes(1);  // the account admin's page never asked
+  });
+
+  it("says when no day is added up yet", async () => {
+    api.getSiteVisits.mockResolvedValue({ logged: true, days: [] });
+    renderPage();
+    expect(await screen.findByText(/No day added up yet/)).toBeTruthy();
   });
 });

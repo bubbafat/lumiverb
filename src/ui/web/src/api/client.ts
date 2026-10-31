@@ -2301,6 +2301,31 @@ export async function getAccountVisits(days: number): Promise<AccountVisits> {
   return apiFetch<AccountVisits>(`/visits?days=${days}`);
 }
 
+/** A likely person on this server's sites (site visits): what they did, never their address. */
+export interface SiteVisitPerson {
+  first_at: string;
+  sites: string[];
+  device: string;
+  why: string[];
+}
+
+export interface SiteVisitDay {
+  day: string;
+  browsers: Record<string, number>;
+  sources: Record<string, number>;
+  people: SiteVisitPerson[];
+}
+
+export interface SiteVisits {
+  logged: boolean;
+  days: SiteVisitDay[];
+}
+
+/** Who other than the people running this server looked at its sites, a day at a time: a server admin's. */
+export async function getSiteVisits(days: number): Promise<SiteVisits> {
+  return apiFetch<SiteVisits>(`/system/site-visits?days=${days}`);
+}
+
 export async function exportProject(projectId: string, format: string): Promise<ProjectExportFile> {
   const qs = new URLSearchParams({ format });
   const res = await authFetch(apiPath`/projects/${projectId}/export` + `?${qs.toString()}`);
