@@ -124,11 +124,13 @@ cd "$APP_DIR"
 # ---------------------------------------------------------------------------
 step "Updating the nginx site"
 SITE="/etc/nginx/sites-available/lumiverb"
-# As it was before this update, beside it (sites-available: nginx doesn't read it): put back if nginx refuses
-# what the update made of it, so the next reload (certbot's renewal, a reboot) isn't refused for every site.
-BEFORE="${SITE}.before-update"
+# Each site file as it was before this update, beside it (sites-available: nginx doesn't read it): put back if
+# nginx refuses what the update made of them, so the next reload (certbot's renewal, a reboot) isn't refused for
+# every site.
+KEPT=()
+keep_before() { cp -p "$1" "$1.before-update"; KEPT+=("$1"); }
 if [[ -f "$SITE" ]]; then
-  cp -p "$SITE" "$BEFORE"
+  keep_before "$SITE"
 fi
 # Sites deploy-web.sh wrote before playback streams had their own location
 # get it here, once, with the upstream of their /v1/ location.
@@ -242,6 +244,15 @@ fi
 # config: the standard library alone (this machine may have no Lumiverb Python).
 python3 -I "$APP_DIR/src/server/lifecycle/site_update.py" "$SITE"
 
+# deploy-site.sh's sites (lumiverb.io's front page, the docs), beside it: nginx's version unsaid, certbot's
+# redirects too.
+for STATIC in "$SITE"-*; do
+  case "$STATIC" in */lumiverb-default|*.before-update|*.part) continue ;; esac
+  [[ -f "$STATIC" ]] || continue
+  keep_before "$STATIC"
+  python3 -I "$APP_DIR/src/server/lifecycle/site_update.py" --static "$STATIC"
+done
+
 # ---------------------------------------------------------------------------
 step "Turning away names this machine doesn't serve"
 if [[ ! -f "$SITE" ]]; then
@@ -255,11 +266,10 @@ fi
 # ---------------------------------------------------------------------------
 step "Reloading nginx"
 if ! nginx -t; then
-  if [[ -f "$BEFORE" ]]; then
-    cp -p "$BEFORE" "$SITE"
-    fail "nginx config test failed (above): ${SITE} is back as it was before this update (nginx still serves it)"
-  fi
-  fail "nginx config test failed"
+  for KEPT_SITE in ${KEPT[@]+"${KEPT[@]}"}; do
+    cp -p "${KEPT_SITE}.before-update" "$KEPT_SITE"
+  done
+  fail "nginx config test failed (above): the sites are back as they were before this update (nginx still serves them)"
 fi
 nginx -s reload
 ok "nginx reloaded"

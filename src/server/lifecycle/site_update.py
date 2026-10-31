@@ -11,7 +11,11 @@ and what was changed by hand there is left too, and said. What a site gains:
 - text compressed, and nginx's version unsaid;
 - a hidden file (/.env, /.git/) or a file name the app doesn't have answered 404, never the app's page;
 - HTTP/2 where it's served over HTTPS (certbot's 443), in the words this machine's nginx takes: `http2 on;` from
-  1.25.1, the listen line's `http2` before.
+  1.25.1, the listen line's `http2` before;
+- nginx's version unsaid by every server block in the file, certbot's port-80 redirects too (it can't be said
+  once for them all: the distribution's nginx.conf sets server_tokens itself, and a second is refused).
+
+deploy-site.sh's static sites (lumiverb.io's front page, the docs) get only the last (`--static`).
 
 init.py and deploy-web.sh write these same lines (tests/test_site_update.py holds them to it). It runs on the
 python3 of every Ubuntu deploy-web.sh supports: 3.10 at the oldest.
@@ -86,6 +90,7 @@ GAINED = {
     "delivery": "Text is compressed, and nginx doesn't say its version",
     "pages": "A hidden file or a file the app doesn't have is a 404, not the page",
     "http2": "HTTPS speaks HTTP/2",
+    "tokens": "nginx doesn't say its version on any of the site's answers (certbot's redirects too)",
 }
 
 
@@ -108,6 +113,15 @@ def _http2(block: list[str], nginx: tuple[int, ...] | None, gained: set[str]) ->
             out[i] = f"{m.group(1)} http2{m.group(2)}"
             gained.add("http2")
     return out
+
+
+def _tokens(block: list[str], gained: set[str]) -> list[str]:
+    """server_tokens off in a block that doesn't say it yet, after its server_name: certbot's redirects too."""
+    at = next((i for i, line in enumerate(block) if line.strip().startswith("server_name ")), None)
+    if at is None or any(line.strip().startswith("server_tokens ") for line in block):
+        return block
+    gained.add("tokens")
+    return [*block[:at + 1], _indent(block[at]) + "server_tokens off;", *block[at + 1:]]
 
 
 def _server(block: list[str], gained: set[str], left: list[str], nginx: tuple[int, ...] | None) -> list[str]:
@@ -156,9 +170,11 @@ def _server(block: list[str], gained: set[str], left: list[str], nginx: tuple[in
     return out
 
 
-def updated(text: str, nginx: tuple[int, ...] | None = None) -> tuple[str, list[str], list[str]]:
+def updated(text: str, nginx: tuple[int, ...] | None = None, *,
+            static: bool = False) -> tuple[str, list[str], list[str]]:
     """The site's text with what it has gained, what it gained (for the log), and what was left as it was. HTTP/2
-    only with the version of the nginx serving it (`nginx_version`)."""
+    only with the version of the nginx serving it (`nginx_version`); a static site of deploy-site.sh's gains
+    only its version unsaid."""
     lines = text.split("\n")
     gained: set[str] = set()
     left: list[str] = []
@@ -171,7 +187,8 @@ def updated(text: str, nginx: tuple[int, ...] | None = None) -> tuple[str, list[
             out.append(lines[i])
             i += 1
             continue
-        out.extend(_server(lines[i:end + 1], gained, left, nginx))
+        block = lines[i:end + 1]
+        out.extend(_tokens(block if static else _server(block, gained, left, nginx), gained))
         i = end + 1
     return "\n".join(out), [GAINED[key] for key in GAINED if key in gained], left
 
@@ -208,15 +225,16 @@ def bring_up_to_date(config: Path, *, now: datetime | None = None) -> tuple[list
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("Usage: site_update.py SITE", file=sys.stderr)
+    static = argv[1:2] == ["--static"]
+    if len(argv) != 2 + static:
+        print("Usage: site_update.py [--static] SITE", file=sys.stderr)
         return 2
-    path = Path(argv[1])
+    path = Path(argv[-1])
     try:
         text = path.read_text()
     except FileNotFoundError:
         return 0
-    new, gained, left = updated(text, nginx_version())
+    new, gained, left = updated(text, None if static else nginx_version(), static=static)
     if new != text:
         rewrite(path, new)
     for line in gained:
