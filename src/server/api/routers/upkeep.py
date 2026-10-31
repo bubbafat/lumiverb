@@ -685,6 +685,7 @@ def _keep_site_visits() -> dict[str, int] | None:
             repo = SiteVisitRepository(session)
             days = site_visits.days(
                 lambda: site_visits.opened(logs), site_visits.sites(), before=date.today(), kept=repo.kept_days(),
+                first=site_visits.first_day(logs),
                 not_counted=settings.lumiverb_site_visits_not_counted.split(),
                 ours=lambda since: site_visits.machine_addresses(env) | site_visits.ssh_logins(since, env))
             kept = [day for day in days if repo.keep(day)]

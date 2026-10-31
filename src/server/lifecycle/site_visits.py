@@ -51,6 +51,8 @@ _SOCIAL = re.compile(r"(^|\.)(google|bing|duckduckgo|yahoo|ecosia|kagi|brave|sta
                      re.IGNORECASE)
 _CLIP = re.compile(r"/v1/assets/[^/]+")
 _SSH_LOGIN = re.compile(r"Accepted \S+ for \S+ from (\S+)")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")  # nginx's, any locale
+_DAY = re.compile(r"\[(\d{2})/([A-Z][a-z]{2})/(\d{4}):")
 PAGES_READ = (3, 15)  # a static site's pages: a few is a reader; more is a crawler taking the whole site
 # A reader takes seconds between pages (the demo server's skimmed six in 57 s, 5 to 24 s apart); a crawler asks for
 # them in a burst: the median gap between a site's page requests says which.
@@ -177,16 +179,34 @@ def opened(paths: Iterable[str]) -> Iterable[str]:
             yield from lines
 
 
+def day_token(day: date) -> str:
+    """How a line logged that day begins its time ("[30/Oct/2026:"): a day's lines found without parsing the rest."""
+    return f"[{day.day:02d}/{_MONTHS[day.month - 1]}/{day.year}:"
+
+
+def first_day(paths: Iterable[str]) -> date | None:
+    """The first day the log has: its oldest file's first line's (every other line is later)."""
+    for line in opened(sorted(paths, key=lambda p: (os.path.getmtime(p), p))[:1]):
+        m = _DAY.search(line)
+        if m and m.group(2) in _MONTHS:
+            return date(int(m.group(3)), _MONTHS.index(m.group(2)) + 1, int(m.group(1)))
+    return None
+
+
 def read(lines: Iterable[str], here: list[Site], *, since: date = date.min,
          until: date = date.max) -> tuple[dict[str, Visitor], date | None]:
     """Every browser-like address in the log's lines from `since` to `until`, with what it did; and the first day
-    the lines cover."""
+    the lines cover. A single day's lines are found by their time's start alone (day_token): the others aren't
+    parsed."""
+    only = day_token(since) if since == until else None
     by_name = {name: site for site in here for name in site.names}
     any_name = next((site for site in here if site.app and not site.names), None)
     any_app = any(site.app for site in here)
     visitors: dict[str, Visitor] = defaultdict(Visitor)
     first: date | None = None
     for line in lines:
+        if only is not None and only not in line:
+            continue
         m = _LINE.match(line)
         if not m:
             continue
@@ -263,32 +283,36 @@ class Day:
 
 
 def days(lines: Callable[[], Iterable[str]], here: list[Site], *, before: date, kept: Iterable[date] = (),
-         not_counted: Iterable[str] = (), ours: Callable[[date], set[str]] | None = None) -> list[Day]:
+         not_counted: Iterable[str] = (), ours: Callable[[date], set[str]] | None = None,
+         first: date | None = None) -> list[Day]:
     """Each whole day the log has before `before` (today) that isn't `kept` yet, added up: `lines` reads the log
-    afresh each time. The first day it has may begin partway (when Lumiverb's log was made, or after rotating
-    nginx's oldest file away): it's left out, a day being kept the night after it, whole."""
-    _, first = read(lines(), here)
+    afresh, and only that day's lines are parsed. The first day it has (`first`: first_day's, or else read) may
+    begin partway (when Lumiverb's log was made, or after rotating nginx's oldest file away): it's left out, a day
+    being kept the night after it, whole. Nothing to keep, nothing read: upkeep asks every 5 minutes."""
+    if first is None:
+        _, first = read(lines(), here)
     if first is None:
         return []
-    left_out = {"127.0.0.1", "::1", *not_counted, *(ours or _ours)(first)}
     done = set(kept)
+    due = [first + timedelta(days=n) for n in range(1, (before - first).days)]
+    due = [day for day in due if day not in done]
+    if not due:
+        return []
+    left_out = {"127.0.0.1", "::1", *not_counted, *(ours or _ours)(first)}
     out = []
-    day = first + timedelta(days=1)
-    while day < before:
-        if day not in done:
-            visitors, _ = read(lines(), here, since=day, until=day)
-            browsers = {a: v for a, v in visitors.items() if a not in left_out}
-            came: dict[str, int] = defaultdict(int)
-            for v in browsers.values():
-                for host in v.came_from:
-                    came[host] += 1
-            people = sorted((Person(first_at=min(v.times), sites=tuple(sorted(v.sites)), device=device(v.user_agent),
-                                    why=tuple(why)) for v in browsers.values() if (why := v.why())),
-                            key=lambda p: p.first_at)
-            out.append(Day(day=day, people=tuple(people), sources=dict(sorted(came.items())),
-                           browsers={site.name: sum(1 for v in browsers.values() if site.name in v.sites)
-                                     for site in here}))
-        day += timedelta(days=1)
+    for day in due:
+        visitors, _ = read(lines(), here, since=day, until=day)
+        browsers = {a: v for a, v in visitors.items() if a not in left_out}
+        came: dict[str, int] = defaultdict(int)
+        for v in browsers.values():
+            for host in v.came_from:
+                came[host] += 1
+        people = sorted((Person(first_at=min(v.times), sites=tuple(sorted(v.sites)), device=device(v.user_agent),
+                                why=tuple(why)) for v in browsers.values() if (why := v.why())),
+                        key=lambda p: p.first_at)
+        out.append(Day(day=day, people=tuple(people), sources=dict(sorted(came.items())),
+                       browsers={site.name: sum(1 for v in browsers.values() if site.name in v.sites)
+                                 for site in here}))
     return out
 
 

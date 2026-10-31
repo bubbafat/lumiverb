@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -250,3 +250,46 @@ def test_each_whole_day_is_added_up_once_and_the_first_is_left_out(tmp_path):
 
     again = site_visits.days(_log, here, before=date(2026, 10, 30), kept=by_day, ours=lambda since: set())
     assert again == [], "a day kept is done"
+
+
+def test_nothing_to_keep_reads_nothing(tmp_path):
+    # Upkeep asks every 5 minutes: a 14-day log parsed each time was ~12 s of an API worker's CPU on the demo server.
+    def unread():
+        raise AssertionError("the log was read")
+
+    here = site_visits.sites(_sites(tmp_path))
+    kept = {date(2026, 10, 20) + timedelta(days=n) for n in range(1, 11)}
+    assert site_visits.days(unread, here, before=date(2026, 10, 31), kept=kept, first=date(2026, 10, 20),
+                            ours=lambda since: pytest.fail("nothing to leave out")) == []
+
+
+def test_a_day_s_lines_alone_are_parsed(tmp_path, monkeypatch):
+    here = site_visits.sites(_sites(tmp_path))
+    parsed = []
+    real = site_visits._LINE
+
+    class Counting:
+        def match(self, line):
+            parsed.append(line)
+            return real.match(line)
+
+    monkeypatch.setattr(site_visits, "_LINE", Counting())
+    (oct29,) = site_visits.days(_log, here, before=date(2026, 10, 30), first=date(2026, 10, 20),
+                                kept={date(2026, 10, 20) + timedelta(days=n) for n in range(1, 9)},
+                                ours=lambda since: set())
+    assert oct29.day == date(2026, 10, 29) and len(oct29.people) == 1
+    assert parsed and all("[29/Oct/2026:" in line for line in parsed)
+
+
+def test_the_first_day_is_the_oldest_file_s_first_line(tmp_path):
+    import gzip
+    import os
+
+    old, new = tmp_path / "sites.log.2.gz", tmp_path / "sites.log"
+    with gzip.open(old, "wt") as f:
+        f.write("not a log line\n" + _line("203.0.113.5", "18/Oct/2026:23:59:59", "GET /"))
+    new.write_text(_line("203.0.113.5", "20/Oct/2026:00:00:01", "GET /"))
+    os.utime(old, (1, 1))
+    assert site_visits.first_day([str(new), str(old)]) == date(2026, 10, 18)
+    assert site_visits.first_day([]) is None
+    assert site_visits.day_token(date(2026, 3, 5)) == "[05/Mar/2026:", "nginx's month, whatever the locale"
