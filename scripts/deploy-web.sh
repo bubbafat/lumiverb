@@ -273,7 +273,6 @@ server {
     ${LISTEN}
     server_name ${DOMAIN};
     access_log /var/log/nginx/access.log lumiverb_host;
-    access_log /var/log/lumiverb/sites.log lumiverb_host;
 
     root ${APP_DIR}/src/ui/web/dist;
     index index.html;

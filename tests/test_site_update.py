@@ -334,14 +334,10 @@ def test_nginx_turns_away_a_name_no_site_serves(tmp_path):
 def test_a_linux_site_s_log_names_the_site_unless_it_logs_as_told_by_hand():
     site = _certbot(_linux_site())
     now, gained, left = site_update.updated(site, logged=True)
-    both = "".join(f"    {line}\n" for line in site_update.LOG_LINES)
-    assert now.count(f"    server_name x;\n{both}") == 2, "the site and certbot's redirect: nginx's log and Lumiverb's"
+    assert now.count(f"    server_name x;\n    {site_update.ACCESS_LOG}\n") == 2, "the site and certbot's redirect"
     assert site_update.GAINED["log"] in gained and left == []
     assert site_update.updated(now, logged=True) == (now, [], []), "once"
     assert site_update.ACCESS_LOG not in site_update.updated(site)[0], "a Mac's nginx keeps no access log"
-
-    v164 = site.replace("    server_name x;\n", f"    server_name x;\n    {site_update.ACCESS_LOG}\n")
-    assert site_update.updated(v164, logged=True)[0] == now, "v0.1.164's line gains Lumiverb's beside it"
 
     own = site.replace("    server_name x;\n", "    server_name x;\n    access_log /var/log/nginx/try.log;\n", 1)
     kept, _, left = site_update.updated(own, logged=True)
@@ -350,13 +346,8 @@ def test_a_linux_site_s_log_names_the_site_unless_it_logs_as_told_by_hand():
 
 
 def test_the_log_format_is_written_once(tmp_path):
-    conf, logs, rotate = tmp_path / "lumiverb-log.conf", tmp_path / "log" / "lumiverb", tmp_path / "logrotate.d"
-    rotate.mkdir()
-    write = lambda: site_update.write_log_format(conf, log_dir=logs, logrotate=rotate / "lumiverb-sites")  # noqa: E731
-    assert write() is True and conf.read_text() == site_update.LOG_FORMAT
-    assert logs.is_dir() and logs.stat().st_mode & 0o777 == 0o750, "the service user's group reads it, nobody else"
-    assert (rotate / "lumiverb-sites").read_text() == site_update.LOGROTATE
-    assert "rotate 14" in site_update.LOGROTATE and "create 0640 www-data lumiverb" in site_update.LOGROTATE
-    assert write() is False
+    conf = tmp_path / "lumiverb-log.conf"
+    assert site_update.write_log_format(conf) is True and conf.read_text() == site_update.LOG_FORMAT
+    assert site_update.write_log_format(conf) is False
     assert "log_format lumiverb_host " in site_update.LOG_FORMAT and site_update.LOG_FORMAT.rstrip().endswith(
         '"$http_user_agent" "$host"\';'), "nginx's combined format, then the site"

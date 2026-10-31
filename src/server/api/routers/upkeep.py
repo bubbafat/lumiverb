@@ -188,9 +188,6 @@ class UpkeepResult(BaseModel):
     # The admin key with tenants=all: the plug-ins uninstalled to the trash whose 30 days were up, deleted for
     # good from every account (src/server/plugin_install.py purge_trash); None for one account.
     plugins_purged: list[str] | None = None
-    # The admin key with tenants=all: the days of the sites' nginx log added up now, and their likely people
-    # (src/server/lifecycle/site_visits.py); None where there's no such log (a Mac's) or for one account.
-    site_visits: dict[str, int] | None = None
 
 
 def _bearer(authorization: str | None) -> str | None:
@@ -571,7 +568,6 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     backup = _nightly_backup() if scope.all_tenants else None
     previews_move = _previews_move() if scope.all_tenants else None
     plugins_purged = _purge_trashed_plugins() if scope.all_tenants else None
-    site_visits = _keep_site_visits() if scope.all_tenants else None
     if scope.all_tenants:
         _seal_stored_secrets()
     if scope.all_tenants:
@@ -609,7 +605,6 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         backup=backup,
         previews_move=previews_move,
         plugins_purged=plugins_purged,
-        site_visits=site_visits,
     )
 
 
@@ -661,41 +656,6 @@ def _purge_trashed_plugins() -> list[str]:
     for plugin_id in purged:
         logger.info("Plug-in %s: its trash days are up, what it made is deleted", plugin_id)
     return purged
-
-
-def _keep_site_visits() -> dict[str, int] | None:
-    """Each whole day of Lumiverb's copy of its sites' nginx log not kept yet, kept (site_visits.py: counts and
-    likely people, never an address): the night after it. None where there's no such log. Never fails upkeep."""
-    import glob
-    import os
-    from datetime import date
-
-    from src.server.database import get_control_session
-    from src.server.lifecycle import site_visits
-    from src.server.repository.site_visits import SiteVisitRepository
-    from src.shared.secrets_env import without_secrets
-
-    settings = get_settings()
-    logs = glob.glob(settings.lumiverb_site_log + "*")
-    if not logs:
-        return None
-    env = without_secrets(os.environ)  # the API's secrets stay out of what it starts
-    try:
-        with get_control_session() as session:
-            repo = SiteVisitRepository(session)
-            days = site_visits.days(
-                lambda: site_visits.opened(logs), site_visits.sites(), before=date.today(), kept=repo.kept_days(),
-                not_counted=settings.lumiverb_site_visits_not_counted.split(),
-                ours=lambda since: site_visits.machine_addresses(env) | site_visits.ssh_logins(since, env))
-            kept = [day for day in days if repo.keep(day)]
-            session.commit()
-    except Exception as exc:  # noqa: BLE001 — tried again at the next upkeep
-        logger.warning("Site visits weren't added up: %s", exc)
-        return {"days": 0, "people": 0}
-    for day in kept:
-        logger.info("Site visits on %s: %d likely %s", day.day, len(day.people),
-                    "person" if len(day.people) == 1 else "people")
-    return {"days": len(kept), "people": sum(len(day.people) for day in kept)}
 
 
 def _nightly_backup() -> str:

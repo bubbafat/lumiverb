@@ -65,29 +65,6 @@ log_format lumiverb_host '$remote_addr - $remote_user [$time_local] "$request" '
                          '$status $body_bytes_sent "$http_referer" "$http_user_agent" "$host"';
 """
 ACCESS_LOG = "access_log /var/log/nginx/access.log lumiverb_host;"
-# ...and Lumiverb's own copy, which the service user reads (nginx's is root's and adm's): the API adds up each day of
-# it (site_visits.py, upkeep). Its folder and its rotation, 14 days as nginx's own, are --log-format's to make.
-SITE_LOG_DIR = "/var/log/lumiverb"
-SITES_LOG = f"access_log {SITE_LOG_DIR}/sites.log lumiverb_host;"
-LOG_LINES = (ACCESS_LOG, SITES_LOG)
-LOGROTATE_FILE = "/etc/logrotate.d/lumiverb-sites"
-LOGROTATE = f"""\
-# Lumiverb's (site_update.py --log-format): its sites' access log, which the API adds up each day (site visits).
-{SITE_LOG_DIR}/sites.log {{
-\tdaily
-\tmissingok
-\trotate 14
-\tcompress
-\tdelaycompress
-\tnotifempty
-\tcreate 0640 www-data lumiverb
-\tsharedscripts
-\tpostrotate
-\t\tinvoke-rc.d nginx rotate >/dev/null 2>&1
-\tendscript
-}}
-"""
-SERVICE_USER = "lumiverb"
 
 # After the server's headers.
 DELIVERY = (
@@ -129,7 +106,7 @@ GAINED = {
     "pages": "A hidden file or a file the app doesn't have is a 404, not the page",
     "http2": "HTTPS speaks HTTP/2",
     "tokens": "nginx doesn't say its version on any of the site's answers (certbot's redirects too)",
-    "log": "Its access log names the site, nginx's and Lumiverb's own (site visits)",
+    "log": "Its access log names the site, for lumiverb-server site-visits",
 }
 
 
@@ -164,21 +141,18 @@ def _tokens(block: list[str], gained: set[str]) -> list[str]:
 
 
 def _logged(block: list[str], gained: set[str], left: list[str]) -> list[str]:
-    """Its access logs in lumiverb_host (nginx's and Lumiverb's), right after its server_name, unless it says where
-    it logs already as Lumiverb didn't write."""
+    """Its access log in lumiverb_host, right after its server_name, unless it says where it logs already."""
     at = next((i for i, line in enumerate(block) if line.strip().startswith("server_name ")), None)
     if at is None:
         return block
     pad = _indent(block[at])
     own = [line.strip() for line in block if line.startswith(pad + "access_log ")]
-    if own == list(LOG_LINES):
-        return block
-    if own and own != [ACCESS_LOG]:  # v0.1.164's line alone gains Lumiverb's beside it
-        left.append("A block logs as it was told by hand (its access_log): its visits aren't counted")
+    if own:
+        if own != [ACCESS_LOG]:
+            left.append("A block logs as it was told by hand (its access_log): its visits aren't counted")
         return block
     gained.add("log")
-    rest = [line for line in block[at + 1:] if line != pad + ACCESS_LOG]
-    return [*block[:at + 1], *(pad + line for line in LOG_LINES), *rest]
+    return [*block[:at + 1], pad + ACCESS_LOG, *block[at + 1:]]
 
 
 def _server(block: list[str], gained: set[str], left: list[str], nginx: tuple[int, ...] | None) -> list[str]:
@@ -282,50 +256,24 @@ def bring_up_to_date(config: Path, *, now: datetime | None = None) -> tuple[list
     return gained, left
 
 
-def _write(path: Path, text: str) -> bool:
-    """Lumiverb's own file, whole; True if it changed."""
+def write_log_format(path: Path) -> bool:
+    """LOG_FORMAT in conf.d (Lumiverb's own file there); True if it changed."""
     try:
-        if path.read_text() == text:
+        if path.read_text() == LOG_FORMAT:
             return False
     except FileNotFoundError:
         pass
     part = path.with_name(path.name + ".part")
-    part.write_text(text)
+    part.write_text(LOG_FORMAT)
     os.chmod(part, 0o644)
     os.replace(part, path)
     return True
 
 
-def write_log_format(path: Path, *, log_dir: Path = Path(SITE_LOG_DIR),
-                     logrotate: Path | None = Path(LOGROTATE_FILE)) -> bool:
-    """What its sites' access logs need, before a site uses them: LOG_FORMAT in conf.d, Lumiverb's log folder
-    (root's, the service user's group may read it: 0750) and its rotation; True if any changed."""
-    changed = _write(path, LOG_FORMAT)
-    if not log_dir.is_dir():
-        log_dir.mkdir(mode=0o750, parents=True)
-        changed = True
-    try:
-        import grp
-
-        group = grp.getgrnam(SERVICE_USER).gr_gid
-    except (ImportError, KeyError):  # no service user here (a test's machine): the folder stays its maker's
-        group = None
-    if group is not None and log_dir.stat().st_gid != group:
-        os.chown(log_dir, 0, group)
-        os.chmod(log_dir, 0o750)
-        changed = True
-    if logrotate is not None and logrotate.parent.is_dir():
-        changed = _write(logrotate, LOGROTATE) or changed
-    return changed
-
-
 def main(argv: list[str]) -> int:
     if argv[1:2] == ["--log-format"] and len(argv) == 3:
-        # Tests name their own folders: a server's are /var/log/lumiverb and /etc/logrotate.d.
-        log_dir = Path(os.environ.get("LUMIVERB_SITE_LOG_DIR", SITE_LOG_DIR))
-        logrotate = Path(os.environ.get("LUMIVERB_LOGROTATE_D", str(Path(LOGROTATE_FILE).parent))) / "lumiverb-sites"
-        if write_log_format(Path(argv[2]), log_dir=log_dir, logrotate=logrotate):
-            print(f"  ✓ Its sites' access log lines name the site (lumiverb_host), kept in {log_dir} too")
+        if write_log_format(Path(argv[2])):
+            print("  ✓ Its sites' access log lines name the site (lumiverb_host)")
         return 0
     static = argv[1:2] == ["--static"]
     if len(argv) != 2 + static:
