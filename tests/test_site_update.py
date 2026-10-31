@@ -264,10 +264,14 @@ def test_nginx_turns_away_a_name_no_site_serves(tmp_path):
     version = ".".join(map(str, site_update.nginx_version()))
     enabled = tmp_path / "enabled"
     enabled.mkdir()
-    app = (f"server {{\n    listen 127.0.0.1:{http};\n    listen 127.0.0.1:{https} ssl;\n    server_name x.test;\n"
+    # Its HTTPS speaking HTTP/2 as site_update gives it, in this nginx's words, beside a plain listen (the
+    # droplet's admin tunnel): HTTP/1.1 there still.
+    app = (f"server {{\n    listen 127.0.0.1:{http};\n    listen 443 ssl;\n    server_name x.test;\n"
            f"    root {tmp_path / 'www'};\n    ssl_certificate {tmp_path / 'c.pem'};\n"
            f"    ssl_certificate_key {tmp_path / 'k.pem'};\n}}\n")
-    (enabled / "lumiverb").write_text(app)
+    app, gained, _ = site_update.updated(app, site_update.nginx_version())
+    assert gained == [site_update.GAINED["http2"]]
+    (enabled / "lumiverb").write_text(app.replace("listen 443 ", f"listen 127.0.0.1:{https} "))
     default = (_default_site(enabled, version).replace("listen 80 ", f"listen 127.0.0.1:{http} ")
                .replace("listen 443 ", f"listen 127.0.0.1:{https} "))
     (enabled / "lumiverb-default").write_text(default)
@@ -291,6 +295,11 @@ def test_nginx_turns_away_a_name_no_site_serves(tmp_path):
         else:
             pytest.fail("nginx never answered: " + (tmp_path / "error.log").read_text())
         assert curl("--resolve", f"x.test:{https}:127.0.0.1", f"https://x.test:{https}/").stdout == "200"
+        version = ("-w", "%{http_version}")
+        assert curl("--http2", *version, "--resolve", f"x.test:{https}:127.0.0.1",
+                    f"https://x.test:{https}/").stdout.endswith("2"), "HTTPS speaks HTTP/2"
+        assert curl("--http1.1", *version, "-H", "Host: x.test",
+                    f"http://127.0.0.1:{http}/").stdout.endswith("1.1"), "plain HTTP still HTTP/1.1"
         for args in (("-H", "Host: elsewhere.example", f"http://127.0.0.1:{http}/"),
                      (f"http://127.0.0.1:{http}/",),
                      ("--resolve", f"elsewhere.example:{https}:127.0.0.1", f"https://elsewhere.example:{https}/"),
