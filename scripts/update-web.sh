@@ -10,8 +10,10 @@
 # What it does:
 #   1. git pull
 #   2. npm ci + npm run build
-#   3. Add nginx locations deploy-web.sh has gained since (playback streams,
-#      cache headers for the page and the built files, CSP, HSTS on HTTPS)
+#   3. Give the nginx site what deploy-web.sh's has gained since (playback
+#      streams, cache headers for the page and the built files, CSP, HSTS on
+#      HTTPS, and src/server/lifecycle/site_update.py's: headers, compression,
+#      404s)
 #   4. nginx -s reload
 #
 # Sub-10-second updates. Does NOT touch Python, migrations, or API services.
@@ -150,7 +152,7 @@ fi
 
 # Sites from before the CSP get it, once, beside each nosniff header (the
 # server's and each location's). Same policy as deploy-web.sh.
-CSP="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+CSP="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 if [[ -f "$SITE" ]] && ! grep -q "Content-Security-Policy" "$SITE"; then
   CSP="$CSP" awk '
     { print }
@@ -185,6 +187,10 @@ if [[ -f "$SITE" ]] && ! grep -q "Strict-Transport-Security" "$SITE" \
   mv "${SITE}.new" "$SITE"
   ok "HSTS on"
 fi
+
+# The rest of what deploy-web.sh's site has gained, as a Mac's run gives its own
+# config: the standard library alone (this machine may have no Lumiverb Python).
+python3 -I "$APP_DIR/src/server/lifecycle/site_update.py" "$SITE"
 
 # ---------------------------------------------------------------------------
 step "Reloading nginx"

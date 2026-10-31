@@ -83,7 +83,9 @@ limit_req_zone $binary_remote_addr zone=lumiverb:10m rate=30r/s;
 ```
 
 Then `sudo nginx -t` and `sudo systemctl reload nginx`. An update keeps
-these (`update-web.sh` adds only what the site lacks).
+these: `update-web.sh` adds what the site lacks and changes only lines that
+are still as Lumiverb wrote them (`src/server/lifecycle/site_update.py`
+says what each update brings).
 
 From your own computer, the tunnel, and Lumiverb at http://localhost:8080:
 
