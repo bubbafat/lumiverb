@@ -9,10 +9,10 @@ signed in from over SSH in that time (the journal), and any the install names (t
 LUMIVERB_SITE_VISITS_NOT_COUNTED, addresses separated by spaces).
 
 Most requests are scanners and crawlers. A browser: an address answered 2xx or 3xx, with a user agent that isn't a
-bot's or a script's, outside the search engines' crawler networks, that loaded one of a site's own files (its
-script or style): an upper bound, as many scanners run a real browser. A likely person: a browser that did what a
+bot's or a script's, outside the search engines' crawler networks, that was given one of a site's own files (its
+script or style: a 200 or 304, never certbot's 301 that answers every path): an upper bound, as many scanners run a real browser. A likely person: a browser that did what a
 person does: started the demo, opened a clip, came from a search or social site, followed a link from another of
-these sites, or read a few of a static site's pages over minutes (more is a crawler taking the whole site). An
+these sites, or read a few of a static site's pages, seconds apart (more, or in a burst, is a crawler). An
 address isn't a person: a phone on a mobile network changes address, and several people can share one.
 
 nginx keeps its log 14 days (logrotate): the report covers what's there. Times are the log's, this server's.
@@ -51,8 +51,15 @@ _SOCIAL = re.compile(r"(^|\.)(google|bing|duckduckgo|yahoo|ecosia|kagi|brave|sta
                      re.IGNORECASE)
 _CLIP = re.compile(r"/v1/assets/[^/]+")
 _SSH_LOGIN = re.compile(r"Accepted \S+ for \S+ from (\S+)")
-PAGES_READ = (3, 15)  # a static site's pages: a few over minutes is a reader; more is a crawler taking the site
-READ_OVER = timedelta(minutes=2)
+PAGES_READ = (3, 15)  # a static site's pages: a few is a reader; more is a crawler taking the whole site
+# A reader takes seconds between pages (the demo server's skimmed six in 57 s, 5 to 24 s apart); a crawler asks for
+# them in a burst: the median gap between a site's page requests says which.
+READING_GAP = timedelta(seconds=5)
+# A file a browser was given (a 301, certbot's redirect answering every path, isn't one).
+GIVEN = ("200", "304")
+# A line from before the log named the site, asking for "/": the site whose own file the address loads next, a
+# browser loading the page's script or style right after the page.
+NEXT_FILE_WITHIN = timedelta(seconds=10)
 
 
 @dataclass(frozen=True)
@@ -131,9 +138,11 @@ class Visitor:
     demos: int = 0
     clips: int = 0
     pages: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
-    read_at: list[datetime] = field(default_factory=list)  # when it asked for those pages
+    read_at: dict[str, list[datetime]] = field(default_factory=lambda: defaultdict(list))  # each site's page requests
     came_from: set[str] = field(default_factory=set)
     followed: bool = False
+    # "/" asked for from one of these sites' links on a line that doesn't name its site: (when, the link's site)
+    unplaced: list[tuple[datetime, str]] = field(default_factory=list)
 
     def why(self) -> list[str]:
         """What it did that a person does, if anything."""
@@ -146,11 +155,16 @@ class Visitor:
             said.append("from " + ", ".join(sorted(self.came_from)))
         if self.followed:
             said.append("followed a link from another of these sites")
-        span = max(self.read_at) - min(self.read_at) if self.read_at else timedelta()
         for name, read in sorted(self.pages.items()):
-            if PAGES_READ[0] <= len(read) <= PAGES_READ[1] and span >= READ_OVER:
+            if PAGES_READ[0] <= len(read) <= PAGES_READ[1] and _median_gap(self.read_at[name]) >= READING_GAP:
                 said.append(f"read {len(read)} {name} pages")
         return said
+
+
+def _median_gap(times: list[datetime]) -> timedelta:
+    ordered = sorted(times)
+    gaps = sorted(b - a for a, b in zip(ordered, ordered[1:], strict=False))
+    return gaps[len(gaps) // 2] if gaps else timedelta()
 
 
 def _opened(paths: Iterable[str]) -> Iterable[str]:
@@ -164,6 +178,7 @@ def read(lines: Iterable[str], here: list[Site], *, since: date = date.min) -> t
     """Every browser-like address in the log's lines, with what it did; and the first day the lines cover."""
     by_name = {name: site for site in here for name in site.names}
     any_name = next((site for site in here if site.app and not site.names), None)
+    any_app = any(site.app for site in here)
     visitors: dict[str, Visitor] = defaultdict(Visitor)
     first: date | None = None
     for line in lines:
@@ -182,35 +197,45 @@ def read(lines: Iterable[str], here: list[Site], *, since: date = date.min) -> t
                 or address.startswith(CRAWLER_NETS)):
             continue
         path = path.split("?", 1)[0]
-        if host is not None:
+        named = host is not None
+        if named:
             site = by_name.get(host.lower().rstrip("."), any_name)
             if site is None:
                 continue  # asked for by address or another name: a scanner (v0.1.162's default site closes those)
-            sites_asked = [site]
         else:  # a line from before the format named the site: by the file it asked for
             site = next((s for s in here if s.own_file(path)), None)
-            sites_asked = [site] if site else here
         visitor = visitors[address]
         visitor.user_agent = visitor.user_agent or user_agent
-        if site is not None and site.own_file(path):
+        came = referrer_host(referrer)
+        if site is not None and site.own_file(path) and status in GIVEN:
             visitor.sites.add(site.name)
             visitor.times.append(at)
-        app_asked = any(s.app for s in sites_asked)
-        if app_asked and method == "POST" and path == "/v1/auth/demo":
+            for since_page, link in visitor.unplaced:  # the "/" just before was this site's
+                if at - since_page <= NEXT_FILE_WITHIN and link not in site.names:
+                    visitor.followed = True
+            visitor.unplaced.clear()
+        app = site.app if named else any_app
+        if app and method == "POST" and path == "/v1/auth/demo":
             visitor.demos += 1
-        if app_asked and method == "GET" and _CLIP.fullmatch(path):
+        if app and method == "GET" and _CLIP.fullmatch(path):
             visitor.clips += 1
-        for s in sites_asked:
-            if path in s.pages:
-                visitor.pages[s.name].add(path)
-                visitor.read_at.append(at)
-        came = referrer_host(referrer)
         if came and _SOCIAL.search(came):
             visitor.came_from.add(came)
-        # A page opened from another of these sites' links (a page's own files name that page instead).
-        if came in by_name and (site is None or came not in site.names) and any(
-                (s.app and path == "/") or path in s.pages or (not s.app and path == "/") for s in sites_asked):
-            visitor.followed = True
+        # The page it opened, and whether from another of these sites' links: a line naming its site says which;
+        # one that doesn't, by the static site whose page it is, or for "/" by the next file it loads.
+        if named:
+            page_of = site if path == "/" or path in site.pages else None
+        else:
+            of = [s for s in here if path in s.pages]
+            page_of = of[0] if len(of) == 1 else None
+            if path == "/" and came in by_name:
+                visitor.unplaced.append((at, came))
+        if page_of is not None:
+            if path in page_of.pages:
+                visitor.pages[page_of.name].add(path)
+                visitor.read_at[page_of.name].append(at)
+            if came in by_name and came not in page_of.names:
+                visitor.followed = True
     return {a: v for a, v in visitors.items() if v.sites}, first
 
 
