@@ -259,6 +259,7 @@ def listen_lines(port: int, chosen: Choice, *, tls_port: int | None = None, serv
         f"listen {tls_port} ssl default_server;\nlisten [::]:{tls_port} ssl default_server;\n"
         f"ssl_certificate {served.certificate};\nssl_certificate_key {served.key};\n"
         "ssl_protocols TLSv1.2 TLSv1.3;\n"
+        "http2 on;  # HTTPS's: a browser keeps HTTP/1.1 on plain HTTP\n"
         f"# serving {served.source}'s certificate, sha256 {served.fingerprint}\n"
     )
     if not chosen.http_for_others:

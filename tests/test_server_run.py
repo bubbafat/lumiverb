@@ -399,6 +399,7 @@ def _other_devices_may_use_it(data: Path, web_port: int, tls_port: int, out: Pat
             assert response.read() == ca.read_bytes(), "still: a new device needs it first"
     lines = network.listen_file(data).read_text()
     assert f"listen {tls_port} ssl default_server;" in lines and "ssl_protocols TLSv1.2 TLSv1.3;" in lines
+    assert "http2 on;" in lines, "HTTPS speaks HTTP/2; plain HTTP, above, still HTTP/1.1"
     assert "nginx restarting" in out.read_text()
 
     # Ports an admin chose (Settings › Network): the web and the API on each, this machine's own too.

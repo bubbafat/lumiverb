@@ -89,6 +89,7 @@ server {
     add_header Content-Security-Policy "${CSP}" always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
+    server_tokens off;
 
     location / {
         try_files \$uri \$uri/ =404;
