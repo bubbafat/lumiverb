@@ -229,3 +229,24 @@ def test_the_command_leaves_out_what_the_env_file_names(tmp_path, monkeypatch, a
     assert cli.main([part.replace("{env}", str(env)) for part in argv]) == 0
     assert {**called, "not_counted": list(called["not_counted"])} == {
         "days": 7, "verbose": True, "not_counted": ["192.0.2.20", "2001:db8::7"]}
+
+
+def test_each_whole_day_is_added_up_once_and_the_first_is_left_out(tmp_path):
+    here = site_visits.sites(_sites(tmp_path))
+    added = site_visits.days(_log, here, before=date(2026, 10, 30), not_counted=["192.0.2.20"],
+                             ours=lambda since: {"192.0.2.10"})
+    by_day = {day.day: day for day in added}
+    assert min(by_day) == date(2026, 10, 21), "the log's first day may begin partway"
+    assert max(by_day) == date(2026, 10, 29), "today's isn't whole yet"
+    oct21 = by_day[date(2026, 10, 21)]
+    (person,) = oct21.people
+    assert person.sites == ("example.org", "try.example.org") and person.device == "iPhone Safari"
+    assert person.why == ("tried the demo x1", "opened 2 clips", "followed a link from another of these sites")
+    assert oct21.browsers == {"try.example.org": 1, "example.org": 1, "docs.example.org": 0}
+    oct29 = by_day[date(2026, 10, 29)]
+    assert [p.why for p in oct29.people] == [("from reddit.com", "read 3 docs.example.org pages")]
+    assert oct29.sources == {"reddit.com": 1} and oct29.browsers["docs.example.org"] == 2, "the reader, the crawler"
+    assert by_day[date(2026, 10, 22)].people == () and by_day[date(2026, 10, 22)].browsers["try.example.org"] == 1
+
+    again = site_visits.days(_log, here, before=date(2026, 10, 30), kept=by_day, ours=lambda since: set())
+    assert again == [], "a day kept is done"

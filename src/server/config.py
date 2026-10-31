@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     lumiverb_demo_viewer: str = ""
     # What it answers from anywhere but this machine (src/server/api/exposure.py): unset, everything.
     lumiverb_exposure: str = ""
+    # Site visits (src/server/lifecycle/site_visits.py): Lumiverb's copy of its sites' nginx log, which upkeep adds
+    # up a day at a time (none there, nothing to add up: a Mac's), and the addresses never counted (the people
+    # running it: separated by spaces).
+    lumiverb_site_log: str = "/var/log/lumiverb/sites.log"
+    lumiverb_site_visits_not_counted: str = ""
 
     # App
     app_env: str = "development"
